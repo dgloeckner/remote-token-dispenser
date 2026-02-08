@@ -87,9 +87,13 @@ Instead of replacing all your legacy coin-operated equipment (expensive and wast
 ## 🛠️ Hardware Requirements
 
 <p align="center">
-  <img src="docs/hopper.jpg" alt="Azkoyen Hopper U-II" width="600"/>
+  <img src="docs/hopper.jpg" alt="Azkoyen Hopper U-II" width="500"/>
   <br>
   <em>Azkoyen Hopper U-II - Industrial coin/token dispenser</em>
+  <br><br>
+  <img src="docs/wemos-d1-mini.jpg" alt="Wemos D1 Mini" width="400"/>
+  <br>
+  <em>Wemos D1 Mini - ESP8266 WiFi controller</em>
 </p>
 
 | Component | Specification | Purpose |
