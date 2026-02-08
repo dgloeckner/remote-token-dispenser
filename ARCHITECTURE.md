@@ -2,6 +2,8 @@
 
 This document provides a detailed architectural overview of the remote token/coin dispenser system using diagrams and flow explanations.
 
+**📘 For complete HTTP API specification, see [dispenser-protocol.md](dispenser-protocol.md)** - detailed endpoint documentation, request/response formats, error codes, and recovery scenarios.
+
 ## Table of Contents
 1. [System Overview](#system-overview)
 2. [Dispense-First, Pay-After Model](#dispense-first-pay-after-model)
@@ -363,6 +365,8 @@ For microcontroller-based systems (ESP8266, Arduino, etc.), PULSES mode is the s
 ---
 
 ## API Endpoints
+
+> **📘 Complete API Reference:** For full endpoint specifications, request/response formats, error codes, and code examples, see **[dispenser-protocol.md](dispenser-protocol.md)**.
 
 ### Authentication
 
