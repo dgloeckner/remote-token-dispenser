@@ -91,7 +91,7 @@ Instead of replacing all your legacy coin-operated equipment (expensive and wast
   <br>
   <em>Azkoyen Hopper U-II - Industrial coin/token dispenser</em>
   <br><br>
-  <img src="docs/wemos-d1-mini.jpg" alt="Wemos D1 Mini" width="400"/>
+  <img src="docs/wemosd1.jpg" alt="Wemos D1 Mini" width="400"/>
   <br>
   <em>Wemos D1 Mini - ESP8266 WiFi controller</em>
 </p>
