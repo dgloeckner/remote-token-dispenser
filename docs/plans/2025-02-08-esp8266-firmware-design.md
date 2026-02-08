@@ -29,7 +29,7 @@ ESP8266 firmware that implements an HTTP API for controlling an Azkoyen Hopper U
 ### Component-Based Organization
 
 ```
-esp32/
+firmware/
 ├── dispenser/
 │   ├── dispenser.ino          # Main sketch (setup/loop)
 │   ├── config.h               # WiFi, pins, API key, constants
@@ -517,7 +517,7 @@ Before powering on:
 
 1. **OTA Updates:** Over-the-air firmware updates
 2. **WiFi Manager:** Captive portal for WiFi configuration
-3. **HTTPS:** TLS encryption for API (requires ESP32 for better performance)
+3. **HTTPS:** TLS encryption for API (requires ESP8266 for better performance)
 4. **mDNS:** Access via `dispenser.local` instead of IP
 5. **Web Dashboard:** Simple web UI for status monitoring
 

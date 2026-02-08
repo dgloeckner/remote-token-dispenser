@@ -20,7 +20,15 @@
       "WebFetch(domain:galopago.github.io)",
       "Bash(git add:*)",
       "Bash(git commit -m \"$\\(cat <<''EOF''\nAdd ESP8266 firmware design and setup documentation\n\n- Complete design document for Wemos D1 Mini \\(ESP8266\\) firmware\n- Component-based architecture with 6 modules\n- GPIO pin assignments using D-labels \\(D5-D8\\)\n- API key authentication \\(X-API-Key header\\)\n- Watchdog jam detection and crash recovery\n- Comprehensive README with library requirements\n- Arduino IDE setup instructions\n- Updated ARCHITECTURE.md with API authentication\n\nCo-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
-      "Bash(git init:*)"
+      "Bash(git init:*)",
+      "Bash(git commit:*)",
+      "Bash(ls:*)",
+      "Bash(ping:*)",
+      "Bash(.gitignore << 'EOF'\n# Local configuration with credentials\nfirmware/dispenser/config.local.h\n\n# Arduino build artifacts\n*.hex\n*.elf\n*.bin\n*.map\n\n# IDE files\n.vscode/\n.DS_Store\nEOF)",
+      "Bash(git mv:*)",
+      "Bash(find:*)",
+      "Bash(git remote add:*)",
+      "Bash(git push:*)"
     ]
   }
 }

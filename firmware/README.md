@@ -42,7 +42,7 @@ Install via **Tools → Manage Libraries** in Arduino IDE:
 |---------|--------|---------|---------|
 | **ESPAsyncWebServer** | me-no-dev | Latest | Async HTTP server |
 | **ESPAsyncTCP** | me-no-dev | Latest | Auto-installed with above |
-| **ArduinoJson** | Benoit Blanchon | 6.x | JSON parsing/generation |
+| **ArduinoJson** | Benoit Blanchon | 7.x (7.0.0+) | JSON parsing/generation |
 
 **Built-in Libraries** (no installation needed):
 - ESP8266WiFi
@@ -68,7 +68,7 @@ arduino-cli lib install "ArduinoJson"
 ## Project Structure
 
 ```
-esp32/dispenser/
+firmware/dispenser/
 ├── dispenser.ino          # Main Arduino sketch
 ├── config.h               # WiFi, API key, pins, constants
 ├── http_server.cpp        # HTTP endpoints

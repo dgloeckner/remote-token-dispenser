@@ -1,0 +1,89 @@
+// firmware/dispenser/dispenser.ino
+
+#include <ESP8266WiFi.h>
+#include "config.h"
+#include "flash_storage.h"
+#include "hopper_control.h"
+#include "dispense_manager.h"
+#include "http_server.h"
+
+FlashStorage flashStorage;
+HopperControl hopperControl;
+DispenseManager dispenseManager(flashStorage, hopperControl);
+HttpServer httpServer(dispenseManager, hopperControl);
+
+void setup() {
+  Serial.begin(115200);
+  delay(1000);
+
+  Serial.println("\n\n=== Token Dispenser Starting ===");
+  Serial.print("Firmware: ");
+  Serial.println(FIRMWARE_VERSION);
+
+  // Connect to WiFi
+  Serial.print("Connecting to WiFi: ");
+  Serial.println(WIFI_SSID);
+
+  WiFi.mode(WIFI_STA);
+  WiFi.config(STATIC_IP, GATEWAY, SUBNET);
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+
+  int attempts = 0;
+  while (WiFi.status() != WL_CONNECTED && attempts < 30) {
+    delay(500);
+    Serial.print(".");
+    attempts++;
+  }
+
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("\nWiFi connected!");
+    Serial.print("IP address: ");
+    Serial.println(WiFi.localIP());
+  } else {
+    Serial.println("\nWiFi connection failed!");
+  }
+
+  // Initialize flash storage
+  flashStorage.begin();
+
+  if (flashStorage.hasPersistedTransaction()) {
+    PersistedTransaction tx = flashStorage.load();
+    Serial.println("Found persisted transaction:");
+    Serial.print("  tx_id: ");
+    Serial.println(tx.tx_id);
+    Serial.print("  quantity: ");
+    Serial.println(tx.quantity);
+    Serial.print("  dispensed: ");
+    Serial.println(tx.dispensed);
+    Serial.print("  state: ");
+    Serial.println(tx.state);
+  } else {
+    Serial.println("No persisted transaction");
+  }
+
+  // Initialize hopper control
+  hopperControl.begin();
+  Serial.println("Hopper control initialized");
+  Serial.print("Hopper low: ");
+  Serial.println(hopperControl.isHopperLow() ? "YES" : "NO");
+
+  // Initialize dispense manager
+  dispenseManager.begin();
+  Serial.println("Dispense manager initialized");
+  Serial.print("State: ");
+  Serial.println(dispenseManager.isIdle() ? "IDLE" : "BUSY");
+
+  // Start HTTP server
+  httpServer.begin();
+
+  Serial.println("Setup complete");
+}
+
+void loop() {
+  dispenseManager.loop();  // Monitor watchdog and completion
+
+  // 10ms delay is safe: coin pulses (30ms) are counted via hardware interrupt
+  // (asynchronous, not blocked by delay), and tokens arrive ~2.5s apart.
+  // This delay just prevents spinning at 100% CPU while waiting for events.
+  delay(10);
+}

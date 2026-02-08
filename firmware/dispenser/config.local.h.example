@@ -1,0 +1,19 @@
+// config.local.h.example
+//
+// Copy this file to config.local.h and customize with your credentials
+// config.local.h is ignored by git and won't be committed
+
+#ifndef CONFIG_LOCAL_H
+#define CONFIG_LOCAL_H
+
+// WiFi Configuration
+#define WIFI_SSID "some_ssid"
+#define WIFI_PASSWORD "secret"
+#define STATIC_IP IPAddress(192, 168, 188, 244)
+#define GATEWAY IPAddress(192, 168, 188, 1)
+#define SUBNET IPAddress(255, 255, 255, 0)
+
+// API Authentication
+#define API_KEY "your-secret-api-key-here"
+
+#endif

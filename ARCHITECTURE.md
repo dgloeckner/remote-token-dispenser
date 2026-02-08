@@ -30,7 +30,7 @@ graph TB
         DB[(Stable Storage<br/>Transactions)]
     end
 
-    subgraph "ESP32 (Wemos D1)"
+    subgraph "ESP8266 (Wemos D1)"
         HTTP[HTTP Server<br/>Port 80]
         FSM[State Machine<br/>Transaction Control]
         Flash[(Flash Storage<br/>Crash Recovery)]
@@ -65,8 +65,8 @@ graph TB
 
 1. **Dispense First, Pay After** - Payment only created if tokens successfully dispensed.
 2. **Idempotency by Transaction ID** - Every request carries a `tx_id`. Retries are safe.
-3. **Single Resource Locking** - Only one transaction can be active at a time on ESP32.
-4. **Crash-Safe Persistence** - Both client and ESP32 persist state to survive power loss.
+3. **Single Resource Locking** - Only one transaction can be active at a time on ESP8266.
+4. **Crash-Safe Persistence** - Both client and ESP8266 persist state to survive power loss.
 5. **Local-First Architecture** - Client stable storage is the source of truth.
 
 ---
@@ -153,7 +153,7 @@ Payment transaction **only exists if** dispensing succeeded. The `dispense_tx_id
 ### Trade-offs
 
 This model works well when:
-- Token dispensing is the **limiting resource** (single ESP32, one dispenser)
+- Token dispensing is the **limiting resource** (single ESP8266, one dispenser)
 - Account balances are **checked before** attempting dispense
 - Failed dispenses are **acceptable** (customer just retries)
 
@@ -212,11 +212,11 @@ graph LR
     style Reporter fill:#ffebee
 ```
 
-### ESP32 Components
+### ESP8266 Components
 
 ```mermaid
 graph TB
-    subgraph "ESP32 (Wemos D1)"
+    subgraph "ESP8266 (Wemos D1)"
         subgraph "HTTP Server"
             HealthEndpoint[GET /health]
             DispenseEndpoint[POST /dispense]
@@ -259,7 +259,7 @@ graph TB
 
 ### Hopper Signal Modes
 
-The Azkoyen Hopper U-II supports three signal modes for coin detection, configured via hardware jumpers. This architecture uses **PULSES mode** for optimal ESP32 integration.
+The Azkoyen Hopper U-II supports three signal modes for coin detection, configured via hardware jumpers. This architecture uses **PULSES mode** for optimal ESP8266 integration.
 
 #### Mode Comparison
 
@@ -356,7 +356,7 @@ POSITIVE/NEGATIVE modes exist for:
 - Systems requiring continuous feedback during coin passage
 - Legacy systems with specific signal requirements
 
-For microcontroller-based systems (ESP32, Arduino, etc.), PULSES mode is the superior choice due to its simplicity and reliability.
+For microcontroller-based systems (ESP8266, Arduino, etc.), PULSES mode is the superior choice due to its simplicity and reliability.
 
 **Configuration:** Set hopper jumpers to **STANDARD + PULSES** mode for this architecture.
 
@@ -385,7 +385,7 @@ X-API-Key: your-secret-key-here
 
 ### GET /health
 
-Returns ESP32 health status and accumulated error metrics for monitoring.
+Returns ESP8266 health status and accumulated error metrics for monitoring.
 
 **No authentication required** - open for monitoring systems.
 
@@ -451,7 +451,7 @@ sequenceDiagram
     participant User
     participant Client as Client App
     participant DB as Stable Storage
-    participant ESP32
+    participant ESP8266
     participant Hopper as Azkoyen Hopper
 
     User->>Client: Authenticate<br/>(RFID/card/etc)
@@ -462,32 +462,32 @@ sequenceDiagram
     Client->>DB: WRITE dispense transaction<br/>(tx_id, user_id, qty=3, state=pending)
     DB-->>Client: OK
 
-    Client->>ESP32: POST /dispense<br/>{tx_id: "a3f8c012", quantity: 3}
+    Client->>ESP8266: POST /dispense<br/>{tx_id: "a3f8c012", quantity: 3}
 
-    ESP32->>ESP32: Check if idle
-    ESP32->>ESP32: Set state=dispensing
-    ESP32->>ESP32: Persist to flash
-    ESP32->>Hopper: Start motor (GPIO HIGH)
-    ESP32-->>Client: 200 {state: "dispensing", dispensed: 0}
+    ESP8266->>ESP8266: Check if idle
+    ESP8266->>ESP8266: Set state=dispensing
+    ESP8266->>ESP8266: Persist to flash
+    ESP8266->>Hopper: Start motor (GPIO HIGH)
+    ESP8266-->>Client: 200 {state: "dispensing", dispensed: 0}
 
     Client->>DB: UPDATE state=dispensing
 
-    Note over Client,ESP32: Polling Loop
+    Note over Client,ESP8266: Polling Loop
     loop Every 250ms
-        Client->>ESP32: GET /dispense/a3f8c012
-        Hopper-->>ESP32: Token drop detected (interrupt)
-        ESP32->>ESP32: Increment dispensed counter
-        ESP32-->>Client: 200 {state: "dispensing", dispensed: 1/2/3}
+        Client->>ESP8266: GET /dispense/a3f8c012
+        Hopper-->>ESP8266: Token drop detected (interrupt)
+        ESP8266->>ESP8266: Increment dispensed counter
+        ESP8266-->>Client: 200 {state: "dispensing", dispensed: 1/2/3}
         Client->>User: Update progress: ●●○
     end
 
-    ESP32->>ESP32: dispensed == quantity (3)
-    ESP32->>Hopper: Stop motor (GPIO LOW)
-    ESP32->>ESP32: Set state=done
-    ESP32->>ESP32: Persist to flash
+    ESP8266->>ESP8266: dispensed == quantity (3)
+    ESP8266->>Hopper: Stop motor (GPIO LOW)
+    ESP8266->>ESP8266: Set state=done
+    ESP8266->>ESP8266: Persist to flash
 
-    Client->>ESP32: GET /dispense/a3f8c012
-    ESP32-->>Client: 200 {state: "done", dispensed: 3}
+    Client->>ESP8266: GET /dispense/a3f8c012
+    ESP8266-->>Client: 200 {state: "done", dispensed: 3}
 
     Client->>DB: UPDATE state=complete, dispensed=3
 
@@ -499,38 +499,38 @@ sequenceDiagram
 
 ### Conflict Handling
 
-When a second client tries to dispense while the ESP32 is already busy.
+When a second client tries to dispense while the ESP8266 is already busy.
 
 ```mermaid
 sequenceDiagram
     participant User1
     participant Client1 as Client (Terminal 1)
-    participant ESP32
+    participant ESP8266
     participant Client2 as Client (Terminal 2)
     participant User2
 
-    Note over ESP32: Active: tx_id "aaa"<br/>State: dispensing
+    Note over ESP8266: Active: tx_id "aaa"<br/>State: dispensing
 
     User1->>Client1: Dispensing in progress...
 
     User2->>Client2: Try to start new transaction
-    Client2->>ESP32: POST /dispense<br/>{tx_id: "bbb", quantity: 2}
+    Client2->>ESP8266: POST /dispense<br/>{tx_id: "bbb", quantity: 2}
 
-    ESP32->>ESP32: Check if idle
-    Note over ESP32: NOT idle!<br/>tx "aaa" active
+    ESP8266->>ESP8266: Check if idle
+    Note over ESP8266: NOT idle!<br/>tx "aaa" active
 
-    ESP32-->>Client2: 409 Conflict<br/>{error: "busy", active_tx_id: "aaa"}
+    ESP8266-->>Client2: 409 Conflict<br/>{error: "busy", active_tx_id: "aaa"}
 
     Client2->>User2: ⚠️ Dispenser busy<br/>Please wait...
 
     Note over Client2: Retry after delay
     Client2->>Client2: Wait 2s
 
-    Note over ESP32: tx "aaa" completes
-    ESP32->>ESP32: State: idle
+    Note over ESP8266: tx "aaa" completes
+    ESP8266->>ESP8266: State: idle
 
-    Client2->>ESP32: POST /dispense (retry)<br/>{tx_id: "bbb", quantity: 2}
-    ESP32-->>Client2: 200 {state: "dispensing", dispensed: 0}
+    Client2->>ESP8266: POST /dispense (retry)<br/>{tx_id: "bbb", quantity: 2}
+    ESP8266-->>Client2: 200 {state: "dispensing", dispensed: 0}
 
     Client2->>User2: Dispensing...
 ```
@@ -539,7 +539,7 @@ sequenceDiagram
 
 ## State Machines
 
-### ESP32 Transaction State Machine
+### ESP8266 Transaction State Machine
 
 ```mermaid
 stateDiagram-v2
@@ -584,8 +584,8 @@ stateDiagram-v2
 stateDiagram-v2
     [*] --> pending
 
-    pending --> dispensing: ESP32 dispense started
-    pending --> failed: ESP32 busy/error
+    pending --> dispensing: ESP8266 dispense started
+    pending --> failed: ESP8266 busy/error
 
     dispensing --> complete: All tokens dispensed
     dispensing --> partial: Jam/error with count < quantity
@@ -599,13 +599,13 @@ stateDiagram-v2
 
     note right of pending
         Dispense transaction created
-        Not yet sent to ESP32
+        Not yet sent to ESP8266
     end note
 
     note right of dispensing
         Active polling
         Progress tracking
-        Motor running on ESP32
+        Motor running on ESP8266
     end note
 
     note right of complete
@@ -630,34 +630,34 @@ stateDiagram-v2
 
 ## Error Recovery
 
-### Scenario 1: ESP32 Crashes Mid-Dispense
+### Scenario 1: ESP8266 Crashes Mid-Dispense
 
 ```mermaid
 sequenceDiagram
     participant Client
-    participant ESP32
-    participant Flash as ESP32 Flash
+    participant ESP8266
+    participant Flash as ESP8266 Flash
     participant Hopper
 
-    Note over ESP32: Dispensing tx "abc"<br/>quantity: 3<br/>dispensed: 2
+    Note over ESP8266: Dispensing tx "abc"<br/>quantity: 3<br/>dispensed: 2
 
-    ESP32->>Flash: Persist {tx: "abc", qty: 3, dispensed: 2}
-    Flash-->>ESP32: OK
+    ESP8266->>Flash: Persist {tx: "abc", qty: 3, dispensed: 2}
+    Flash-->>ESP8266: OK
 
-    Note over ESP32: 💥 POWER LOSS
+    Note over ESP8266: 💥 POWER LOSS
 
-    Note over ESP32: ...reboot...
+    Note over ESP8266: ...reboot...
 
-    ESP32->>ESP32: Boot sequence
-    ESP32->>Flash: Read persisted state
-    Flash-->>ESP32: {tx: "abc", qty: 3, dispensed: 2}
+    ESP8266->>ESP8266: Boot sequence
+    ESP8266->>Flash: Read persisted state
+    Flash-->>ESP8266: {tx: "abc", qty: 3, dispensed: 2}
 
-    ESP32->>ESP32: Recover to error state<br/>(incomplete transaction)
-    Note over ESP32: State: error<br/>tx "abc", dispensed=2
+    ESP8266->>ESP8266: Recover to error state<br/>(incomplete transaction)
+    Note over ESP8266: State: error<br/>tx "abc", dispensed=2
 
-    Client->>ESP32: GET /dispense/abc<br/>(periodic poll after timeout)
+    Client->>ESP8266: GET /dispense/abc<br/>(periodic poll after timeout)
 
-    ESP32-->>Client: 200 {state: "error", error: "reboot",<br/>quantity: 3, dispensed: 2}
+    ESP8266-->>Client: 200 {state: "error", error: "reboot",<br/>quantity: 3, dispensed: 2}
 
     Client->>Client: Record partial dispense
     Note over Client: Storage: state=partial<br/>dispensed=2
@@ -672,36 +672,36 @@ sequenceDiagram
 sequenceDiagram
     participant Client
     participant DB as Stable Storage
-    participant ESP32
+    participant ESP8266
 
-    Note over Client: Dispensing tx "xyz"<br/>polling ESP32...
+    Note over Client: Dispensing tx "xyz"<br/>polling ESP8266...
 
     Note over Client: 💥 POWER LOSS
 
     Note over Client: ...reboot...
-    Note over ESP32: Still dispensing<br/>or completed
+    Note over ESP8266: Still dispensing<br/>or completed
 
     Client->>Client: Boot sequence
     Client->>DB: READ transactions<br/>WHERE state IN ('pending', 'reserved', 'dispensing')
 
     DB-->>Client: [{tx_id: "xyz", state: "dispensing", qty: 3}]
 
-    Client->>ESP32: GET /dispense/xyz
+    Client->>ESP8266: GET /dispense/xyz
 
     alt Transaction completed during outage
-        ESP32-->>Client: 200 {state: "done", dispensed: 3}
+        ESP8266-->>Client: 200 {state: "done", dispensed: 3}
         Client->>DB: UPDATE state=complete, dispensed=3
         Note over Client: Recovery successful
     else Transaction still in progress
-        ESP32-->>Client: 200 {state: "dispensing", dispensed: 2}
+        ESP8266-->>Client: 200 {state: "dispensing", dispensed: 2}
         Client->>Client: Resume polling
         Note over Client: Continue normal flow
     else Transaction errored
-        ESP32-->>Client: 200 {state: "error", dispensed: 2}
+        ESP8266-->>Client: 200 {state: "error", dispensed: 2}
         Client->>DB: UPDATE state=partial, dispensed=2
         Note over Client: Manual intervention
     else Transaction timed out
-        ESP32-->>Client: 404 Not Found
+        ESP8266-->>Client: 404 Not Found
         Client->>DB: UPDATE state=expired
         Note over Client: Refund/retry logic
     end
@@ -713,27 +713,27 @@ sequenceDiagram
 sequenceDiagram
     participant Client
     participant Network as WiFi Network
-    participant ESP32
+    participant ESP8266
 
-    Note over ESP32: State: idle
+    Note over ESP8266: State: idle
 
     Client->>Network: POST /dispense<br/>{tx_id: "def", quantity: 3}
 
     Note over Network: 📡 Packet lost
 
     Note over Client: Timeout (3s)
-    Note over ESP32: Never received request!<br/>Still idle
+    Note over ESP8266: Never received request!<br/>Still idle
 
     Client->>Client: Retry logic (attempt 2)
-    Client->>ESP32: POST /dispense<br/>{tx_id: "def", quantity: 3}<br/>[SAME tx_id]
+    Client->>ESP8266: POST /dispense<br/>{tx_id: "def", quantity: 3}<br/>[SAME tx_id]
 
-    ESP32->>ESP32: Check tx_id "def"
-    Note over ESP32: Not found in history<br/>New transaction
+    ESP8266->>ESP8266: Check tx_id "def"
+    Note over ESP8266: Not found in history<br/>New transaction
 
-    ESP32->>ESP32: Start dispensing
-    ESP32-->>Client: 200 {state: "dispensing", dispensed: 0}
+    ESP8266->>ESP8266: Start dispensing
+    ESP8266-->>Client: 200 {state: "dispensing", dispensed: 0}
 
-    Note over Client,ESP32: Safe retry - dispense starts on first successful delivery
+    Note over Client,ESP8266: Safe retry - dispense starts on first successful delivery
 ```
 
 ### Scenario 4: Hopper Jam Detection
@@ -741,25 +741,25 @@ sequenceDiagram
 ```mermaid
 sequenceDiagram
     participant Client
-    participant ESP32 as ESP32 Firmware
+    participant ESP8266 as ESP8266 Firmware
     participant Hopper
 
-    Note over ESP32: Dispensing tx "ghi"<br/>quantity: 4<br/>dispensed: 2
+    Note over ESP8266: Dispensing tx "ghi"<br/>quantity: 4<br/>dispensed: 2
 
-    ESP32->>Hopper: Motor running (GPIO HIGH)
-    ESP32->>ESP32: Start watchdog timer<br/>(5s per-token timeout)
+    ESP8266->>Hopper: Motor running (GPIO HIGH)
+    ESP8266->>ESP8266: Start watchdog timer<br/>(5s per-token timeout)
 
     Note over Hopper: 🔧 Jam! No token drops
 
-    Note over ESP32: Wait 5s...<br/>No pulse received!<br/>Watchdog timeout triggered
+    Note over ESP8266: Wait 5s...<br/>No pulse received!<br/>Watchdog timeout triggered
 
-    ESP32->>Hopper: Stop motor (GPIO LOW)
-    ESP32->>ESP32: Set state=error<br/>error="jam"<br/>dispensed=2
-    ESP32->>ESP32: Persist to flash
+    ESP8266->>Hopper: Stop motor (GPIO LOW)
+    ESP8266->>ESP8266: Set state=error<br/>error="jam"<br/>dispensed=2
+    ESP8266->>ESP8266: Persist to flash
 
-    Client->>ESP32: GET /dispense/ghi<br/>(polling)
+    Client->>ESP8266: GET /dispense/ghi<br/>(polling)
 
-    ESP32-->>Client: 200 {state: "error", error: "jam",<br/>quantity: 4, dispensed: 2}
+    ESP8266-->>Client: 200 {state: "error", error: "jam",<br/>quantity: 4, dispensed: 2}
 
     Client->>Client: Update storage: state=partial, dispensed=2
     Client->>Client: Show error UI
@@ -780,7 +780,7 @@ graph TB
     end
 
     subgraph "Behind/Below Counter"
-        Dispenser[Enclosure<br/>ESP32 + Azkoyen Hopper]
+        Dispenser[Enclosure<br/>ESP8266 + Azkoyen Hopper]
     end
 
     subgraph "Network Infrastructure"
@@ -808,8 +808,8 @@ A customer approaches the POS terminal at a sauna facility:
 4. **Balance Check**: System verifies customer has sufficient balance
 5. **tx_id Generation**: Client creates unique transaction ID (e.g., "a3f8c012")
 6. **Stable Storage**: Dispense transaction recorded locally (pending state)
-7. **Dispense Command**: Client sends POST /dispense to ESP32 over WiFi
-8. **Dispensing**: ESP32 begins dispensing, motor runs
+7. **Dispense Command**: Client sends POST /dispense to ESP8266 over WiFi
+8. **Dispensing**: ESP8266 begins dispensing, motor runs
 9. **Progress**: Display shows progress as tokens drop (●●○)
 10. **Completion**: 3 tokens dispensed successfully, dispense transaction marked complete
 11. **Payment**: Payment transaction created, customer account debited for 3 tokens
@@ -821,7 +821,7 @@ A customer approaches the POS terminal at a sauna facility:
 graph LR
     subgraph "Local Network (192.168.x.x)"
         Client[Client Device<br/>192.168.x.10]
-        ESP[ESP32<br/>192.168.x.20<br/>Static IP]
+        ESP[ESP8266<br/>192.168.x.20<br/>Static IP]
         Router[WiFi Router<br/>192.168.x.1]
     end
 
@@ -850,7 +850,7 @@ graph TB
         Config[Configuration]
     end
 
-    subgraph "ESP32 Storage"
+    subgraph "ESP8266 Storage"
         Flash[(Flash Storage<br/>EEPROM/LittleFS)]
         FlashData[Active Transaction<br/>tx_id, qty, dispensed]
     end
@@ -872,14 +872,14 @@ graph TB
 ```mermaid
 sequenceDiagram
     participant Monitor as System Monitor
-    participant ESP32
+    participant ESP8266
     participant External as External Reporting
 
     Note over Monitor: Every 60 seconds
 
     loop Health Check Cycle
-        Monitor->>ESP32: GET /health
-        ESP32-->>Monitor: 200 {<br/>status: "ok",<br/>uptime: 84230,<br/>firmware: "1.2.0",<br/>dispenser: "idle",<br/>hopper_low: false,<br/>metrics: {<br/>  total_dispenses: 1247,<br/>  successful: 1189,<br/>  jams: 3,<br/>  partial: 2,<br/>  last_error: "2025-02-07T14:23:00Z"<br/>}<br/>}
+        Monitor->>ESP8266: GET /health
+        ESP8266-->>Monitor: 200 {<br/>status: "ok",<br/>uptime: 84230,<br/>firmware: "1.2.0",<br/>dispenser: "idle",<br/>hopper_low: false,<br/>metrics: {<br/>  total_dispenses: 1247,<br/>  successful: 1189,<br/>  jams: 3,<br/>  partial: 2,<br/>  last_error: "2025-02-07T14:23:00Z"<br/>}<br/>}
 
         Monitor->>Monitor: Check system metrics<br/>- Disk space<br/>- CPU temp<br/>- Memory<br/>- Incomplete transactions<br/>- Analyze error rates
 
@@ -898,30 +898,30 @@ sequenceDiagram
 ```mermaid
 sequenceDiagram
     participant Client
-    participant ESP32
+    participant ESP8266
     participant History as Ring Buffer
 
-    Client->>ESP32: POST /dispense<br/>{tx_id: "aaa", quantity: 3}
-    ESP32->>ESP32: New tx_id, start dispensing
-    ESP32->>History: Store tx "aaa"
-    ESP32-->>Client: 200 {state: "dispensing", dispensed: 0}
+    Client->>ESP8266: POST /dispense<br/>{tx_id: "aaa", quantity: 3}
+    ESP8266->>ESP8266: New tx_id, start dispensing
+    ESP8266->>History: Store tx "aaa"
+    ESP8266-->>Client: 200 {state: "dispensing", dispensed: 0}
 
     Note over Client: Network glitch,<br/>no response received
 
-    Client->>ESP32: POST /dispense (RETRY)<br/>{tx_id: "aaa", quantity: 3}
-    ESP32->>History: Check tx "aaa"
-    Note over ESP32: Found! Return current state
-    ESP32-->>Client: 200 {state: "dispensing", dispensed: 1}<br/>[Idempotent - no duplicate dispense]
+    Client->>ESP8266: POST /dispense (RETRY)<br/>{tx_id: "aaa", quantity: 3}
+    ESP8266->>History: Check tx "aaa"
+    Note over ESP8266: Found! Return current state
+    ESP8266-->>Client: 200 {state: "dispensing", dispensed: 1}<br/>[Idempotent - no duplicate dispense]
 
     Note over Client: Poll for status
 
-    Client->>ESP32: GET /dispense/aaa
-    ESP32-->>Client: 200 {state: "dispensing", dispensed: 2}
+    Client->>ESP8266: GET /dispense/aaa
+    ESP8266-->>Client: 200 {state: "dispensing", dispensed: 2}
 
-    Client->>ESP32: GET /dispense/aaa
-    ESP32-->>Client: 200 {state: "done", dispensed: 3}
+    Client->>ESP8266: GET /dispense/aaa
+    ESP8266-->>Client: 200 {state: "done", dispensed: 3}
 
-    Note over ESP32,Client: Safe to retry any request<br/>with same tx_id
+    Note over ESP8266,Client: Safe to retry any request<br/>with same tx_id
 ```
 
 ---
@@ -940,7 +940,7 @@ gantt
     Generate tx_id & write to storage    :0, 50ms
     HTTP dispense request        :50ms, 100ms
 
-    section ESP32
+    section ESP8266
     Start dispensing             :50ms, 100ms
     Token 1 dispense            :150ms, 2000ms
     Token 2 dispense            :2150ms, 2000ms
@@ -958,7 +958,7 @@ gantt
 |--------|-------|-------|
 | **Dispense rate** | 1 token per 2-3 seconds | Limited by Azkoyen motor |
 | **Max transaction size** | 20 tokens | Configurable limit |
-| **Concurrent transactions** | 1 | Single-resource lock on ESP32 |
+| **Concurrent transactions** | 1 | Single-resource lock on ESP8266 |
 | **Transaction history** | Last 8 tx_ids | Ring buffer for idempotency |
 | **HTTP timeout** | 3 seconds | With 3 retries |
 | **Poll interval** | 250ms during dispense | Real-time progress updates |
@@ -991,7 +991,7 @@ graph TB
 
 | Threat | Mitigation |
 |--------|-----------|
-| **Unauthorized dispense** | Transaction must be in client stable storage before ESP32 accepts request |
+| **Unauthorized dispense** | Transaction must be in client stable storage before ESP8266 accepts request |
 | **Replay attacks** | tx_id stored in ring buffer, duplicates return cached state |
 | **Network sniffing** | Local WiFi only, no sensitive data in protocol |
 | **Physical tampering** | Locked enclosure, audit trail in stable storage |
@@ -1022,7 +1022,7 @@ stateDiagram-v2
 
     note right of Operational
         ✅ All systems OK
-        ✅ ESP32 responding
+        ✅ ESP8266 responding
         ✅ Hopper has tokens
     end note
 
@@ -1041,7 +1041,7 @@ stateDiagram-v2
 
     note right of Offline
         ❌ No healthcheck pings
-        ❌ ESP32 unreachable
+        ❌ ESP8266 unreachable
         ❌ Client crashed
     end note
 ```
@@ -1053,7 +1053,7 @@ The system monitor can report comprehensive health status every 60 seconds:
 ```
 Status: OK / DEGRADED / CRITICAL
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-ESP32:          OK (uptime: 23h 27m)
+ESP8266:          OK (uptime: 23h 27m)
 Hopper:         OK (tokens available)
 Dispenser:      idle
 Client App:     running
@@ -1080,13 +1080,13 @@ Last Updated:        2025-02-08 14:23:45 UTC
 
 The System Monitor is a dedicated component (daemon/service) running on the client device with the following responsibilities:
 
-#### 1. ESP32 Health Monitoring
+#### 1. ESP8266 Health Monitoring
 
 **Polling Interval:** Every 60 seconds
 
 **Actions:**
 ```
-GET /health → ESP32
+GET /health → ESP8266
 ├─ Parse response metrics
 ├─ Calculate success rates
 ├─ Detect error rate thresholds
@@ -1124,7 +1124,7 @@ jam_rate = (health["metrics"]["jams"] /
 **Critical (Immediate Attention):**
 - `dispenser == "error"` → 🚨 CRITICAL "Dispenser jammed! Manual intervention required"
 - New jam detected (`jams` increased) → 🚨 CRITICAL "Jam occurred! Clear hopper"
-- No response for 3 consecutive polls → 🚨 CRITICAL "ESP32 offline"
+- No response for 3 consecutive polls → 🚨 CRITICAL "ESP8266 offline"
 
 **Warning (Maintenance Needed):**
 - `jam_rate > 5%` → ⚠️ WARNING "Frequent jams - schedule maintenance"
@@ -1270,7 +1270,7 @@ sequenceDiagram
     participant Monitor as System Monitor
     participant Client as Client App
     participant DB as Stable Storage
-    participant ESP32
+    participant ESP8266
 
     Note over Monitor: Detect crash:<br/>App not running OR<br/>old incomplete txns
 
@@ -1283,24 +1283,24 @@ sequenceDiagram
 
     Note over Client: Found incomplete transaction!<br/>Need to reconcile
 
-    Client->>ESP32: GET /dispense/xyz
+    Client->>ESP8266: GET /dispense/xyz
 
     alt Transaction completed during crash
-        ESP32-->>Client: 200 {state: "done", dispensed: 3}
+        ESP8266-->>Client: 200 {state: "done", dispensed: 3}
         Client->>DB: UPDATE state=complete, dispensed=3
         Client->>DB: CREATE payment transaction
         Note over Client: Recovery successful!
     else Transaction partially completed
-        ESP32-->>Client: 200 {state: "error", dispensed: 2}
+        ESP8266-->>Client: 200 {state: "error", dispensed: 2}
         Client->>DB: UPDATE state=partial, dispensed=2
         Client->>DB: CREATE partial payment OR refund
         Note over Client: User charged for 2 tokens only
     else Transaction failed/timed out
-        ESP32-->>Client: 404 Not Found
+        ESP8266-->>Client: 404 Not Found
         Client->>DB: UPDATE state=failed
         Note over Client: No payment, user can retry
     else Transaction still in progress (unlikely)
-        ESP32-->>Client: 200 {state: "dispensing", dispensed: 1}
+        ESP8266-->>Client: 200 {state: "dispensing", dispensed: 1}
         Client->>Client: Resume polling
         Note over Client: Continue normal flow
     end
@@ -1309,52 +1309,52 @@ sequenceDiagram
 ```
 
 **Key Principles:**
-- ✅ ESP32 is source of truth for dispense status
-- ✅ Client reconciles local DB with ESP32 reality
+- ✅ ESP8266 is source of truth for dispense status
+- ✅ Client reconciles local DB with ESP8266 reality
 - ✅ Payment only created after confirming actual dispensed count
 - ✅ No double-charging (payment tied to dispense outcome)
 
-#### Protocol 2: ESP32 Crash Recovery
+#### Protocol 2: ESP8266 Crash Recovery
 
-**Trigger:** ESP32 reboots (power loss, firmware crash)
+**Trigger:** ESP8266 reboots (power loss, firmware crash)
 
-**ESP32 Actions on Boot:**
+**ESP8266 Actions on Boot:**
 
 ```mermaid
 sequenceDiagram
-    participant ESP32
-    participant Flash as ESP32 Flash
+    participant ESP8266
+    participant Flash as ESP8266 Flash
     participant Client
 
-    Note over ESP32: 💥 Reboot (power loss)
+    Note over ESP8266: 💥 Reboot (power loss)
 
-    ESP32->>ESP32: Boot sequence
+    ESP8266->>ESP8266: Boot sequence
 
-    ESP32->>Flash: Read persisted transaction
-    Flash-->>ESP32: {tx_id: "abc", qty: 3, dispensed: 2, state: "dispensing"}
+    ESP8266->>Flash: Read persisted transaction
+    Flash-->>ESP8266: {tx_id: "abc", qty: 3, dispensed: 2, state: "dispensing"}
 
-    Note over ESP32: Found incomplete transaction!<br/>Set state to "error"
+    Note over ESP8266: Found incomplete transaction!<br/>Set state to "error"
 
-    ESP32->>ESP32: state = "error"<br/>error_type = "reboot"<br/>dispensed = 2 (partial)
+    ESP8266->>ESP8266: state = "error"<br/>error_type = "reboot"<br/>dispensed = 2 (partial)
 
-    Note over ESP32: Motor stopped (GPIO LOW on boot)<br/>Ready to accept new transactions
+    Note over ESP8266: Motor stopped (GPIO LOW on boot)<br/>Ready to accept new transactions
 
-    Client->>ESP32: GET /dispense/abc<br/>(periodic polling)
+    Client->>ESP8266: GET /dispense/abc<br/>(periodic polling)
 
-    ESP32-->>Client: 200 {state: "error", error: "reboot",<br/>quantity: 3, dispensed: 2}
+    ESP8266-->>Client: 200 {state: "error", error: "reboot",<br/>quantity: 3, dispensed: 2}
 
     Note over Client: Record partial dispense:<br/>2 tokens dispensed<br/>Charge for 2 or issue refund
 ```
 
 **Key Principles:**
-- ✅ Flash persistence allows ESP32 to report exact dispensed count
+- ✅ Flash persistence allows ESP8266 to report exact dispensed count
 - ✅ Motor stops on reboot (GPIO default LOW)
-- ✅ Client polls ESP32 and handles partial dispense
+- ✅ Client polls ESP8266 and handles partial dispense
 - ✅ Customer only charged for tokens actually received
 
 #### Protocol 3: Network Partition Recovery
 
-**Trigger:** Client cannot reach ESP32 for >3 minutes
+**Trigger:** Client cannot reach ESP8266 for >3 minutes
 
 **Actions:**
 
@@ -1362,18 +1362,18 @@ sequenceDiagram
 sequenceDiagram
     participant Monitor as System Monitor
     participant Client as Client App
-    participant ESP32
+    participant ESP8266
 
-    Note over Monitor: ESP32 health check failed<br/>3 consecutive timeouts
+    Note over Monitor: ESP8266 health check failed<br/>3 consecutive timeouts
 
-    Monitor->>Monitor: Alert: ESP32 unreachable
+    Monitor->>Monitor: Alert: ESP8266 unreachable
 
     alt Network issue
         Note over Monitor: Wait for network restoration
-        Monitor->>ESP32: Retry GET /health
-        ESP32-->>Monitor: 200 {status: "ok", ...}
+        Monitor->>ESP8266: Retry GET /health
+        ESP8266-->>Monitor: 200 {status: "ok", ...}
         Monitor->>Monitor: Alert resolved
-    else ESP32 actually offline
+    else ESP8266 actually offline
         Monitor->>Monitor: Alert: Manual intervention required
         Note over Monitor: Dispenser unavailable<br/>Report to external monitoring
     end
@@ -1382,10 +1382,10 @@ sequenceDiagram
     Client->>Client: Check incomplete transactions
 
     alt No incomplete transactions
-        Note over Client: Nothing to reconcile<br/>Wait for ESP32 to come back
+        Note over Client: Nothing to reconcile<br/>Wait for ESP8266 to come back
     else Has incomplete transaction
-        Note over Client: Wait for ESP32 connectivity
-        Client->>ESP32: GET /dispense/{tx_id}<br/>(when connection restored)
+        Note over Client: Wait for ESP8266 connectivity
+        Client->>ESP8266: GET /dispense/{tx_id}<br/>(when connection restored)
         Note over Client: Reconcile as per Protocol 1
     end
 ```
@@ -1410,7 +1410,7 @@ Every 60 seconds:
 │   ├─ Check if client app is responsive
 │   │   ├─ If unresponsive: Trigger client restart (Protocol 1)
 │   │   └─ If responsive: Client should be handling recovery
-│   └─ Check if ESP32 is reachable
+│   └─ Check if ESP8266 is reachable
 │       ├─ If unreachable: Alert "Network issue" (Protocol 3)
 │       └─ If reachable: Client should reconcile
 └─ If count = 0:
@@ -1438,20 +1438,20 @@ The recovery protocols provide these guarantees:
 - ✅ **Automatic recovery** from client crashes (watchdog restarts app)
 - ✅ **Transaction reconciliation** on every client boot
 - ✅ **Network resilience** through retry and idempotency
-- ✅ **Hardware failure handling** via ESP32 flash persistence
+- ✅ **Hardware failure handling** via ESP8266 flash persistence
 
 **Data Consistency:**
-- ✅ **ESP32 is source of truth** for dispense outcome
-- ✅ **Client reconciles** local state with ESP32 reality
+- ✅ **ESP8266 is source of truth** for dispense outcome
+- ✅ **Client reconciles** local state with ESP8266 reality
 - ✅ **No lost transactions** (all tracked in stable storage)
 - ✅ **Audit trail** complete for all dispense attempts
 
 **Failure Modes Handled:**
 - ✅ Client app crash mid-dispense
-- ✅ ESP32 power loss mid-dispense
+- ✅ ESP8266 power loss mid-dispense
 - ✅ Network partition during dispense
 - ✅ Client reboot with incomplete transactions
-- ✅ ESP32 reboot with partial dispense
+- ✅ ESP8266 reboot with partial dispense
 - ✅ Watchdog timeout (jams, stalls)
 
 ---
@@ -1460,7 +1460,7 @@ The recovery protocols provide these guarantees:
 
 Potential architectural extensions (not yet implemented):
 
-1. **Multi-dispenser support** - Client manages multiple ESP32 dispensers
+1. **Multi-dispenser support** - Client manages multiple ESP8266 dispensers
 2. **Remote management API** - Configuration updates over network
 3. **Token type detection** - Different denominations
 4. **Predictive maintenance** - ML-based jam prediction

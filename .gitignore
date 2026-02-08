@@ -1,0 +1,12 @@
+# Local configuration with credentials
+esp32/dispenser/config.local.h
+
+# Arduino build artifacts
+*.hex
+*.elf
+*.bin
+*.map
+
+# IDE files
+.vscode/
+.DS_Store
