@@ -1,0 +1,26 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "WebFetch(domain:manualzz.com)",
+      "WebFetch(domain:docs.cirkitdesigner.com)",
+      "WebFetch(domain:forum.arduino.cc)",
+      "WebFetch(domain:www.electro-tech-online.com)",
+      "WebFetch(domain:help.smvend.io)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:casino-software.de)",
+      "WebFetch(domain:oem.suzohapp.com)",
+      "WebFetch(domain:www.manualslib.com)",
+      "WebFetch(domain:www.coinmech.com)",
+      "Bash(grep:*)",
+      "WebFetch(domain:www.espboards.dev)",
+      "WebFetch(domain:templates.blakadder.com)",
+      "WebFetch(domain:randomnerdtutorials.com)",
+      "WebFetch(domain:galopago.github.io)",
+      "Bash(git add:*)",
+      "Bash(git commit -m \"$\\(cat <<''EOF''\nAdd ESP8266 firmware design and setup documentation\n\n- Complete design document for Wemos D1 Mini \\(ESP8266\\) firmware\n- Component-based architecture with 6 modules\n- GPIO pin assignments using D-labels \\(D5-D8\\)\n- API key authentication \\(X-API-Key header\\)\n- Watchdog jam detection and crash recovery\n- Comprehensive README with library requirements\n- Arduino IDE setup instructions\n- Updated ARCHITECTURE.md with API authentication\n\nCo-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(git init:*)"
+    ]
+  }
+}
