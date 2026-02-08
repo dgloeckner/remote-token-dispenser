@@ -42,9 +42,14 @@ private:
 
   Transaction active_tx;
 
-  // Ring buffer for idempotency (last 8 tx_ids)
-  char tx_history[RING_BUFFER_SIZE][17];
-  TransactionState history_states[RING_BUFFER_SIZE];
+  // Ring buffer for idempotency (last 8 transactions with full data)
+  struct HistoryEntry {
+    char tx_id[17];
+    TransactionState state;
+    uint8_t quantity;
+    uint8_t dispensed;
+  };
+  HistoryEntry history[RING_BUFFER_SIZE];
   uint8_t history_index;
 
   // Metrics
@@ -54,7 +59,7 @@ private:
   uint16_t partial_count;
 
   bool findInHistory(const char* tx_id, Transaction& out_tx);
-  void addToHistory(const char* tx_id, TransactionState state);
+  void addToHistory(const char* tx_id, TransactionState state, uint8_t quantity, uint8_t dispensed);
   void persistActiveTransaction();
 };
 

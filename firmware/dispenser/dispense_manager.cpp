@@ -8,8 +8,7 @@ DispenseManager::DispenseManager(FlashStorage& storage, HopperControl& hopper)
   memset(&active_tx, 0, sizeof(active_tx));
   active_tx.state = STATE_IDLE;
 
-  memset(tx_history, 0, sizeof(tx_history));
-  memset(history_states, 0, sizeof(history_states));
+  memset(history, 0, sizeof(history));
   history_index = 0;
 
   total_dispenses = 0;
@@ -45,8 +44,8 @@ void DispenseManager::begin() {
       active_tx.state = STATE_IDLE;
     }
 
-    // Add to history
-    addToHistory(active_tx.tx_id, active_tx.state);
+    // Add to history with full transaction data
+    addToHistory(active_tx.tx_id, active_tx.state, active_tx.quantity, active_tx.dispensed);
   }
 }
 
@@ -98,7 +97,7 @@ void DispenseManager::loop() {
     hopperControl.stopMotor();
     active_tx.state = STATE_DONE;
     persistActiveTransaction();
-    addToHistory(active_tx.tx_id, STATE_DONE);
+    addToHistory(active_tx.tx_id, STATE_DONE, active_tx.quantity, active_tx.dispensed);
     flashStorage.clear();
     memset(&active_tx, 0, sizeof(active_tx));
     active_tx.state = STATE_IDLE;
@@ -111,7 +110,7 @@ void DispenseManager::loop() {
     hopperControl.stopMotor();
     active_tx.state = STATE_ERROR;
     persistActiveTransaction();
-    addToHistory(active_tx.tx_id, STATE_ERROR);
+    addToHistory(active_tx.tx_id, STATE_ERROR, active_tx.quantity, active_tx.dispensed);
     jam_count++;
 
     if (active_tx.dispensed > 0) {
@@ -158,23 +157,26 @@ uint16_t DispenseManager::getPartial() { return partial_count; }
 // Private methods
 bool DispenseManager::findInHistory(const char* tx_id, Transaction& out_tx) {
   for (int i = 0; i < RING_BUFFER_SIZE; i++) {
-    if (strcmp(tx_history[i], tx_id) == 0) {
-      // Found in history
+    if (strcmp(history[i].tx_id, tx_id) == 0) {
+      // Found in history - return complete transaction data
       memset(&out_tx, 0, sizeof(out_tx));
       strncpy(out_tx.tx_id, tx_id, 16);
       out_tx.tx_id[16] = '\0';
-      out_tx.state = history_states[i];
-      // Note: quantity/dispensed not stored in history (would need expansion)
+      out_tx.state = history[i].state;
+      out_tx.quantity = history[i].quantity;
+      out_tx.dispensed = history[i].dispensed;
       return true;
     }
   }
   return false;
 }
 
-void DispenseManager::addToHistory(const char* tx_id, TransactionState state) {
-  strncpy(tx_history[history_index], tx_id, 16);
-  tx_history[history_index][16] = '\0';
-  history_states[history_index] = state;
+void DispenseManager::addToHistory(const char* tx_id, TransactionState state, uint8_t quantity, uint8_t dispensed) {
+  strncpy(history[history_index].tx_id, tx_id, 16);
+  history[history_index].tx_id[16] = '\0';
+  history[history_index].state = state;
+  history[history_index].quantity = quantity;
+  history[history_index].dispensed = dispensed;
   history_index = (history_index + 1) % RING_BUFFER_SIZE;
 }
 
