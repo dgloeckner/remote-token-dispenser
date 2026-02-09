@@ -251,23 +251,6 @@ Before powering everything on:
 
 ---
 
-## 🔄 Regenerating Diagrams
-
-All wiring diagrams are code-generated using Python for version control and reproducibility.
-
-To regenerate the diagrams:
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install schemdraw
-python docs/generate_diagrams.py
-```
-
-See [docs/README-diagrams.md](../docs/README-diagrams.md) for details.
-
----
-
 ## 📸 Photos
 
 <p align="center">

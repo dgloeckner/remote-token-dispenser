@@ -1,1 +1,147 @@
-<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" xml:lang="en" height="448.4pt" width="383.852pt" viewBox="-120.99999999999999 -353.8 383.852 448.4" style="background-color:white;"><path d="M 0.0,90.0 L 240.252,90.0 L 240.252,-349.2 L 0.0,-349.2 L 0.0,90.0" style="stroke:black;fill:none;stroke-width:2.0;stroke-dasharray:-;stroke-linecap:round;stroke-linejoin:round;" /><path d="M 0.0,46.8 L -18.0,46.8" style="stroke:black;fill:none;stroke-width:2.0;stroke-dasharray:-;stroke-linecap:round;stroke-linejoin:round;" /><path d="M 0.0,-3.600000000000003 L -18.0,-3.600000000000003" style="stroke:black;fill:none;stroke-width:2.0;stroke-dasharray:-;stroke-linecap:round;stroke-linejoin:round;" /><path d="M 0.0,-54.0 L -18.0,-54.0" style="stroke:black;fill:none;stroke-width:2.0;stroke-dasharray:-;stroke-linecap:round;stroke-linejoin:round;" /><path d="M 0.0,-104.39999999999998 L -18.0,-104.39999999999998" style="stroke:black;fill:none;stroke-width:2.0;stroke-dasharray:-;stroke-linecap:round;stroke-linejoin:round;" /><path d="M 0.0,-154.79999999999998 L -18.0,-154.79999999999998" style="stroke:black;fill:none;stroke-width:2.0;stroke-dasharray:-;stroke-linecap:round;stroke-linejoin:round;" /><path d="M 0.0,-205.2 L -18.0,-205.2" style="stroke:black;fill:none;stroke-width:2.0;stroke-dasharray:-;stroke-linecap:round;stroke-linejoin:round;" /><path d="M 0.0,-255.5999999999999 L -18.0,-255.5999999999999" style="stroke:black;fill:none;stroke-width:2.0;stroke-dasharray:-;stroke-linecap:round;stroke-linejoin:round;" /><path d="M 0.0,-306.0 L -18.0,-306.0" style="stroke:black;fill:none;stroke-width:2.0;stroke-dasharray:-;stroke-linecap:round;stroke-linejoin:round;" /><path d="M 240.252,46.8 L 258.252,46.8" style="stroke:black;fill:none;stroke-width:2.0;stroke-dasharray:-;stroke-linecap:round;stroke-linejoin:round;" /><path d="M 240.252,-3.600000000000003 L 258.252,-3.600000000000003" style="stroke:black;fill:none;stroke-width:2.0;stroke-dasharray:-;stroke-linecap:round;stroke-linejoin:round;" /><path d="M 240.252,-54.0 L 258.252,-54.0" style="stroke:black;fill:none;stroke-width:2.0;stroke-dasharray:-;stroke-linecap:round;stroke-linejoin:round;" /><path d="M 240.252,-104.39999999999998 L 258.252,-104.39999999999998" style="stroke:black;fill:none;stroke-width:2.0;stroke-dasharray:-;stroke-linecap:round;stroke-linejoin:round;" /><path d="M 240.252,-154.79999999999998 L 258.252,-154.79999999999998" style="stroke:black;fill:none;stroke-width:2.0;stroke-dasharray:-;stroke-linecap:round;stroke-linejoin:round;" /><path d="M 240.252,-205.2 L 258.252,-205.2" style="stroke:black;fill:none;stroke-width:2.0;stroke-dasharray:-;stroke-linecap:round;stroke-linejoin:round;" /><path d="M 240.252,-255.5999999999999 L 258.252,-255.5999999999999" style="stroke:black;fill:none;stroke-width:2.0;stroke-dasharray:-;stroke-linecap:round;stroke-linejoin:round;" /><path d="M 240.252,-306.0 L 258.252,-306.0" style="stroke:black;fill:none;stroke-width:2.0;stroke-dasharray:-;stroke-linecap:round;stroke-linejoin:round;" /><text x="3.6" y="-19.6" dominant-baseline="ideographic" fill="black" font-size="16" font-family="sans" text-anchor="middle"><tspan x="3.6" dy="16">Wemos D1 Mini Pinout Reference</tspan></text><text x="-2.6999999999999997" y="33.099999999999994" dominant-baseline="ideographic" fill="black" font-size="11" font-family="sans" text-anchor="end"><tspan x="-2.6999999999999997" dy="11">1</tspan></text><text x="5.3999999999999995" y="25.799999999999997" dominant-baseline="central" fill="black" font-size="14" font-family="sans" text-anchor="start"><tspan x="5.3999999999999995" dy="14">RST</tspan><tspan x="5.3999999999999995" dy="14">Reset</tspan></text><text x="-2.6999999999999997" y="-17.30000000000001" dominant-baseline="ideographic" fill="black" font-size="11" font-family="sans" text-anchor="end"><tspan x="-2.6999999999999997" dy="11">2</tspan></text><text x="5.3999999999999995" y="-24.6" dominant-baseline="central" fill="black" font-size="14" font-family="sans" text-anchor="start"><tspan x="5.3999999999999995" dy="14">A0</tspan><tspan x="5.3999999999999995" dy="14">Analog Input</tspan></text><text x="-2.6999999999999997" y="-67.7" dominant-baseline="ideographic" fill="black" font-size="11" font-family="sans" text-anchor="end"><tspan x="-2.6999999999999997" dy="11">3</tspan></text><text x="5.3999999999999995" y="-75.0" dominant-baseline="central" fill="black" font-size="14" font-family="sans" text-anchor="start"><tspan x="5.3999999999999995" dy="14">D0</tspan><tspan x="5.3999999999999995" dy="14">GPIO16 (unused)</tspan></text><text x="-2.6999999999999997" y="-118.1" dominant-baseline="ideographic" fill="black" font-size="11" font-family="sans" text-anchor="end"><tspan x="-2.6999999999999997" dy="11">4</tspan></text><text x="5.3999999999999995" y="-125.39999999999998" dominant-baseline="central" fill="red" font-size="14" font-family="sans" text-anchor="start"><tspan x="5.3999999999999995" dy="14">D5</tspan><tspan x="5.3999999999999995" dy="14">GPIO14 ← Error</tspan></text><text x="-2.6999999999999997" y="-168.5" dominant-baseline="ideographic" fill="black" font-size="11" font-family="sans" text-anchor="end"><tspan x="-2.6999999999999997" dy="11">5</tspan></text><text x="5.3999999999999995" y="-175.79999999999998" dominant-baseline="central" fill="red" font-size="14" font-family="sans" text-anchor="start"><tspan x="5.3999999999999995" dy="14">D6</tspan><tspan x="5.3999999999999995" dy="14">GPIO12 ← Empty</tspan></text><text x="-2.6999999999999997" y="-218.89999999999995" dominant-baseline="ideographic" fill="black" font-size="11" font-family="sans" text-anchor="end"><tspan x="-2.6999999999999997" dy="11">6</tspan></text><text x="5.3999999999999995" y="-226.2" dominant-baseline="central" fill="black" font-size="14" font-family="sans" text-anchor="start"><tspan x="5.3999999999999995" dy="14">D7</tspan><tspan x="5.3999999999999995" dy="14">GPIO13 (unused)</tspan></text><text x="-2.6999999999999997" y="-269.2999999999999" dominant-baseline="ideographic" fill="black" font-size="11" font-family="sans" text-anchor="end"><tspan x="-2.6999999999999997" dy="11">7</tspan></text><text x="5.3999999999999995" y="-276.5999999999999" dominant-baseline="central" fill="black" font-size="14" font-family="sans" text-anchor="start"><tspan x="5.3999999999999995" dy="14">D8</tspan><tspan x="5.3999999999999995" dy="14">GPIO15 (unused)</tspan></text><text x="-2.6999999999999997" y="-319.7" dominant-baseline="ideographic" fill="black" font-size="11" font-family="sans" text-anchor="end"><tspan x="-2.6999999999999997" dy="11">8</tspan></text><text x="5.3999999999999995" y="-327.0" dominant-baseline="central" fill="black" font-size="14" font-family="sans" text-anchor="start"><tspan x="5.3999999999999995" dy="14">3V3</tspan><tspan x="5.3999999999999995" dy="14">3.3V Output</tspan></text><text x="242.952" y="33.099999999999994" dominant-baseline="ideographic" fill="black" font-size="11" font-family="sans" text-anchor="start"><tspan x="242.952" dy="11">9</tspan></text><text x="234.85199999999998" y="25.799999999999997" dominant-baseline="central" fill="black" font-size="14" font-family="sans" text-anchor="end"><tspan x="234.85199999999998" dy="14">TX</tspan><tspan x="234.85199999999998" dy="14">GPIO1 (Serial)</tspan></text><text x="242.952" y="-17.30000000000001" dominant-baseline="ideographic" fill="black" font-size="11" font-family="sans" text-anchor="start"><tspan x="242.952" dy="11">10</tspan></text><text x="234.85199999999998" y="-24.6" dominant-baseline="central" fill="black" font-size="14" font-family="sans" text-anchor="end"><tspan x="234.85199999999998" dy="14">RX</tspan><tspan x="234.85199999999998" dy="14">GPIO3 (Serial)</tspan></text><text x="242.952" y="-67.7" dominant-baseline="ideographic" fill="black" font-size="11" font-family="sans" text-anchor="start"><tspan x="242.952" dy="11">11</tspan></text><text x="234.85199999999998" y="-75.0" dominant-baseline="central" fill="red" font-size="14" font-family="sans" text-anchor="end"><tspan x="234.85199999999998" dy="14">D1</tspan><tspan x="234.85199999999998" dy="14">GPIO5 → Control</tspan></text><text x="242.952" y="-118.1" dominant-baseline="ideographic" fill="black" font-size="11" font-family="sans" text-anchor="start"><tspan x="242.952" dy="11">12</tspan></text><text x="234.85199999999998" y="-125.39999999999998" dominant-baseline="central" fill="red" font-size="14" font-family="sans" text-anchor="end"><tspan x="234.85199999999998" dy="14">D2</tspan><tspan x="234.85199999999998" dy="14">GPIO4 ← Coin</tspan></text><text x="242.952" y="-168.5" dominant-baseline="ideographic" fill="black" font-size="11" font-family="sans" text-anchor="start"><tspan x="242.952" dy="11">13</tspan></text><text x="234.85199999999998" y="-175.79999999999998" dominant-baseline="central" fill="black" font-size="14" font-family="sans" text-anchor="end"><tspan x="234.85199999999998" dy="14">D3</tspan><tspan x="234.85199999999998" dy="14">GPIO0 (unused)</tspan></text><text x="242.952" y="-218.89999999999995" dominant-baseline="ideographic" fill="black" font-size="11" font-family="sans" text-anchor="start"><tspan x="242.952" dy="11">14</tspan></text><text x="234.85199999999998" y="-226.2" dominant-baseline="central" fill="black" font-size="14" font-family="sans" text-anchor="end"><tspan x="234.85199999999998" dy="14">D4</tspan><tspan x="234.85199999999998" dy="14">GPIO2 (LED)</tspan></text><text x="242.952" y="-269.2999999999999" dominant-baseline="ideographic" fill="black" font-size="11" font-family="sans" text-anchor="start"><tspan x="242.952" dy="11">15</tspan></text><text x="234.85199999999998" y="-276.5999999999999" dominant-baseline="central" fill="black" font-size="14" font-family="sans" text-anchor="end"><tspan x="234.85199999999998" dy="14">GND</tspan><tspan x="234.85199999999998" dy="14">Ground</tspan></text><text x="242.952" y="-319.7" dominant-baseline="ideographic" fill="black" font-size="11" font-family="sans" text-anchor="start"><tspan x="242.952" dy="11">16</tspan></text><text x="234.85199999999998" y="-327.0" dominant-baseline="central" fill="black" font-size="14" font-family="sans" text-anchor="end"><tspan x="234.85199999999998" dy="14">5V</tspan><tspan x="234.85199999999998" dy="14">5V Input (USB)</tspan></text><text x="120.126" y="-146.1" dominant-baseline="central" fill="black" font-size="11" font-family="sans" text-anchor="middle"><tspan x="120.126" dy="11">WEMOS D1 MINI</tspan><tspan x="120.126" dy="11">ESP8266</tspan></text></svg>
+<svg viewBox="0 0 720 520" width="720" height="520" xmlns="http://www.w3.org/2000/svg" font-family="Inter, system-ui, -apple-system, sans-serif">
+  <defs>
+    <filter id="shadow" x="-4%" y="-4%" width="108%" height="112%">
+      <feDropShadow dx="0" dy="3" stdDeviation="6" flood-color="#000" flood-opacity="0.25"/>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="720" height="520" rx="12" fill="#0f172a"/>
+  <pattern id="grid" width="20" height="20" patternUnits="userSpaceOnUse">
+    <path d="M20,0 L0,0 0,20" fill="none" stroke="#1e293b" stroke-width="0.4"/>
+  </pattern>
+  <rect width="720" height="520" fill="url(#grid)" opacity="0.5" rx="12"/>
+
+  <!-- Title -->
+  <text x="360" y="36" text-anchor="middle" font-size="17" font-weight="800" fill="#f1f5f9" letter-spacing="-0.3">Wemos D1 Mini Pinout Reference</text>
+  <text x="360" y="54" text-anchor="middle" font-size="11" fill="#64748b">Colored pins are used by the Token Dispenser · Arrows show signal direction</text>
+
+  <!-- Board -->
+  <g filter="url(#shadow)">
+    <rect x="248" y="72" width="224" height="388" rx="10" fill="#1e293b" stroke="#334155" stroke-width="1.5"/>
+    <rect x="248" y="72" width="224" height="34" rx="10" fill="#1e3a5f"/>
+    <rect x="248" y="96" width="224" height="10" fill="#1e3a5f"/>
+    <text x="360" y="94" text-anchor="middle" font-size="13" font-weight="700" fill="#38bdf8">WEMOS D1 MINI</text>
+    <text x="360" y="104" text-anchor="middle" font-size="9" fill="#7dd3fc">ESP8266</text>
+    <rect x="335" y="66" width="50" height="10" rx="3" fill="#334155" stroke="#475569" stroke-width="0.8"/>
+    <text x="360" y="74" text-anchor="middle" font-size="6.5" fill="#64748b" font-family="monospace">USB</text>
+    <rect x="260" y="420" width="200" height="28" rx="4" fill="#0f172a" stroke="#334155" stroke-width="0.8" stroke-dasharray="4,2"/>
+    <text x="360" y="438" text-anchor="middle" font-size="8" fill="#475569">PCB ANTENNA</text>
+  </g>
+
+  <!-- ═══ LEFT PINS ═══ -->
+  <!-- RST -->
+  <circle cx="248" cy="135" r="5" fill="#475569"/>
+  <line x1="243" y1="135" x2="200" y2="135" stroke="#475569" stroke-width="1.5"/>
+  <text x="192" y="132" text-anchor="end" font-size="11" font-weight="600" fill="#94a3b8" font-family="monospace">RST</text>
+  <text x="192" y="143" text-anchor="end" font-size="9" fill="#64748b">Reset</text>
+
+  <!-- A0 -->
+  <circle cx="248" cy="171" r="5" fill="#475569"/>
+  <line x1="243" y1="171" x2="200" y2="171" stroke="#475569" stroke-width="1.5"/>
+  <text x="192" y="168" text-anchor="end" font-size="11" font-weight="600" fill="#94a3b8" font-family="monospace">A0</text>
+  <text x="192" y="179" text-anchor="end" font-size="9" fill="#64748b">Analog In</text>
+
+  <!-- D0 -->
+  <circle cx="248" cy="207" r="5" fill="#475569"/>
+  <line x1="243" y1="207" x2="200" y2="207" stroke="#475569" stroke-width="1.5"/>
+  <text x="192" y="204" text-anchor="end" font-size="11" font-weight="600" fill="#94a3b8" font-family="monospace">D0</text>
+  <text x="192" y="215" text-anchor="end" font-size="9" fill="#64748b">GPIO16</text>
+
+  <!-- D5 ★ Error IN -->
+  <circle cx="248" cy="243" r="6" fill="#f59e0b"/>
+  <line x1="242" y1="243" x2="200" y2="243" stroke="#f59e0b" stroke-width="1.8"/>
+  <text x="192" y="240" text-anchor="end" font-size="11" font-weight="700" fill="#f59e0b" font-family="monospace">D5</text>
+  <text x="192" y="251" text-anchor="end" font-size="9" fill="#fbbf24">GPIO14 ← Error</text>
+
+  <!-- D6 ★ Empty IN -->
+  <circle cx="248" cy="279" r="6" fill="#f97316"/>
+  <line x1="242" y1="279" x2="200" y2="279" stroke="#f97316" stroke-width="1.8"/>
+  <text x="192" y="276" text-anchor="end" font-size="11" font-weight="700" fill="#f97316" font-family="monospace">D6</text>
+  <text x="192" y="287" text-anchor="end" font-size="9" fill="#fb923c">GPIO12 ← Empty</text>
+
+  <!-- D7 -->
+  <circle cx="248" cy="315" r="5" fill="#475569"/>
+  <line x1="243" y1="315" x2="200" y2="315" stroke="#475569" stroke-width="1.5"/>
+  <text x="192" y="312" text-anchor="end" font-size="11" font-weight="600" fill="#94a3b8" font-family="monospace">D7</text>
+  <text x="192" y="323" text-anchor="end" font-size="9" fill="#64748b">GPIO13</text>
+
+  <!-- D8 -->
+  <circle cx="248" cy="351" r="5" fill="#475569"/>
+  <line x1="243" y1="351" x2="200" y2="351" stroke="#475569" stroke-width="1.5"/>
+  <text x="192" y="348" text-anchor="end" font-size="11" font-weight="600" fill="#94a3b8" font-family="monospace">D8</text>
+  <text x="192" y="359" text-anchor="end" font-size="9" fill="#64748b">GPIO15</text>
+
+  <!-- 3V3 -->
+  <circle cx="248" cy="387" r="5" fill="#a78bfa"/>
+  <line x1="243" y1="387" x2="200" y2="387" stroke="#a78bfa" stroke-width="1.5"/>
+  <text x="192" y="384" text-anchor="end" font-size="11" font-weight="600" fill="#a78bfa" font-family="monospace">3V3</text>
+  <text x="192" y="395" text-anchor="end" font-size="9" fill="#64748b">3.3V Out</text>
+
+  <!-- ═══ RIGHT PINS ═══ -->
+  <!-- TX -->
+  <circle cx="472" cy="135" r="5" fill="#475569"/>
+  <line x1="477" y1="135" x2="520" y2="135" stroke="#475569" stroke-width="1.5"/>
+  <text x="528" y="132" font-size="11" font-weight="600" fill="#94a3b8" font-family="monospace">TX</text>
+  <text x="528" y="143" font-size="9" fill="#64748b">GPIO1 · Serial</text>
+
+  <!-- RX -->
+  <circle cx="472" cy="171" r="5" fill="#475569"/>
+  <line x1="477" y1="171" x2="520" y2="171" stroke="#475569" stroke-width="1.5"/>
+  <text x="528" y="168" font-size="11" font-weight="600" fill="#94a3b8" font-family="monospace">RX</text>
+  <text x="528" y="179" font-size="9" fill="#64748b">GPIO3 · Serial</text>
+
+  <!-- D1 ★ Control OUT -->
+  <circle cx="472" cy="207" r="6" fill="#22c55e"/>
+  <line x1="478" y1="207" x2="520" y2="207" stroke="#22c55e" stroke-width="1.8"/>
+  <text x="528" y="204" font-size="11" font-weight="700" fill="#22c55e" font-family="monospace">D1</text>
+  <text x="528" y="215" font-size="9" fill="#4ade80">GPIO5 → Control</text>
+
+  <!-- D2 ★ Coin IN -->
+  <circle cx="472" cy="243" r="6" fill="#3b82f6"/>
+  <line x1="478" y1="243" x2="520" y2="243" stroke="#3b82f6" stroke-width="1.8"/>
+  <text x="528" y="240" font-size="11" font-weight="700" fill="#3b82f6" font-family="monospace">D2</text>
+  <text x="528" y="251" font-size="9" fill="#60a5fa">GPIO4 ← Coin</text>
+
+  <!-- D3 -->
+  <circle cx="472" cy="279" r="5" fill="#475569"/>
+  <line x1="477" y1="279" x2="520" y2="279" stroke="#475569" stroke-width="1.5"/>
+  <text x="528" y="276" font-size="11" font-weight="600" fill="#94a3b8" font-family="monospace">D3</text>
+  <text x="528" y="287" font-size="9" fill="#64748b">GPIO0</text>
+
+  <!-- D4 -->
+  <circle cx="472" cy="315" r="5" fill="#475569"/>
+  <line x1="477" y1="315" x2="520" y2="315" stroke="#475569" stroke-width="1.5"/>
+  <text x="528" y="312" font-size="11" font-weight="600" fill="#94a3b8" font-family="monospace">D4</text>
+  <text x="528" y="323" font-size="9" fill="#64748b">GPIO2 · LED</text>
+
+  <!-- GND -->
+  <circle cx="472" cy="351" r="5" fill="#64748b"/>
+  <line x1="477" y1="351" x2="520" y2="351" stroke="#64748b" stroke-width="1.5"/>
+  <text x="528" y="348" font-size="11" font-weight="600" fill="#94a3b8" font-family="monospace">GND</text>
+  <text x="528" y="359" font-size="9" fill="#64748b">Ground</text>
+
+  <!-- 5V -->
+  <circle cx="472" cy="387" r="5" fill="#ef4444"/>
+  <line x1="477" y1="387" x2="520" y2="387" stroke="#ef4444" stroke-width="1.5"/>
+  <text x="528" y="384" font-size="11" font-weight="600" fill="#ef4444" font-family="monospace">5V</text>
+  <text x="528" y="395" font-size="9" fill="#64748b">USB Power In</text>
+
+  <!-- ═══ LEGEND ═══ -->
+  <rect x="40" y="468" width="640" height="38" rx="6" fill="#1e293b" stroke="#334155" stroke-width="1" opacity="0.85"/>
+  <circle cx="65" cy="487" r="5" fill="#22c55e"/>
+  <text x="77" y="491" font-size="9.5" fill="#4ade80">Control →</text>
+  <circle cx="160" cy="487" r="5" fill="#3b82f6"/>
+  <text x="172" y="491" font-size="9.5" fill="#60a5fa">← Coin</text>
+  <circle cx="240" cy="487" r="5" fill="#f59e0b"/>
+  <text x="252" y="491" font-size="9.5" fill="#fbbf24">← Error</text>
+  <circle cx="325" cy="487" r="5" fill="#f97316"/>
+  <text x="337" y="491" font-size="9.5" fill="#fb923c">← Empty</text>
+  <circle cx="415" cy="487" r="5" fill="#475569"/>
+  <text x="427" y="491" font-size="9.5" fill="#94a3b8">Unused</text>
+  <circle cx="500" cy="487" r="5" fill="#ef4444"/>
+  <text x="512" y="491" font-size="9.5" fill="#fca5a5">Power</text>
+  <circle cx="570" cy="487" r="5" fill="#a78bfa"/>
+  <text x="582" y="491" font-size="9.5" fill="#c4b5fd">3.3V</text>
+  <text x="628" y="491" font-size="9" fill="#64748b">→ out  ← in</text>
+</svg>
