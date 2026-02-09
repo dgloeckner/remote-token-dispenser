@@ -128,41 +128,67 @@ def create_wiring_diagram():
         d += elm.Line().right(5)
         gnd_to_hopper = d.here
 
-        # Azkoyen Hopper U-II on right side
-        d.move_from(control_to_hopper, dx=1, dy=2)
+        # Azkoyen Hopper U-II on right side (2x5 Molex connector)
+        d.move_from(control_to_hopper, dx=1, dy=3)
         d += (hopper := elm.Ic(pins=[
-            elm.IcPin(name='VCC', side='top', pin='1', anchorname='vcc1'),
-            elm.IcPin(name='VCC', side='top', pin='2', anchorname='vcc2'),
-            elm.IcPin(name='Control', side='left', pin='3', anchorname='ctrl'),
-            elm.IcPin(name='Coin', side='left', pin='4', anchorname='coin'),
-            elm.IcPin(name='Error', side='left', pin='5', anchorname='error'),
-            elm.IcPin(name='Empty', side='left', pin='6', anchorname='empty'),
-            elm.IcPin(name='GND', side='bottom', pin='7', anchorname='hgnd1'),
-            elm.IcPin(name='GND', side='bottom', pin='8', anchorname='hgnd2'),
-        ], w=4, pinspacing=1.4, edgepadH=1.0, label='Azkoyen Hopper U-II', lblofst=-0.8))
+            elm.IcPin(name='VCC (1)', side='top', pin='1', anchorname='vcc1'),
+            elm.IcPin(name='VCC (2)', side='top', pin='2', anchorname='vcc2'),
+            elm.IcPin(name='VCC (3)', side='top', pin='3', anchorname='vcc3'),
+            elm.IcPin(name='GND (3)', side='left', pin='4', anchorname='gnd3'),
+            elm.IcPin(name='GND (4)', side='left', pin='5', anchorname='gnd4'),
+            elm.IcPin(name='Control (5)', side='left', pin='6', anchorname='ctrl'),
+            elm.IcPin(name='Coin (6)', side='right', pin='7', anchorname='coin'),
+            elm.IcPin(name='H Level (7)', side='right', pin='8', anchorname='hlevel'),
+            elm.IcPin(name='Error (8)', side='right', pin='9', anchorname='error'),
+            elm.IcPin(name='Empty (9)', side='right', pin='10', anchorname='empty'),
+        ], w=5, pinspacing=1.3, edgepadH=1.2, label='Azkoyen Hopper U-II\n2x5 Molex', lblofst=-1.0))
 
-        # Connect signals to hopper
+        # Connect control signal to hopper
         d.move_from(control_to_hopper)
         d += elm.Line().to(hopper.ctrl)
 
-        d.move_from(coin_from_hopper)
-        d += elm.Line().to(hopper.coin)
+        # Connect coin signal from hopper
+        d.move_from(hopper.coin, dx=0.5)
+        d += elm.Line().right(0.5)
+        d += elm.Line().to(coin_from_hopper)
 
-        d.move_from(error_from_hopper)
-        d += elm.Line().to(hopper.error)
+        # Connect error signal from hopper
+        d.move_from(hopper.error, dx=0.5)
+        d += elm.Line().right(0.5)
+        d += elm.Line().to(error_from_hopper)
 
-        d.move_from(empty_from_hopper)
-        d += elm.Line().to(hopper.empty)
+        # Connect empty signal from hopper
+        d.move_from(hopper.empty, dx=0.5)
+        d += elm.Line().right(0.5)
+        d += elm.Line().to(empty_from_hopper)
 
-        # 12V power to hopper
+        # 12V power to all three VCC pins
         d.move_from(hopper.vcc1, dy=0.5)
         d += elm.Line().up(0.5)
+        d += elm.Dot()
+        vcc_12v = d.here
+        d += elm.Line().up(0.3)
         d += elm.Dot().label('+12V', loc='top')
 
-        # Hopper ground to common
-        d.move_from(hopper.hgnd1, dy=-0.5)
-        d += elm.Line().down(0.5)
+        d.move_from(hopper.vcc2, dy=0.5)
+        d += elm.Line().up(0.5)
+        d += elm.Line().to(vcc_12v)
+
+        d.move_from(hopper.vcc3, dy=0.5)
+        d += elm.Line().up(0.5)
+        d += elm.Line().to(vcc_12v)
+
+        # Both hopper GND pins to common ground
+        d.move_from(hopper.gnd3, dx=-0.5)
+        d += elm.Line().left(0.5)
         d += elm.Dot()
+        hopper_gnd_junction = d.here
+
+        d.move_from(hopper.gnd4, dx=-0.5)
+        d += elm.Line().left(0.5)
+        d += elm.Line().to(hopper_gnd_junction)
+
+        d.move_from(hopper_gnd_junction)
         d += elm.Line().to(gnd_to_hopper)
 
     d.save('docs/wiring-diagram.svg')
