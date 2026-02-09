@@ -13,12 +13,35 @@ This guide covers the physical hardware assembly for the Remote Token Dispenser 
 | **Coin Dispenser** | Azkoyen Hopper U-II (used) | Industrial token/coin dispensing | ~€30 |
 | **WiFi Controller** | Wemos D1 Mini (ESP8266) | HTTP server, state machine | ~€5 |
 | **Power Supply** | 12V/2A DC adapter | Hopper motor power | ~€10 |
-| **Level Shifter** | 3.3V → 12V relay module | Motor control interface | ~€3 |
+| **Transistor** | BC547 NPN | Control output switching | <€1 |
 | **Capacitor** | 2200µF 25V electrolytic | Motor startup surge protection | ~€1 |
+
+### Electronic Components
+
+**Required resistors (see combinations below):**
+
+| Component | Quantity | Purpose |
+|-----------|----------|---------|
+| BC547 NPN transistor | 1 | Control output switching |
+| 2200µF 25V capacitor | 1 | Motor startup surge protection |
+
+**Resistors - Option A (Series combination for 3.3kΩ):**
+- 10kΩ (¼W) × 4 | R2, R3, R5, R7
+- 2kΩ (¼W) × 3 | R4, R6, R8 (part 1)
+- 1kΩ (¼W) × 4 | R1, R4, R6, R8 (part 2)
+- 330Ω (¼W) × 3 | R4, R6, R8 (part 3)
+- **Total: 14 resistors**
+
+**Resistors - Option B (Parallel combination for 3.3kΩ):**
+- 10kΩ (¼W) × 7 | R2, R3, R5, R7, R4, R6, R8 (part 1)
+- 5kΩ (¼W) × 3 | R4, R6, R8 (part 2)
+- 1kΩ (¼W) × 1 | R1
+- **Total: 11 resistors**
 
 ### Supporting Hardware
 
 - Jumper wires (male-to-female, 20cm)
+- Breadboard or perfboard for resistor assembly
 - USB cable (for ESP8266 programming)
 - Enclosure/junction box (optional, for protection)
 - Wire terminals and connectors
@@ -96,6 +119,107 @@ This guide covers the physical hardware assembly for the Remote Token Dispenser 
 - **2200µF capacitor** across 12V rail absorbs motor startup surge
 - All 3 hopper VCC pins connected to +12V
 - Both hopper GND pins connected to common ground
+
+---
+
+## 🔬 Resistor Configurations
+
+The circuit requires specific resistor values. If you don't have exact values, you can combine standard resistors:
+
+### BC547 Transistor Circuit
+
+**R1 (Base Resistor):** 1kΩ
+- Use: 1× 1kΩ resistor ✅
+
+**R2 (Pull-up Resistor):** 10kΩ
+- Use: 1× 10kΩ resistor ✅
+
+### Voltage Dividers (×3 for Coin, Error, Empty)
+
+Target: **10kΩ (top) + 3.3kΩ (bottom)** to convert 12V → 3.0V
+
+**Top Resistor (R3, R5, R7):** 10kΩ each
+- Use: 3× 10kΩ resistors ✅
+
+**Bottom Resistor (R4, R6, R8):** 3.3kΩ each
+
+#### Option A: Series Combination (RECOMMENDED if you have these values)
+
+```
+Bottom = 2kΩ + 1kΩ + 330Ω (in series) = 3.33kΩ ✅
+
+Hopper Signal ──[10kΩ]──┬── To Wemos GPIO
+                         │
+                     [2kΩ]   ← Series
+                         │
+                     [1kΩ]   ← Series
+                         │
+                     [330Ω]  ← Series
+                         │
+                        GND
+```
+
+**Per divider:** 1× 10kΩ + 1× 2kΩ + 1× 1kΩ + 1× 330Ω
+
+**For 3 dividers:**
+- 3× 10kΩ (tops)
+- 3× 2kΩ (bottom part 1)
+- 3× 1kΩ (bottom part 2)
+- 3× 330Ω (bottom part 3)
+
+**Voltage:** 12V × (3.33 / 13.33) = **3.0V** ✅
+
+---
+
+#### Option B: Parallel Combination (if you have 5kΩ resistors)
+
+```
+Bottom = 10kΩ || 5kΩ (in parallel) = 3.33kΩ ✅
+
+Hopper Signal ──[10kΩ]──┬── To Wemos GPIO
+                         │
+                      ┌──┴──┐
+                      │     │
+                    [10kΩ][5kΩ]  ← Parallel
+                      │     │
+                      └──┬──┘
+                         │
+                        GND
+```
+
+**Per divider:** 1× 10kΩ (top) + 1× 10kΩ + 1× 5kΩ (parallel bottom)
+
+**For 3 dividers:**
+- 3× 10kΩ (tops)
+- 3× 10kΩ (bottom part 1)
+- 3× 5kΩ (bottom part 2)
+
+**Voltage:** 12V × (3.33 / 13.33) = **3.0V** ✅
+
+---
+
+### Complete Bill of Materials
+
+**Option A (14 resistors total):**
+- 10kΩ × 4 (R2 + R3, R5, R7)
+- 2kΩ × 3 (R4, R6, R8 part 1)
+- 1kΩ × 4 (R1 + R4, R6, R8 part 2)
+- 330Ω × 3 (R4, R6, R8 part 3)
+
+**Option B (11 resistors total):**
+- 10kΩ × 7 (R2 + R3, R5, R7 + R4, R6, R8 part 1)
+- 5kΩ × 3 (R4, R6, R8 part 2)
+- 1kΩ × 1 (R1)
+
+**Choose Option A if:**
+- You have 2kΩ, 1kΩ, and 330Ω resistors
+- You have limited 10kΩ resistors
+
+**Choose Option B if:**
+- You have plenty of 10kΩ and 5kΩ resistors
+- You prefer fewer solder joints (2 vs 3 per divider)
+
+⚠️ **DO NOT use 10kΩ + 5kΩ in series!** This gives 4.0V which will damage the ESP8266!
 
 ---
 
