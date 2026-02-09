@@ -10,7 +10,7 @@ This guide covers the physical hardware assembly for the Remote Token Dispenser 
 
 | Component | Model | Purpose | Cost Estimate |
 |-----------|-------|---------|---------------|
-| **Coin Dispenser** | Azkoyen Hopper U-II | Industrial token/coin dispensing | ~€150-200 |
+| **Coin Dispenser** | Azkoyen Hopper U-II (used) | Industrial token/coin dispensing | ~€30 |
 | **WiFi Controller** | Wemos D1 Mini (ESP8266) | HTTP server, state machine | ~€5 |
 | **Power Supply** | 12V/2A DC adapter | Hopper motor power | ~€10 |
 | **Level Shifter** | 3.3V → 12V relay module | Motor control interface | ~€3 |
@@ -23,7 +23,7 @@ This guide covers the physical hardware assembly for the Remote Token Dispenser 
 - Enclosure/junction box (optional, for protection)
 - Wire terminals and connectors
 
-**Total Cost:** ~€170-220 (excluding enclosure)
+**Total Cost:** ~€50-60 (excluding enclosure)
 
 ---
 
