@@ -109,6 +109,10 @@ Instead of replacing all your legacy coin-operated equipment (expensive and wast
 - Voltage: 12V DC
 - Manual: [Azkoyen U-II PDF](https://www.casino-software.de/download/hopper-azkoyen-u2-manual.pdf)
 
+**📖 [Complete Hardware Setup Guide →](hardware/README.md)**
+
+Detailed assembly instructions, wiring diagrams, safety considerations, and troubleshooting.
+
 ---
 
 ## 📂 Project Structure
@@ -177,6 +181,7 @@ curl -H "X-API-Key: your-secret-key" \
 
 ## 📖 Documentation
 
+- **[hardware/README.md](hardware/README.md)** - Hardware assembly guide with wiring diagrams
 - **[ARCHITECTURE.md](ARCHITECTURE.md)** - Complete system design with diagrams
 - **[dispenser-protocol.md](dispenser-protocol.md)** - HTTP API specification
 - **[firmware/README.md](firmware/README.md)** - ESP8266 firmware setup
