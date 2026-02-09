@@ -154,11 +154,12 @@ See [firmware/README.md](firmware/README.md) for detailed setup instructions.
 
 ### 2. Wire Hardware
 
-Connect ESP8266 to Azkoyen Hopper:
-- **D5** (GPIO14) → Motor control (via relay)
-- **D6** (GPIO12) → Coin pulse sensor
-- **D8** (GPIO15) → Hopper low sensor (optional)
-- **12V supply** → Hopper motor (separate from ESP)
+Connect ESP8266 to Azkoyen Hopper (see [hardware/README.md](hardware/README.md) for complete wiring):
+- **D1** (GPIO5) → Control output (via BC547 transistor)
+- **D2** (GPIO4) ← Coin pulse input (via voltage divider)
+- **D5** (GPIO14) ← Error signal input (via voltage divider)
+- **D6** (GPIO12) ← Empty sensor input (via voltage divider)
+- **12V supply** → Hopper motor + voltage regulator (separate from ESP)
 
 ### 3. Test API
 

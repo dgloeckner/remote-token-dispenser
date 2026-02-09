@@ -11,7 +11,8 @@ HTTP-controlled token dispenser firmware for Wemos D1 Mini (ESP8266) controlling
 - **Power:**
   - ESP8266: 5V via USB or VIN pin
   - Azkoyen Hopper: 12V/2A separate power supply
-- **Level Shifter/Relay:** For 3.3V GPIO → 12V motor control
+- **Control Circuit:** BC547 NPN transistor with 1kΩ base resistor and 10kΩ pull-up
+- **Input Protection:** 3× voltage dividers (10kΩ/3.3kΩ) for Coin, Error, Empty signals
 
 ---
 
@@ -97,20 +98,20 @@ firmware/dispenser/
 #define API_KEY "change-this-secret-key"  // CHANGE THIS!
 
 // GPIO Pins (Wemos D1 Mini - using D-labels)
-#define MOTOR_PIN          D5    // GPIO14
-#define COIN_PULSE_PIN     D6    // GPIO12
-#define ERROR_SIGNAL_PIN   D7    // GPIO13 (optional)
-#define HOPPER_LOW_PIN     D8    // GPIO15 (optional)
+#define CONTROL_PIN        D1    // GPIO5 - Control output via BC547
+#define COIN_PULSE_PIN     D2    // GPIO4 - Coin pulse input
+#define ERROR_SIGNAL_PIN   D5    // GPIO14 - Error signal input
+#define EMPTY_SENSOR_PIN   D6    // GPIO12 - Empty sensor input
 ```
 
 ### 2. Verify Pin Connections
 
 | ESP8266 Pin | GPIO | Function | Azkoyen Connection |
 |-------------|------|----------|-------------------|
-| D5 | GPIO14 | Motor Control | Via relay → Motor enable |
-| D6 | GPIO12 | Coin Pulse | Opto-sensor output (30ms pulses) |
-| D7 | GPIO13 | Error Signal | Hopper error line (optional) |
-| D8 | GPIO15 | Hopper Low | Low token warning (optional) |
+| D1 | GPIO5 | Control Output | Via BC547 transistor (1kΩ + 10kΩ pull-up) → Control pin |
+| D2 | GPIO4 | Coin Pulse Input | Coin pin → Voltage divider (10kΩ/3.3kΩ) |
+| D5 | GPIO14 | Error Signal Input | Error pin → Voltage divider (10kΩ/3.3kΩ) |
+| D6 | GPIO12 | Empty Sensor Input | Empty pin → Voltage divider (10kΩ/3.3kΩ) |
 
 ---
 
@@ -236,13 +237,16 @@ Install missing library via Library Manager.
 
 ### Motor Not Running
 
-- Check D5 → relay/level shifter → motor wiring
+- Check D1 → BC547 transistor wiring (1kΩ base, 10kΩ pull-up)
+- Verify D1 goes HIGH when dispense starts
+- Check BC547 collector pulls Control pin LOW when active
 - Verify 12V power supply to Azkoyen
-- Check motor control GPIO output with multimeter
+- Measure: D1=3.3V, BC547 base=0.7V, collector=0V when ON
 
 ### Pulse Counting Issues
 
-- Verify D6 connected to Azkoyen pulse output
+- Verify D2 connected to Coin pin via voltage divider (10kΩ/3.3kΩ)
+- Check voltage at D2: should be ~2.98V when Coin pin is HIGH
 - Check pulse mode jumper on Azkoyen (STANDARD + PULSES)
 - Monitor interrupt with Serial.println in ISR (temporarily)
 
