@@ -37,7 +37,7 @@ def create_wiring_diagram():
             elm.IcPin(name='D5\n(GPIO14)', side='right', pin='3', anchorname='d5'),
             elm.IcPin(name='D6\n(GPIO12)', side='right', pin='4', anchorname='d6'),
             elm.IcPin(name='D8\n(GPIO15)', side='right', pin='5', anchorname='d8'),
-        ], w=3, pinspacing=1.2, edgepadH=0.5, label='Wemos D1 Mini\n(ESP8266)', lblofst=0))
+        ], w=5, pinspacing=1.8, edgepadH=1.0, label='Wemos D1 Mini\n(ESP8266)', lblofst=0))
 
         # Motor control path (D5 → Relay → Motor)
         d.move_from(esp.d5, dx=0.5)
@@ -84,7 +84,7 @@ def create_wiring_diagram():
             elm.IcPin(name='Hopper\nLow', side='left', pin='3'),
             elm.IcPin(name='GND', side='left', pin='4'),
             elm.IcPin(name='12V\nPower', side='top', pin='5'),
-        ], w=2.5, pinspacing=1.2, edgepadH=0.5, label='Azkoyen\nHopper U-II', lblofst=0)
+        ], w=4.0, pinspacing=1.8, edgepadH=1.0, label='Azkoyen\nHopper U-II', lblofst=0)
 
     d.save('docs/wiring-diagram.svg')
     print('✓ Generated docs/wiring-diagram.svg')
@@ -135,7 +135,7 @@ def create_pinout_diagram():
         ] + [
             elm.IcPin(name=f'{pin}\n{desc}', side='right', pin=str(i+len(left_pins)))
             for i, (pin, desc) in enumerate(right_pins, 1)
-        ], w=5, pinspacing=0.9, edgepadH=0.8, label='WEMOS D1 MINI\nESP8266', lblofst=0))
+        ], w=8, pinspacing=1.4, edgepadH=1.2, label='WEMOS D1 MINI\nESP8266', lblofst=0))
 
     d.save('docs/pinout-diagram.svg')
     print('✓ Generated docs/pinout-diagram.svg')
@@ -159,7 +159,7 @@ def create_power_diagram():
         d += elm.Ic(pins=[
             elm.IcPin(name='5V', side='right', pin='1', anchorname='5v'),
             elm.IcPin(name='GND', side='right', pin='2', anchorname='gnd'),
-        ], w=1.5, pinspacing=1, label='ESP8266\n(Wemos D1)', lblofst=0)
+        ], w=3.0, pinspacing=1.5, label='ESP8266\n(Wemos D1)', lblofst=0)
 
         # ESP8266 GND
         d.move_from(d.elements[-1].gnd, dx=0.5)
@@ -174,7 +174,7 @@ def create_power_diagram():
         d += (psu := elm.Ic(pins=[
             elm.IcPin(name='+12V', side='right', pin='1', anchorname='v12'),
             elm.IcPin(name='GND', side='right', pin='2', anchorname='gnd'),
-        ], w=1.5, pinspacing=1, label='12V/2A\nPower Supply', lblofst=0))
+        ], w=3.0, pinspacing=1.5, label='12V/2A\nPower Supply', lblofst=0))
 
         # 12V to Hopper
         d.move_from(psu.v12, dx=0.5)
@@ -186,7 +186,7 @@ def create_power_diagram():
             elm.IcPin(name='12V', side='left', pin='1'),
             elm.IcPin(name='GND', side='left', pin='2', anchorname='hgnd'),
             elm.IcPin(name='Motor', side='right', pin='3'),
-        ], w=2, pinspacing=1, label='Azkoyen\nHopper', lblofst=0))
+        ], w=3.5, pinspacing=1.5, label='Azkoyen\nHopper', lblofst=0))
 
         # Capacitor on 12V line
         d.move_from(v12_node, dx=0, dy=-0.5)
