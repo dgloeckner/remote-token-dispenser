@@ -34,9 +34,10 @@ This guide covers the physical hardware assembly for the Remote Token Dispenser 
 ![Wiring Diagram](../docs/wiring-diagram.svg)
 
 **Key connections:**
-- **D5 (GPIO14)** → Motor control (via relay/level shifter)
-- **D6 (GPIO12)** → Coin pulse sensor (interrupt-driven counting)
-- **D8 (GPIO15)** → Hopper low sensor (optional, detects empty hopper)
+- **D1 (GPIO5)** → Control output (via BC547 NPN transistor + 10kΩ pull-up)
+- **D2 (GPIO4)** → Coin pulse input (via 10kΩ/3.3kΩ voltage divider)
+- **D5 (GPIO14)** → Error signal input (via 10kΩ/3.3kΩ voltage divider)
+- **D6 (GPIO12)** → Empty sensor input (via 10kΩ/3.3kΩ voltage divider)
 - **GND** → Common ground (critical!)
 
 [See complete diagram](../docs/wiring-diagram.svg)
@@ -48,9 +49,10 @@ This guide covers the physical hardware assembly for the Remote Token Dispenser 
 ![Pinout Diagram](../docs/pinout-diagram.svg)
 
 **Used pins highlighted in red:**
-- D5 (GPIO14) - Motor control output
-- D6 (GPIO12) - Coin pulse interrupt input
-- D8 (GPIO15) - Hopper low sensor input
+- D1 (GPIO5) - Control output (via BC547 transistor)
+- D2 (GPIO4) - Coin pulse interrupt input (via voltage divider)
+- D5 (GPIO14) - Error signal input (via voltage divider)
+- D6 (GPIO12) - Empty sensor input (via voltage divider)
 
 [See complete pinout](../docs/pinout-diagram.svg)
 
@@ -95,23 +97,37 @@ The Azkoyen Hopper U-II must be configured in **PULSES** mode:
 
 ### Step 3: Wire the Control Signals
 
-1. **Motor control (D5 → Hopper Motor Enable):**
-   - Connect D5 to relay input
-   - Connect relay output to hopper "Motor Enable" pin
-   - Relay switches between 3.3V (ESP) and 12V (hopper)
+**Components needed:**
+- BC547 NPN transistor (Q1)
+- Resistors: 1kΩ (R1), 10kΩ (R2, R3, R5, R7), 3.3kΩ (R4, R6, R8)
+- Optional: 100nF capacitor for debouncing
 
-2. **Coin pulse sensor (Hopper Pulse Out → D6):**
-   - Direct connection: Hopper "Pulse Out" → D6
-   - 30ms LOW pulse per dispensed token
-   - Use FALLING edge interrupt in firmware
+1. **Control output (D1 → BC547 → Hopper Control):**
+   - Connect D1 → 1kΩ resistor (R1) → BC547 base
+   - Connect BC547 collector → 10kΩ pull-up (R2) → +12V
+   - Connect BC547 collector → Hopper "Control" pin
+   - Connect BC547 emitter → GND
+   - Logic: D1 HIGH = transistor ON = Control LOW = hopper dispenses
 
-3. **Hopper low sensor (Hopper Low → D8):**
-   - Optional: Hopper "Hopper Low" → D8
-   - Active LOW when hopper empty
-   - Use INPUT_PULLUP mode
+2. **Coin pulse input (Hopper Coin → voltage divider → D2):**
+   - Hopper "Coin" pin → 10kΩ resistor (R3) → junction → D2
+   - Junction → 3.3kΩ resistor (R4) → GND
+   - Voltage divider steps 12V down to ~2.98V (safe for 3.3V GPIO)
+   - Use RISING or FALLING edge interrupt on D2
 
-4. **Common ground:**
+3. **Error signal input (Hopper Error → voltage divider → D5):**
+   - Hopper "Error" pin → 10kΩ resistor (R5) → junction → D5
+   - Junction → 3.3kΩ resistor (R6) → GND
+   - HIGH (~2.98V) = jam or motor error detected
+
+4. **Empty sensor input (Hopper Empty → voltage divider → D6):**
+   - Hopper "Empty" pin → 10kΩ resistor (R7) → junction → D6
+   - Junction → 3.3kΩ resistor (R8) → GND
+   - HIGH (~2.98V) = hopper coin bay is empty
+
+5. **Common ground:**
    - Connect ESP8266 GND to hopper GND
+   - Connect all voltage divider bottoms to common GND
    - **This is critical for signal integrity!**
 
 ### Step 4: Test the Wiring
@@ -171,15 +187,18 @@ Before powering everything on:
 
 ### Motor doesn't activate
 
-- **Check:** Relay wiring (should click when D5 goes HIGH)
+- **Check:** BC547 transistor wiring (collector, base, emitter)
+- **Check:** R1 (1kΩ) and R2 (10kΩ) resistor values
+- **Check:** D1 goes HIGH when dispensing (3.3V at base resistor)
 - **Check:** 12V power supply voltage
 - **Check:** Common ground connection
 
 ### Pulse count doesn't increment
 
-- **Check:** D6 connection to "Pulse Out" pin
+- **Check:** D2 connection via voltage divider (R3: 10kΩ, R4: 3.3kΩ)
+- **Check:** Voltage at D2 is ~2.98V when hopper Coin pin is HIGH
 - **Check:** Hopper is configured in PULSES mode (not LEVEL)
-- **Check:** Firmware interrupt is configured for FALLING edge
+- **Check:** Firmware interrupt is configured for correct edge
 
 ### Dispense jams frequently
 
@@ -243,10 +262,12 @@ Before deploying your token dispenser:
 - [ ] Hopper configured in PULSES mode (30ms pulses)
 - [ ] 12V power supply connected with 2200µF capacitor
 - [ ] Common ground connected between ESP8266 and hopper
-- [ ] Relay/level shifter installed for motor control (3.3V → 12V)
-- [ ] D5 → Motor Enable (via relay)
-- [ ] D6 → Pulse Out (direct connection)
-- [ ] D8 → Hopper Low (optional, direct connection)
+- [ ] BC547 transistor installed with R1 (1kΩ) and R2 (10kΩ)
+- [ ] D1 → BC547 base (via 1kΩ resistor)
+- [ ] BC547 collector → Hopper Control pin (via 10kΩ pull-up to 12V)
+- [ ] D2 ← Hopper Coin (via 10kΩ/3.3kΩ voltage divider)
+- [ ] D5 ← Hopper Error (via 10kΩ/3.3kΩ voltage divider)
+- [ ] D6 ← Hopper Empty (via 10kΩ/3.3kΩ voltage divider)
 - [ ] All connections visually inspected and tested with multimeter
 - [ ] Capacitor polarity verified (critical!)
 - [ ] ESP8266 firmware flashed and WiFi configured

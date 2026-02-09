@@ -185,11 +185,11 @@ def create_pinout_diagram():
         left_pins = [
             ('RST', 'Reset'),
             ('A0', 'Analog Input'),
-            ('D0', 'GPIO16'),
-            ('D5', 'GPIO14 → Motor'),
-            ('D6', 'GPIO12 ← Pulse'),
+            ('D0', 'GPIO16 (unused)'),
+            ('D5', 'GPIO14 ← Error'),
+            ('D6', 'GPIO12 ← Empty'),
             ('D7', 'GPIO13 (unused)'),
-            ('D8', 'GPIO15 ← Low'),
+            ('D8', 'GPIO15 (unused)'),
             ('3V3', '3.3V Output'),
         ]
 
@@ -197,8 +197,8 @@ def create_pinout_diagram():
         right_pins = [
             ('TX', 'GPIO1 (Serial)'),
             ('RX', 'GPIO3 (Serial)'),
-            ('D1', 'GPIO5 (I2C SCL)'),
-            ('D2', 'GPIO4 (I2C SDA)'),
+            ('D1', 'GPIO5 → Control'),
+            ('D2', 'GPIO4 ← Coin'),
             ('D3', 'GPIO0 (unused)'),
             ('D4', 'GPIO2 (LED)'),
             ('GND', 'Ground'),
@@ -209,10 +209,11 @@ def create_pinout_diagram():
         d += (board := elm.Ic(pins=[
             elm.IcPin(name=f'{pin}\n{desc}', side='left', pin=str(i),
                      anchorname=pin.lower(),
-                     color='red' if 'Motor' in desc or 'Pulse' in desc or 'Low' in desc else 'black')
+                     color='red' if 'Error' in desc or 'Empty' in desc else 'black')
             for i, (pin, desc) in enumerate(left_pins, 1)
         ] + [
-            elm.IcPin(name=f'{pin}\n{desc}', side='right', pin=str(i+len(left_pins)))
+            elm.IcPin(name=f'{pin}\n{desc}', side='right', pin=str(i+len(left_pins)),
+                     color='red' if 'Control' in desc or 'Coin' in desc else 'black')
             for i, (pin, desc) in enumerate(right_pins, 1)
         ], w=8, pinspacing=1.4, edgepadH=1.2, label='WEMOS D1 MINI\nESP8266', lblofst=0))
 
