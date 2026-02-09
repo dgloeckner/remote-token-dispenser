@@ -84,7 +84,7 @@ def create_wiring_diagram():
             elm.IcPin(name='Hopper\nLow', side='left', pin='3'),
             elm.IcPin(name='GND', side='left', pin='4'),
             elm.IcPin(name='12V\nPower', side='top', pin='5'),
-        ], w=4.0, pinspacing=1.8, edgepadH=1.0, label='Azkoyen\nHopper U-II', lblofst=0)
+        ], w=6.0, pinspacing=2.2, edgepadH=1.5, label='Azkoyen\nHopper U-II', lblofst=0)
 
     d.save('docs/wiring-diagram.svg')
     print('✓ Generated docs/wiring-diagram.svg')
@@ -186,7 +186,7 @@ def create_power_diagram():
             elm.IcPin(name='12V', side='left', pin='1'),
             elm.IcPin(name='GND', side='left', pin='2', anchorname='hgnd'),
             elm.IcPin(name='Motor', side='right', pin='3'),
-        ], w=3.5, pinspacing=1.5, label='Azkoyen\nHopper', lblofst=0))
+        ], w=5.0, pinspacing=2.0, label='Azkoyen\nHopper', lblofst=0))
 
         # Capacitor on 12V line
         d.move_from(v12_node, dx=0, dy=-0.5)
