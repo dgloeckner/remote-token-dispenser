@@ -86,20 +86,6 @@ def create_wiring_diagram():
             elm.IcPin(name='12V\nPower', side='top', pin='5'),
         ], w=2.5, pinspacing=1.2, edgepadH=0.5, label='Azkoyen\nHopper U-II', lblofst=0)
 
-        # 12V power supply annotation
-        d.move(motor_x + 1, 3)
-        d += elm.Label().label('12V/2A Power Supply\n(separate from ESP)', fontsize=10, color='red')
-
-        # Notes
-        d.move(-2, -7)
-        d += elm.Label().label('Notes:', fontsize=11, loc='left')
-        d.move(-2, -7.8)
-        d += elm.Label().label('• Motor control requires level shifter (3.3V → 12V)', fontsize=9, loc='left')
-        d.move(-2, -8.4)
-        d += elm.Label().label('• Pulse detection: FALLING edge interrupt on D6', fontsize=9, loc='left')
-        d.move(-2, -9.0)
-        d += elm.Label().label('• Hopper low sensor: INPUT_PULLUP, active LOW', fontsize=9, loc='left')
-
     d.save('docs/wiring-diagram.svg')
     print('✓ Generated docs/wiring-diagram.svg')
 
@@ -150,26 +136,6 @@ def create_pinout_diagram():
             elm.IcPin(name=f'{pin}\n{desc}', side='right', pin=str(i+len(left_pins)))
             for i, (pin, desc) in enumerate(right_pins, 1)
         ], w=5, pinspacing=0.9, edgepadH=0.8, label='WEMOS D1 MINI\nESP8266', lblofst=0))
-
-        # Legend
-        d.move(-3, -10)
-        d += elm.Label().label('Used Pins:', fontsize=12, loc='left', color='red')
-        d.move(-3, -10.6)
-        d += elm.Label().label('D5 (GPIO14) - Motor control output', fontsize=10, loc='left')
-        d.move(-3, -11.2)
-        d += elm.Label().label('D6 (GPIO12) - Coin pulse interrupt input', fontsize=10, loc='left')
-        d.move(-3, -11.8)
-        d += elm.Label().label('D8 (GPIO15) - Hopper low sensor input', fontsize=10, loc='left')
-
-        # Power notes
-        d.move(2, -10)
-        d += elm.Label().label('Power:', fontsize=12, loc='left')
-        d.move(2, -10.6)
-        d += elm.Label().label('5V via USB or VIN pin', fontsize=10, loc='left')
-        d.move(2, -11.2)
-        d += elm.Label().label('3.3V regulated output available', fontsize=10, loc='left')
-        d.move(2, -11.8)
-        d += elm.Label().label('GND - Common ground with hopper', fontsize=10, loc='left')
 
     d.save('docs/pinout-diagram.svg')
     print('✓ Generated docs/pinout-diagram.svg')
@@ -243,18 +209,6 @@ def create_power_diagram():
         d.move_from(psu.gnd, dx=0.5)
         d += elm.Line().right(0.5)
         d += elm.Line().to(hopper_gnd)
-
-        # Notes
-        d.move(-2, -8)
-        d += elm.Label().label('IMPORTANT:', fontsize=12, loc='left', color='red')
-        d.move(-2, -8.7)
-        d += elm.Label().label('• Separate 12V power supply for hopper (NOT from ESP8266)', fontsize=10, loc='left')
-        d.move(-2, -9.3)
-        d += elm.Label().label('• Common ground between ESP8266 and hopper is REQUIRED', fontsize=10, loc='left')
-        d.move(-2, -9.9)
-        d += elm.Label().label('• 2200µF capacitor stabilizes motor startup current surge', fontsize=10, loc='left')
-        d.move(-2, -10.5)
-        d += elm.Label().label('• Level shifter/relay between ESP (3.3V) and hopper (12V)', fontsize=10, loc='left')
 
     d.save('docs/power-diagram.svg')
     print('✓ Generated docs/power-diagram.svg')
