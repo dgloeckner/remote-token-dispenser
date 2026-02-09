@@ -153,22 +153,7 @@ def create_power_diagram():
 
         d.move(0, -2.5)
 
-        # USB Power to ESP8266
-        d += elm.Label().label('USB', loc='left')
-        d += elm.Line().right(1)
-        d += elm.Ic(pins=[
-            elm.IcPin(name='5V', side='right', pin='1', anchorname='5v'),
-            elm.IcPin(name='GND', side='right', pin='2', anchorname='gnd'),
-        ], w=3.0, pinspacing=1.5, label='ESP8266\n(Wemos D1)', lblofst=0)
-
-        # ESP8266 GND
-        d.move_from(d.elements[-1].gnd, dx=0.5)
-        d += elm.Line().right(0.5)
-        d += elm.Dot().label('GND', loc='bottom')
-        gnd_common = d.here
-
-        # 12V Power Supply (separate)
-        d.move(0, -4)
+        # 12V Power Supply
         d += elm.Label().label('AC 110-240V', loc='left')
         d += elm.Line().right(1)
         d += (psu := elm.Ic(pins=[
@@ -176,8 +161,45 @@ def create_power_diagram():
             elm.IcPin(name='GND', side='right', pin='2', anchorname='gnd'),
         ], w=3.0, pinspacing=1.5, label='12V/2A\nPower Supply', lblofst=0))
 
-        # 12V to Hopper
+        # 12V to voltage regulator for ESP8266
         d.move_from(psu.v12, dx=0.5)
+        d += elm.Line().right(0.5)
+        d += elm.Dot()
+        v12_split = d.here
+        d += elm.Line().up(2)
+        d += elm.Line().right(0.5)
+        d += (vreg := elm.Ic(pins=[
+            elm.IcPin(name='12V', side='left', pin='1'),
+            elm.IcPin(name='5V', side='right', pin='2', anchorname='v5'),
+            elm.IcPin(name='GND', side='bottom', pin='3', anchorname='vgnd'),
+        ], w=2.5, pinspacing=1.2, label='Voltage\nRegulator', lblofst=0))
+
+        # Regulator to ESP8266
+        d.move_from(vreg.v5, dx=0.5)
+        d += elm.Line().right(0.5)
+        d += (esp := elm.Ic(pins=[
+            elm.IcPin(name='5V', side='left', pin='1'),
+            elm.IcPin(name='GND', side='left', pin='2', anchorname='egnd'),
+        ], w=3.0, pinspacing=1.5, label='ESP8266\n(Wemos D1)', lblofst=0))
+
+        # ESP8266 GND
+        d.move_from(esp.egnd, dx=-0.5)
+        d += elm.Line().left(0.5)
+        d += elm.Dot()
+        esp_gnd = d.here
+
+        # Voltage regulator GND
+        d.move_from(vreg.vgnd, dy=-0.5)
+        d += elm.Line().down(0.5)
+        d += elm.Dot().label('GND', loc='left')
+        gnd_common = d.here
+
+        # Connect ESP GND to common
+        d.move_from(esp_gnd)
+        d += elm.Line().to(gnd_common)
+
+        # 12V split to Hopper
+        d.move_from(v12_split)
         d += elm.Line().right(1)
         d += elm.Dot()
         v12_node = d.here
@@ -188,18 +210,22 @@ def create_power_diagram():
             elm.IcPin(name='Motor', side='right', pin='3'),
         ], w=5.0, pinspacing=2.0, label='Azkoyen\nHopper', lblofst=-0.3))
 
-        # Capacitor on 12V line
+        # Capacitor on 12V line (connected between 12V and GND)
         d.move_from(v12_node, dx=0, dy=-0.5)
         d += elm.Line().down(0.3)
         d += elm.Capacitor().down().label('2200µF\n25V', loc='right')
         d += elm.Line().down(0.3)
-        d += elm.Ground()
+        cap_gnd = d.here
 
         # Hopper GND to common
         d.move_from(hopper.hgnd, dx=-0.5)
         d += elm.Line().left(1)
         d += elm.Dot().label('GND', loc='bottom')
         hopper_gnd = d.here
+
+        # Capacitor GND to common
+        d.move_from(cap_gnd)
+        d += elm.Line().to(hopper_gnd)
 
         # Common GND connection
         d.move_from(gnd_common)
@@ -208,7 +234,7 @@ def create_power_diagram():
         # 12V PSU GND to common
         d.move_from(psu.gnd, dx=0.5)
         d += elm.Line().right(0.5)
-        d += elm.Line().to(hopper_gnd)
+        d += elm.Line().to(gnd_common)
 
     d.save('docs/power-diagram.svg')
     print('✓ Generated docs/power-diagram.svg')
