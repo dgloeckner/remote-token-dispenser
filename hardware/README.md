@@ -29,46 +29,73 @@ This guide covers the physical hardware assembly for the Remote Token Dispenser 
 
 ## 🔌 Wiring Diagrams
 
+### Azkoyen Hopper Connector Pinout
+
+<p align="center">
+  <img src="../docs/azkoyen-pinout.jpg" alt="Azkoyen Hopper U-II Connector Pinout" width="800"/>
+  <br>
+  <em>Azkoyen Hopper U-II - 2x5 Molex connector pinout</em>
+</p>
+
+**Connector Pins (2x5 Molex):**
+- **VCC (1, 2, 3)** - Three 12V power inputs (all connected together)
+- **GND (3, 4)** - Two ground pins (both connected to common ground)
+- **Control (5)** - Dispense command input
+- **Coin (6)** - Pulse output (~18ms per coin dispensed)
+- **H Level (7)** - Hopper full detection (optional, not connected)
+- **Error (8)** - Jam/motor error signal output
+- **Empty (9)** - Coin bay empty signal output
+
+---
+
 ### Main Wiring: ESP8266 ↔ Hopper
 
-![Wiring Diagram](../docs/wiring-diagram.svg)
+<p align="center">
+  <img src="../docs/wiring-diagram.svg" alt="Wiring Diagram" width="100%"/>
+  <br>
+  <em>Complete wiring schematic showing BC547 transistor and voltage dividers</em>
+</p>
 
 **Key connections:**
-- **D1 (GPIO5)** → Control output (via BC547 NPN transistor + 10kΩ pull-up)
-- **D2 (GPIO4)** → Coin pulse input (via 10kΩ/3.3kΩ voltage divider)
-- **D5 (GPIO14)** → Error signal input (via 10kΩ/3.3kΩ voltage divider)
-- **D6 (GPIO12)** → Empty sensor input (via 10kΩ/3.3kΩ voltage divider)
-- **GND** → Common ground (critical!)
-
-[See complete diagram](../docs/wiring-diagram.svg)
+- **D1 (GPIO5)** → Control output (via BC547 NPN transistor + R1: 1kΩ, R2: 10kΩ pull-up)
+- **D2 (GPIO4)** ← Coin pulse input (via R3/R4: 10kΩ/3.3kΩ voltage divider)
+- **D5 (GPIO14)** ← Error signal input (via R5/R6: 10kΩ/3.3kΩ voltage divider)
+- **D6 (GPIO12)** ← Empty sensor input (via R7/R8: 10kΩ/3.3kΩ voltage divider)
+- **GND** → Common ground (essential for all circuits!)
 
 ---
 
 ### Pinout Reference: Wemos D1 Mini
 
-![Pinout Diagram](../docs/pinout-diagram.svg)
+<p align="center">
+  <img src="../docs/pinout-diagram.svg" alt="Pinout Diagram" width="100%"/>
+  <br>
+  <em>Wemos D1 Mini pinout with used pins highlighted in red</em>
+</p>
 
-**Used pins highlighted in red:**
-- D1 (GPIO5) - Control output (via BC547 transistor)
-- D2 (GPIO4) - Coin pulse interrupt input (via voltage divider)
-- D5 (GPIO14) - Error signal input (via voltage divider)
-- D6 (GPIO12) - Empty sensor input (via voltage divider)
-
-[See complete pinout](../docs/pinout-diagram.svg)
+**Used pins (highlighted in red):**
+- **D1 (GPIO5)** - Control output (via BC547 transistor)
+- **D2 (GPIO4)** - Coin pulse interrupt input (via voltage divider)
+- **D5 (GPIO14)** - Error signal input (via voltage divider)
+- **D6 (GPIO12)** - Empty sensor input (via voltage divider)
 
 ---
 
 ### Power Supply Wiring
 
-![Power Diagram](../docs/power-diagram.svg)
+<p align="center">
+  <img src="../docs/power-diagram.svg" alt="Power Diagram" width="100%"/>
+  <br>
+  <em>Power supply connections with voltage regulator and common ground</em>
+</p>
 
 **Critical power requirements:**
-- **Separate 12V supply** for hopper (NOT from ESP8266)
-- **Common ground** between ESP8266 and hopper (required!)
-- **2200µF capacitor** on 12V line stabilizes motor startup current surge
-- ESP8266 powered via USB (5V)
-
-[See complete power diagram](../docs/power-diagram.svg)
+- **12V/2A power supply** for hopper motor and voltage regulator
+- **Voltage regulator** (12V→5V) powers ESP8266 (NOT USB in production)
+- **Common ground** between all components (absolutely required!)
+- **2200µF capacitor** across 12V rail absorbs motor startup surge
+- All 3 hopper VCC pins connected to +12V
+- Both hopper GND pins connected to common ground
 
 ---
 
