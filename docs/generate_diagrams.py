@@ -22,8 +22,8 @@ from schemdraw.segments import Segment, SegmentText
 def create_wiring_diagram():
     """Create main wiring diagram: ESP8266 to Azkoyen Hopper U-II."""
 
-    with schemdraw.Drawing(show=False) as d:
-        d.config(fontsize=12, font='sans-serif')
+    with schemdraw.Drawing(show=False, canvas='svg') as d:
+        d.config(fontsize=12, font='sans-serif', bgcolor='white')
 
         # Title
         d += elm.Label().label('ESP8266 ↔ Azkoyen Hopper U-II Wiring', fontsize=16, loc='top')
@@ -107,8 +107,8 @@ def create_wiring_diagram():
 def create_pinout_diagram():
     """Create Wemos D1 Mini pinout reference diagram."""
 
-    with schemdraw.Drawing(show=False) as d:
-        d.config(fontsize=11, font='sans-serif')
+    with schemdraw.Drawing(show=False, canvas='svg') as d:
+        d.config(fontsize=11, font='sans-serif', bgcolor='white')
 
         # Title
         d += elm.Label().label('Wemos D1 Mini Pinout Reference', fontsize=16, loc='top')
@@ -178,8 +178,8 @@ def create_pinout_diagram():
 def create_power_diagram():
     """Create power supply wiring diagram."""
 
-    with schemdraw.Drawing(show=False) as d:
-        d.config(fontsize=12, font='sans-serif')
+    with schemdraw.Drawing(show=False, canvas='svg') as d:
+        d.config(fontsize=12, font='sans-serif', bgcolor='white')
 
         # Title
         d += elm.Label().label('Power Supply Wiring', fontsize=16, loc='top')
