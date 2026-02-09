@@ -30,7 +30,7 @@ def create_wiring_diagram():
         d.push()
 
         # ESP8266 (Wemos D1 Mini) - Left side
-        d.move(0, -1)
+        d.move(0, -2.5)
         d += (esp := elm.Ic(pins=[
             elm.IcPin(name='5V', side='left', pin='1'),
             elm.IcPin(name='GND', side='left', pin='2'),
@@ -100,7 +100,7 @@ def create_pinout_diagram():
         d += elm.Label().label('Wemos D1 Mini Pinout Reference', fontsize=16, loc='top')
         d.push()
 
-        d.move(0, -1)
+        d.move(0, -2.5)
 
         # Left pins
         left_pins = [
@@ -151,7 +151,7 @@ def create_power_diagram():
         d += elm.Label().label('Power Supply Wiring', fontsize=16, loc='top')
         d.push()
 
-        d.move(0, -1)
+        d.move(0, -2.5)
 
         # USB Power to ESP8266
         d += elm.Label().label('USB', loc='left')
