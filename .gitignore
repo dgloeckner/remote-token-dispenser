@@ -1,5 +1,5 @@
 # Local configuration with credentials
-esp32/dispenser/config.local.h
+firmware/dispenser/config.local.h
 
 # Arduino build artifacts
 *.hex
@@ -10,3 +10,6 @@ esp32/dispenser/config.local.h
 # IDE files
 .vscode/
 .DS_Store
+
+# Python virtual environment
+.venv/
