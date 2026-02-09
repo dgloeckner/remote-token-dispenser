@@ -20,71 +20,150 @@ from schemdraw.segments import Segment, SegmentText
 
 
 def create_wiring_diagram():
-    """Create main wiring diagram: ESP8266 to Azkoyen Hopper U-II."""
+    """Create main wiring diagram: ESP8266 to Azkoyen Hopper U-II with accurate circuit."""
 
     with schemdraw.Drawing(show=False, canvas='svg') as d:
-        d.config(fontsize=12, font='sans-serif', bgcolor='white')
+        d.config(fontsize=11, font='sans-serif', bgcolor='white')
 
         # Title
-        d += elm.Label().label('ESP8266 ↔ Azkoyen Hopper U-II Wiring', fontsize=16, loc='top')
+        d += elm.Label().label('Azkoyen Hopper U-II ↔ Wemos D1 Mini Wiring', fontsize=16, loc='top')
         d.push()
 
-        # ESP8266 (Wemos D1 Mini) - Left side
         d.move(0, -2.5)
+
+        # Wemos D1 Mini - Left side
         d += (esp := elm.Ic(pins=[
-            elm.IcPin(name='5V', side='left', pin='1'),
-            elm.IcPin(name='GND', side='left', pin='2'),
-            elm.IcPin(name='D5\n(GPIO14)', side='right', pin='3', anchorname='d5'),
-            elm.IcPin(name='D6\n(GPIO12)', side='right', pin='4', anchorname='d6'),
-            elm.IcPin(name='D8\n(GPIO15)', side='right', pin='5', anchorname='d8'),
-        ], w=5, pinspacing=1.8, edgepadH=1.0, label='Wemos D1 Mini\n(ESP8266)', lblofst=0))
+            elm.IcPin(name='D1 (GPIO5)\nControl', side='right', pin='1', anchorname='d1'),
+            elm.IcPin(name='D2 (GPIO4)\nCoin', side='right', pin='2', anchorname='d2'),
+            elm.IcPin(name='D5 (GPIO14)\nError', side='right', pin='3', anchorname='d5'),
+            elm.IcPin(name='D6 (GPIO12)\nEmpty', side='right', pin='4', anchorname='d6'),
+            elm.IcPin(name='GND', side='right', pin='5', anchorname='gnd'),
+            elm.IcPin(name='5V (USB)', side='left', pin='6'),
+        ], w=5, pinspacing=1.6, edgepadH=1.2, label='Wemos D1 Mini\nESP8266', lblofst=0))
 
-        # Motor control path (D5 → Relay → Motor)
-        d.move_from(esp.d5, dx=0.5)
-        d += elm.Line().right(1).label('3.3V', loc='top', ofst=0.2)
-        d += (relay := elm.Relay().right().label('Relay/\nLevel Shifter', loc='bottom', ofst=0.5))
-        d += elm.Line().right(1).label('12V', loc='top', ofst=0.2)
+        # Control output (D1 → BC547 NPN transistor)
+        d.move_from(esp.d1, dx=0.5)
+        d += elm.Line().right(0.8)
+        d += elm.Resistor().right().label('R1\n1kΩ', loc='top')
+        d += elm.Line().right(0.3)
         d += elm.Dot()
-        motor_x = d.here[0]
-        d += elm.Line().right(1.5)
-        d += elm.Label().label('Motor Enable', loc='right')
+        base_node = d.here
 
-        # Pulse signal (D6 ← Pulse Out)
-        d.move_from(esp.d6, dx=0.5)
-        d += elm.Line().right(1)
+        # BC547 transistor
+        d += elm.Line().down(0.8)
+        d += (bjt := elm.Bjt(circle=True).label('BC547', loc='right'))
+        d.move_from(bjt.collector)
+        d += elm.Line().up(0.5)
         d += elm.Dot()
-        d += elm.Line().right(2.5)
-        d += elm.Line().right(1.5)
-        d += elm.Label().label('Pulse Out\n(30ms pulses)', loc='right')
+        collector_node = d.here
 
-        # Hopper low sensor (D8 ← Hopper Low)
-        d.move_from(esp.d8, dx=0.5)
-        d += elm.Line().right(1)
-        d += elm.Dot()
-        d += elm.Line().right(2.5)
-        d += elm.Line().right(1.5)
-        d += elm.Label().label('Hopper Low\n(optional)', loc='right')
+        # Pull-up resistor to 12V
+        d += elm.Resistor().up().label('R2\n10kΩ', loc='left')
+        d += elm.Line().up(0.3)
+        d += elm.Dot().label('+12V', loc='top')
 
-        # Ground connections
-        d.move_from(esp.pin2, dx=0.5)
-        d += elm.Line().right(0.5)
-        d += elm.Dot()
-        d += elm.Line().down(0.5)
+        # Emitter to ground
+        d.move_from(bjt.emitter)
+        d += elm.Line().down(0.3)
         d += elm.Ground()
 
-        # Common ground to hopper
-        d += elm.Line().right(2.5)
-        d += elm.Label().label('Common GND', loc='right')
+        # Collector to hopper Control pin
+        d.move_from(collector_node)
+        d += elm.Line().right(2)
+        control_to_hopper = d.here
 
-        # Hopper box on right side
-        d.move_from(esp.d5, dx=7)
-        d += elm.Ic(pins=[
-            elm.IcPin(name='Motor\nEnable', side='left', pin='1'),
-            elm.IcPin(name='Pulse\nOut', side='left', pin='2'),
-            elm.IcPin(name='Hopper\nLow', side='left', pin='3'),
-            elm.IcPin(name='GND', side='left', pin='4'),
-            elm.IcPin(name='12V\nPower', side='top', pin='5'),
-        ], w=6.0, pinspacing=2.2, edgepadH=1.5, label='Azkoyen\nHopper U-II', lblofst=-0.5)
+        # Coin input (Hopper → voltage divider → D2)
+        d.move_from(esp.d2, dx=0.5)
+        d += elm.Line().right(1.5)
+        d += elm.Dot()
+        coin_div_top = d.here
+        d += elm.Resistor().right().label('R3: 10kΩ', loc='top', ofst=0.1)
+        d += elm.Line().right(0.5)
+        coin_from_hopper = d.here
+
+        # Coin voltage divider bottom
+        d.move_from(coin_div_top)
+        d += elm.Line().down(0.8)
+        d += elm.Resistor().down().label('R4\n3.3kΩ', loc='right')
+        d += elm.Line().down(0.3)
+        d += elm.Ground()
+
+        # Error input (Hopper → voltage divider → D5)
+        d.move_from(esp.d5, dx=0.5)
+        d += elm.Line().right(1.5)
+        d += elm.Dot()
+        error_div_top = d.here
+        d += elm.Resistor().right().label('R5: 10kΩ', loc='top', ofst=0.1)
+        d += elm.Line().right(0.5)
+        error_from_hopper = d.here
+
+        # Error voltage divider bottom
+        d.move_from(error_div_top)
+        d += elm.Line().down(0.8)
+        d += elm.Resistor().down().label('R6\n3.3kΩ', loc='right')
+        d += elm.Line().down(0.3)
+        d += elm.Ground()
+
+        # Empty input (Hopper → voltage divider → D6)
+        d.move_from(esp.d6, dx=0.5)
+        d += elm.Line().right(1.5)
+        d += elm.Dot()
+        empty_div_top = d.here
+        d += elm.Resistor().right().label('R7: 10kΩ', loc='top', ofst=0.1)
+        d += elm.Line().right(0.5)
+        empty_from_hopper = d.here
+
+        # Empty voltage divider bottom
+        d.move_from(empty_div_top)
+        d += elm.Line().down(0.8)
+        d += elm.Resistor().down().label('R8\n3.3kΩ', loc='right')
+        d += elm.Line().down(0.3)
+        d += elm.Ground()
+
+        # Common ground
+        d.move_from(esp.gnd, dx=0.5)
+        d += elm.Line().right(0.5)
+        d += elm.Dot().label('Common\nGND', loc='bottom')
+        common_gnd = d.here
+        d += elm.Line().right(5)
+        gnd_to_hopper = d.here
+
+        # Azkoyen Hopper U-II on right side
+        d.move_from(control_to_hopper, dx=1, dy=2)
+        d += (hopper := elm.Ic(pins=[
+            elm.IcPin(name='VCC', side='top', pin='1', anchorname='vcc1'),
+            elm.IcPin(name='VCC', side='top', pin='2', anchorname='vcc2'),
+            elm.IcPin(name='Control', side='left', pin='3', anchorname='ctrl'),
+            elm.IcPin(name='Coin', side='left', pin='4', anchorname='coin'),
+            elm.IcPin(name='Error', side='left', pin='5', anchorname='error'),
+            elm.IcPin(name='Empty', side='left', pin='6', anchorname='empty'),
+            elm.IcPin(name='GND', side='bottom', pin='7', anchorname='hgnd1'),
+            elm.IcPin(name='GND', side='bottom', pin='8', anchorname='hgnd2'),
+        ], w=4, pinspacing=1.4, edgepadH=1.0, label='Azkoyen Hopper U-II', lblofst=-0.8))
+
+        # Connect signals to hopper
+        d.move_from(control_to_hopper)
+        d += elm.Line().to(hopper.ctrl)
+
+        d.move_from(coin_from_hopper)
+        d += elm.Line().to(hopper.coin)
+
+        d.move_from(error_from_hopper)
+        d += elm.Line().to(hopper.error)
+
+        d.move_from(empty_from_hopper)
+        d += elm.Line().to(hopper.empty)
+
+        # 12V power to hopper
+        d.move_from(hopper.vcc1, dy=0.5)
+        d += elm.Line().up(0.5)
+        d += elm.Dot().label('+12V', loc='top')
+
+        # Hopper ground to common
+        d.move_from(hopper.hgnd1, dy=-0.5)
+        d += elm.Line().down(0.5)
+        d += elm.Dot()
+        d += elm.Line().to(gnd_to_hopper)
 
     d.save('docs/wiring-diagram.svg')
     print('✓ Generated docs/wiring-diagram.svg')
