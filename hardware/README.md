@@ -55,14 +55,14 @@ This guide covers the physical hardware assembly for the Remote Token Dispenser 
   <em>Azkoyen Hopper U-II - 2x5 Molex connector pinout</em>
 </p>
 
-**Connector Pins (2x5 Molex):**
+**Connector Pins (2x5 Molex, sequential numbering 1-5 top, 6-10 bottom):**
 - **VCC (1, 2, 3)** - Three 12V power inputs (all connected together)
-- **GND (3, 4)** - Two ground pins (both connected to common ground)
-- **Control (5)** - Dispense command input
-- **Coin (6)** - Pulse output (~18ms per coin dispensed)
-- **H Level (7)** - Hopper full detection (optional, not connected)
-- **Error (8)** - Jam/motor error signal output
-- **Empty (9)** - Coin bay empty signal output
+- **GND (4, 6)** - Two ground pins (both connected to common ground)
+- **H Level (5)** - Hopper full detection (optional, not connected)
+- **Control (7)** - Dispense command input (active LOW via optocoupler)
+- **Error (8)** - Jam/motor error signal output (12V)
+- **Coin (9)** - Pulse output (~30ms per coin dispensed, 12V)
+- **Empty (10)** - Coin bay empty signal output (12V)
 
 ---
 

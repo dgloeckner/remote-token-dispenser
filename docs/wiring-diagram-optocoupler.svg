@@ -82,29 +82,29 @@
   <rect x="872" y="160" width="196" height="100" rx="6" fill="#0f172a" stroke="#475569" stroke-width="1.5"/>
   <text x="970" y="178" text-anchor="middle" font-size="9" font-weight="600" fill="#475569">2×5 IDC Connector</text>
 
-  <!-- Top row pins (y=208): VCC, GND, H Level, Error, Empty -->
+  <!-- Top row pins (y=208): VCC, GND, H Level, Control (pin 7), Coin (pin 9) -->
   <circle cx="892" cy="208" r="6" fill="#ef4444" stroke="#fca5a5" stroke-width="1"/>
   <text x="892" y="198" text-anchor="middle" font-size="7" font-weight="600" fill="#fca5a5">VCC</text>
   <circle cx="930" cy="208" r="6" fill="#64748b" stroke="#94a3b8" stroke-width="1"/>
   <text x="930" y="198" text-anchor="middle" font-size="7" font-weight="600" fill="#94a3b8">GND</text>
   <circle cx="968" cy="208" r="6" fill="#334155" stroke="#475569" stroke-width="1"/>
   <text x="968" y="198" text-anchor="middle" font-size="7" fill="#475569">H Lvl</text>
-  <circle cx="1006" cy="208" r="6" fill="#f59e0b" stroke="#fbbf24" stroke-width="1"/>
-  <text x="1006" y="198" text-anchor="middle" font-size="7" font-weight="600" fill="#fbbf24">Error</text>
-  <circle cx="1044" cy="208" r="6" fill="#f97316" stroke="#fb923c" stroke-width="1"/>
-  <text x="1044" y="198" text-anchor="middle" font-size="7" font-weight="600" fill="#fb923c">Empty</text>
+  <circle cx="1006" cy="208" r="6" fill="#22c55e" stroke="#4ade80" stroke-width="1"/>
+  <text x="1006" y="198" text-anchor="middle" font-size="7" font-weight="600" fill="#4ade80">Ctrl</text>
+  <circle cx="1044" cy="208" r="6" fill="#3b82f6" stroke="#60a5fa" stroke-width="1"/>
+  <text x="1044" y="198" text-anchor="middle" font-size="7" font-weight="600" fill="#60a5fa">Coin</text>
 
-  <!-- Bottom row pins (y=240): VCC, VCC, GND, Control, Coin -->
+  <!-- Bottom row pins (y=240): VCC, VCC, GND, Error (pin 8), Empty (pin 10) -->
   <circle cx="892" cy="240" r="6" fill="#ef4444" stroke="#fca5a5" stroke-width="1"/>
   <text x="892" y="230" text-anchor="middle" font-size="7" font-weight="600" fill="#fca5a5">VCC</text>
   <circle cx="930" cy="240" r="6" fill="#ef4444" stroke="#fca5a5" stroke-width="1"/>
   <text x="930" y="230" text-anchor="middle" font-size="7" font-weight="600" fill="#fca5a5">VCC</text>
   <circle cx="968" cy="240" r="6" fill="#64748b" stroke="#94a3b8" stroke-width="1"/>
   <text x="968" y="230" text-anchor="middle" font-size="7" font-weight="600" fill="#94a3b8">GND</text>
-  <circle cx="1006" cy="240" r="6" fill="#22c55e" stroke="#4ade80" stroke-width="1"/>
-  <text x="1006" y="230" text-anchor="middle" font-size="7" font-weight="600" fill="#4ade80">Ctrl</text>
-  <circle cx="1044" cy="240" r="6" fill="#3b82f6" stroke="#60a5fa" stroke-width="1"/>
-  <text x="1044" y="230" text-anchor="middle" font-size="7" font-weight="600" fill="#60a5fa">Coin</text>
+  <circle cx="1006" cy="240" r="6" fill="#f59e0b" stroke="#fbbf24" stroke-width="1"/>
+  <text x="1006" y="230" text-anchor="middle" font-size="7" font-weight="600" fill="#fbbf24">Error</text>
+  <circle cx="1044" cy="240" r="6" fill="#f97316" stroke="#fb923c" stroke-width="1"/>
+  <text x="1044" y="230" text-anchor="middle" font-size="7" font-weight="600" fill="#fb923c">Empty</text>
 
   <!-- Row labels -->
   <text x="878" y="212" text-anchor="end" font-size="8" fill="#64748b">A</text>
@@ -120,7 +120,7 @@
 
   <!-- CH1: CONTROL Optocoupler (ESP→Hopper) -->
   <rect x="420" y="130" width="200" height="16" rx="3" fill="#14532d" opacity="0.6"/>
-  <text x="520" y="141" text-anchor="middle" font-size="9" font-weight="700" fill="#4ade80">CH1 · CONTROL OUTPUT — Optokoppler #1 · D1 → Pin 7</text>
+  <text x="520" y="141" text-anchor="middle" font-size="9" font-weight="700" fill="#4ade80">CH1 · CONTROL OUTPUT — Optokoppler #1 · D1 → Pin 7 ✓</text>
 
   <!-- Opto Module 1 -->
   <g filter="url(#shadow)">
@@ -155,10 +155,10 @@
   <!-- VCC → 12V -->
   <line x1="550" y1="196" x2="550" y2="155" stroke="#ef4444" stroke-width="1.5"/>
   <text x="555" y="152" font-size="7" fill="#fca5a5">12V</text>
-  <!-- OUT → Hopper Control -->
+  <!-- OUT → Hopper Control (pin 7, now at top row) -->
   <line x1="574" y1="200" x2="740" y2="200" stroke="#22c55e" stroke-width="2"/>
-  <line x1="740" y1="200" x2="740" y2="240" stroke="#22c55e" stroke-width="2"/>
-  <line x1="740" y1="240" x2="1000" y2="240" stroke="#22c55e" stroke-width="2" marker-end="url(#arr-grn)"/>
+  <line x1="740" y1="200" x2="740" y2="208" stroke="#22c55e" stroke-width="2"/>
+  <line x1="740" y1="208" x2="1000" y2="208" stroke="#22c55e" stroke-width="2" marker-end="url(#arr-grn)"/>
   <!-- GND → 12V GND -->
   <line x1="590" y1="204" x2="590" y2="230" stroke="#64748b" stroke-width="1.5"/>
   <text x="595" y="235" font-size="7" fill="#64748b">12V GND</text>
@@ -166,7 +166,7 @@
 
   <!-- CH2: COIN Optocoupler (Hopper→ESP) -->
   <rect x="420" y="270" width="200" height="16" rx="3" fill="#1e3a5f" opacity="0.6"/>
-  <text x="520" y="281" text-anchor="middle" font-size="9" font-weight="700" fill="#60a5fa">CH2 · COIN INPUT — Optokoppler #2 · Pin 9 → D2</text>
+  <text x="520" y="281" text-anchor="middle" font-size="9" font-weight="700" fill="#60a5fa">CH2 · COIN INPUT — Optokoppler #2 · Pin 9 → D2 ✓</text>
 
   <!-- Opto Module 2 -->
   <g filter="url(#shadow)">
@@ -188,8 +188,8 @@
   </g>
 
   <!-- Wiring for Coin -->
-  <!-- Hopper Coin → IN+ -->
-  <line x1="1044" y1="246" x2="1044" y2="330" stroke="#3b82f6" stroke-width="2"/>
+  <!-- Hopper Coin (pin 9, top row) → IN+ -->
+  <line x1="1044" y1="214" x2="1044" y2="330" stroke="#3b82f6" stroke-width="2"/>
   <line x1="1044" y1="330" x2="650" y2="330" stroke="#3b82f6" stroke-width="2"/>
   <line x1="650" y1="330" x2="650" y2="340" stroke="#3b82f6" stroke-width="2"/>
   <line x1="650" y1="340" x2="494" y2="340" stroke="#3b82f6" stroke-width="2"/>
@@ -210,7 +210,7 @@
 
   <!-- CH3: ERROR Optocoupler (Hopper→ESP) -->
   <rect x="420" y="410" width="200" height="16" rx="3" fill="#422006" opacity="0.6"/>
-  <text x="520" y="421" text-anchor="middle" font-size="9" font-weight="700" fill="#fbbf24">CH3 · ERROR INPUT — Optokoppler #3 · Pin 8 → D5</text>
+  <text x="520" y="421" text-anchor="middle" font-size="9" font-weight="700" fill="#fbbf24">CH3 · ERROR INPUT — Optokoppler #3 · Pin 8 → D5 ✓</text>
 
   <!-- Opto Module 3 -->
   <g filter="url(#shadow)">
@@ -232,8 +232,8 @@
   </g>
 
   <!-- Wiring for Error -->
-  <!-- Hopper Error → IN+ -->
-  <line x1="1006" y1="214" x2="1006" y2="470" stroke="#f59e0b" stroke-width="2"/>
+  <!-- Hopper Error (pin 8, bottom row) → IN+ -->
+  <line x1="1006" y1="246" x2="1006" y2="470" stroke="#f59e0b" stroke-width="2"/>
   <line x1="1006" y1="470" x2="680" y2="470" stroke="#f59e0b" stroke-width="2"/>
   <line x1="680" y1="470" x2="680" y2="480" stroke="#f59e0b" stroke-width="2"/>
   <line x1="680" y1="480" x2="494" y2="480" stroke="#f59e0b" stroke-width="2"/>
@@ -254,7 +254,7 @@
 
   <!-- CH4: EMPTY Optocoupler (Hopper→ESP) -->
   <rect x="420" y="550" width="200" height="16" rx="3" fill="#431407" opacity="0.6"/>
-  <text x="520" y="561" text-anchor="middle" font-size="9" font-weight="700" fill="#fb923c">CH4 · EMPTY INPUT — Optokoppler #4 · Pin 10 → D6</text>
+  <text x="520" y="561" text-anchor="middle" font-size="9" font-weight="700" fill="#fb923c">CH4 · EMPTY INPUT — Optokoppler #4 · Pin 10 → D6 ✓</text>
 
   <!-- Opto Module 4 -->
   <g filter="url(#shadow)">
@@ -276,9 +276,9 @@
   </g>
 
   <!-- Wiring for Empty -->
-  <!-- Hopper Empty → IN+ -->
-  <line x1="1044" y1="214" x2="1068" y2="214" stroke="#f97316" stroke-width="2"/>
-  <line x1="1068" y1="214" x2="1068" y2="610" stroke="#f97316" stroke-width="2"/>
+  <!-- Hopper Empty (pin 10, bottom row) → IN+ -->
+  <line x1="1044" y1="246" x2="1068" y2="246" stroke="#f97316" stroke-width="2"/>
+  <line x1="1068" y1="246" x2="1068" y2="610" stroke="#f97316" stroke-width="2"/>
   <line x1="1068" y1="610" x2="710" y2="610" stroke="#f97316" stroke-width="2"/>
   <line x1="710" y1="610" x2="710" y2="620" stroke="#f97316" stroke-width="2"/>
   <line x1="710" y1="620" x2="494" y2="620" stroke="#f97316" stroke-width="2"/>
@@ -320,11 +320,11 @@
 
   <!-- Connector map box -->
   <rect x="850" y="318" width="240" height="100" rx="8" fill="#1e293b" stroke="#334155" stroke-width="1" opacity="0.85"/>
-  <text x="866" y="338" font-size="10" font-weight="700" fill="#94a3b8">2×5 IDC Pin Map</text>
-  <text x="866" y="356" font-size="8.5" fill="#94a3b8" font-family="monospace">A: VCC  GND  H.Lvl  Error  Empty</text>
-  <text x="866" y="372" font-size="8.5" fill="#94a3b8" font-family="monospace">B: VCC  VCC  GND    Ctrl   Coin</text>
+  <text x="866" y="338" font-size="10" font-weight="700" fill="#94a3b8">2×5 IDC Pin Map (Alt. numbering)</text>
+  <text x="866" y="356" font-size="8.5" fill="#94a3b8" font-family="monospace">A: VCC  GND  H.Lvl  Ctrl   Coin</text>
+  <text x="866" y="372" font-size="8.5" fill="#94a3b8" font-family="monospace">B: VCC  VCC  GND    Error  Empty</text>
   <line x1="866" y1="380" x2="1070" y2="380" stroke="#334155" stroke-width="0.5"/>
-  <text x="866" y="396" font-size="8" fill="#64748b">3× VCC (+12V) · 2× GND</text>
+  <text x="866" y="396" font-size="8" fill="#64748b">Pins 7-10: Ctrl(7) Error(8) Coin(9) Empty(10)</text>
   <text x="866" y="410" font-size="8" fill="#64748b">H Level pin nicht verbunden (N/C)</text>
 
 
