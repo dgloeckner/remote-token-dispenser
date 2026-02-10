@@ -14,7 +14,7 @@ void IRAM_ATTR HopperControl::handleCoinPulse() {
 void HopperControl::begin() {
   // Configure GPIO pins
   pinMode(MOTOR_PIN, OUTPUT);
-  digitalWrite(MOTOR_PIN, LOW);  // Motor off
+  digitalWrite(MOTOR_PIN, HIGH);  // Motor off (inverted logic: HIGH = off)
 
   pinMode(COIN_PULSE_PIN, INPUT_PULLUP);
   pinMode(HOPPER_LOW_PIN, INPUT_PULLUP);
@@ -29,12 +29,12 @@ void HopperControl::begin() {
 }
 
 void HopperControl::startMotor() {
-  digitalWrite(MOTOR_PIN, HIGH);
+  digitalWrite(MOTOR_PIN, LOW);  // Inverted: LOW = motor ON
   last_pulse_time = millis();  // Reset watchdog
 }
 
 void HopperControl::stopMotor() {
-  digitalWrite(MOTOR_PIN, LOW);
+  digitalWrite(MOTOR_PIN, HIGH);  // Inverted: HIGH = motor OFF
 }
 
 uint8_t HopperControl::getPulseCount() {

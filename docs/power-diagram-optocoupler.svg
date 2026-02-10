@@ -1,4 +1,4 @@
-<svg viewBox="0 0 980 600" width="980" height="600" xmlns="http://www.w3.org/2000/svg" font-family="Inter, system-ui, -apple-system, sans-serif">
+<svg viewBox="0 0 980 620" width="980" height="620" xmlns="http://www.w3.org/2000/svg" font-family="Inter, system-ui, -apple-system, sans-serif">
   <defs>
     <filter id="shadow" x="-4%" y="-4%" width="108%" height="112%">
       <feDropShadow dx="0" dy="3" stdDeviation="6" flood-color="#000" flood-opacity="0.25"/>
@@ -12,15 +12,15 @@
   </defs>
 
   <!-- Background -->
-  <rect width="980" height="600" rx="12" fill="#0f172a"/>
+  <rect width="980" height="620" rx="12" fill="#0f172a"/>
   <pattern id="grid" width="20" height="20" patternUnits="userSpaceOnUse">
     <path d="M20,0 L0,0 0,20" fill="none" stroke="#1e293b" stroke-width="0.4"/>
   </pattern>
-  <rect width="980" height="600" fill="url(#grid)" opacity="0.5" rx="12"/>
+  <rect width="980" height="620" fill="url(#grid)" opacity="0.5" rx="12"/>
 
   <!-- Title -->
-  <text x="490" y="32" text-anchor="middle" font-size="17" font-weight="800" fill="#f1f5f9" letter-spacing="-0.3">Power Supply Wiring</text>
-  <text x="490" y="50" text-anchor="middle" font-size="11" fill="#64748b">12V PSU · Voltage regulator for ESP · Bulk capacitor · Hopper 12-24V ⎓ 450mA</text>
+  <text x="490" y="32" text-anchor="middle" font-size="17" font-weight="800" fill="#f1f5f9" letter-spacing="-0.3">Power Supply Wiring — Optocoupler Version</text>
+  <text x="490" y="50" text-anchor="middle" font-size="11" fill="#64748b">12V PSU · DC Shield für ESP · 4× PC817 Optokoppler · Hopper 12-24V ⎓ 450mA</text>
 
   <!-- ═══ 12V PSU ═══ -->
   <g filter="url(#shadow)">
@@ -43,18 +43,18 @@
   <line x1="235" y1="200" x2="340" y2="200" stroke="#ef4444" stroke-width="2.5"/>
   <circle cx="340" cy="200" r="4" fill="#ef4444"/>
 
-  <!-- ═══ UPPER: 12V → Vreg → ESP ═══ -->
+  <!-- ═══ UPPER: 12V → DC Shield → ESP ═══ -->
   <line x1="340" y1="200" x2="340" y2="120" stroke="#ef4444" stroke-width="2.2"/>
   <line x1="340" y1="120" x2="398" y2="120" stroke="#ef4444" stroke-width="2.2" marker-end="url(#arr-red)"/>
 
-  <!-- Voltage Regulator -->
+  <!-- DC Shield (7-24V) -->
   <g filter="url(#shadow)">
     <rect x="400" y="84" width="150" height="100" rx="8" fill="#1e293b" stroke="#334155" stroke-width="1.5"/>
     <rect x="400" y="84" width="150" height="28" rx="8" fill="#2e1065"/>
     <rect x="400" y="104" width="150" height="8" fill="#2e1065"/>
-    <text x="475" y="102" text-anchor="middle" font-size="11" font-weight="700" fill="#c4b5fd">Voltage Regulator</text>
-    <text x="475" y="148" text-anchor="middle" font-size="9" fill="#64748b">12V → 5V step-down</text>
-    <text x="475" y="162" text-anchor="middle" font-size="9" fill="#64748b">e.g. MP1584 / LM7805</text>
+    <text x="475" y="102" text-anchor="middle" font-size="11" font-weight="700" fill="#c4b5fd">Wemos DC Shield</text>
+    <text x="475" y="148" text-anchor="middle" font-size="9" fill="#64748b">7-24V → 5V/3.3V</text>
+    <text x="475" y="162" text-anchor="middle" font-size="9" fill="#64748b">Buck Converter</text>
   </g>
   <circle cx="400" cy="120" r="4" fill="#ef4444" opacity="0.8"/>
   <text x="412" y="133" font-size="8" fill="#fca5a5">12V IN</text>
@@ -79,13 +79,23 @@
   <text x="662" y="138" font-size="8" fill="#94a3b8">5V</text>
   <circle cx="650" cy="155" r="4" fill="#64748b"/>
   <text x="662" y="158" font-size="8" fill="#94a3b8">GND</text>
+  <circle cx="810" cy="120" r="4" fill="#a78bfa"/>
+  <text x="798" y="138" text-anchor="end" font-size="8" fill="#c4b5fd">3.3V</text>
 
   <!-- ESP GND down -->
   <line x1="646" y1="155" x2="620" y2="155" stroke="#64748b" stroke-width="2" opacity="0.7"/>
-  <line x1="620" y1="155" x2="620" y2="460" stroke="#64748b" stroke-width="2" opacity="0.7"/>
+  <line x1="620" y1="155" x2="620" y2="480" stroke="#64748b" stroke-width="2" opacity="0.7"/>
 
   <!-- Vreg GND down -->
-  <line x1="475" y1="188" x2="475" y2="460" stroke="#64748b" stroke-width="2" opacity="0.7"/>
+  <line x1="475" y1="188" x2="475" y2="480" stroke="#64748b" stroke-width="2" opacity="0.7"/>
+
+  <!-- ═══ 3.3V to Optocouplers ═══ -->
+  <line x1="814" y1="120" x2="880" y2="120" stroke="#a78bfa" stroke-width="2"/>
+  <line x1="880" y1="120" x2="880" y2="60" stroke="#a78bfa" stroke-width="2"/>
+  <line x1="880" y1="60" x2="920" y2="60" stroke="#a78bfa" stroke-width="2"/>
+  <rect x="880" y="46" width="80" height="28" rx="4" fill="#2e1065" stroke="#a78bfa" stroke-width="1"/>
+  <text x="920" y="63" text-anchor="middle" font-size="8" font-weight="600" fill="#c4b5fd">3.3V zu</text>
+  <text x="920" y="73" text-anchor="middle" font-size="7" fill="#94a3b8">Opto VCC #2-4</text>
 
   <!-- ═══ LOWER: 12V → Hopper ═══ -->
   <line x1="340" y1="200" x2="340" y2="310" stroke="#ef4444" stroke-width="2.2"/>
@@ -102,7 +112,15 @@
   <text x="360" y="348" font-size="10" font-weight="700" fill="#94a3b8">+</text>
   <text x="316" y="384" text-anchor="middle" font-size="9" font-weight="600" fill="#94a3b8">2200µF</text>
   <text x="316" y="396" text-anchor="middle" font-size="9" fill="#64748b">25V</text>
-  <line x1="340" y1="360" x2="340" y2="460" stroke="#64748b" stroke-width="1.5" opacity="0.7"/>
+  <line x1="340" y1="360" x2="340" y2="480" stroke="#64748b" stroke-width="1.5" opacity="0.7"/>
+
+  <!-- 12V to Opto #1 VCC -->
+  <circle cx="340" cy="310" r="4" fill="#ef4444"/>
+  <line x1="340" y1="295" x2="340" y2="270" stroke="#ef4444" stroke-width="1.5"/>
+  <line x1="340" y1="270" x2="440" y2="270" stroke="#ef4444" stroke-width="1.5"/>
+  <rect x="400" y="256" width="80" height="28" rx="4" fill="#450a0a" stroke="#ef4444" stroke-width="1"/>
+  <text x="440" y="273" text-anchor="middle" font-size="8" font-weight="600" fill="#fca5a5">12V zu</text>
+  <text x="440" y="283" text-anchor="middle" font-size="7" fill="#94a3b8">Opto VCC #1</text>
 
   <!-- Hopper box -->
   <g filter="url(#shadow)">
@@ -115,7 +133,7 @@
 
   <!-- Hopper connector map inside box -->
   <rect x="520" y="310" width="180" height="68" rx="4" fill="#0f172a" stroke="#475569" stroke-width="0.8"/>
-  <text x="610" y="325" text-anchor="middle" font-size="8" font-weight="600" fill="#475569">2×5 Molex</text>
+  <text x="610" y="325" text-anchor="middle" font-size="8" font-weight="600" fill="#475569">2×5 IDC Connector</text>
 
   <!-- Top row mini pins -->
   <circle cx="540" cy="342" r="4" fill="#ef4444" opacity="0.7"/>
@@ -148,48 +166,48 @@
   <circle cx="500" cy="370" r="4" fill="#64748b"/>
   <text x="512" y="394" font-size="8" fill="#94a3b8">GND (2 pins)</text>
 
-  <!-- Signal pins note -->
+  <!-- Signal pins note - updated for optocouplers -->
   <circle cx="720" cy="340" r="4" fill="#22c55e"/>
-  <text x="732" y="336" font-size="8" fill="#4ade80">Signals</text>
-  <text x="732" y="348" font-size="8" fill="#64748b">to ESP via</text>
-  <text x="732" y="360" font-size="8" fill="#64748b">dividers</text>
+  <text x="732" y="336" font-size="8" fill="#4ade80">Signale</text>
+  <text x="732" y="348" font-size="8" fill="#64748b">via PC817</text>
+  <text x="732" y="360" font-size="8" fill="#64748b">Optokoppler</text>
 
   <!-- Hopper GND down -->
   <line x1="496" y1="370" x2="475" y2="370" stroke="#64748b" stroke-width="2" opacity="0.7"/>
-  <line x1="475" y1="370" x2="475" y2="460" stroke="#64748b" stroke-width="2" opacity="0.7"/>
+  <line x1="475" y1="370" x2="475" y2="480" stroke="#64748b" stroke-width="2" opacity="0.7"/>
 
   <!-- ═══ COMMON GND BUS ═══ -->
-  <line x1="270" y1="460" x2="650" y2="460" stroke="#64748b" stroke-width="3" opacity="0.5"/>
-  <circle cx="340" cy="460" r="3.5" fill="#64748b" opacity="0.8"/>
-  <circle cx="475" cy="460" r="3.5" fill="#64748b" opacity="0.8"/>
-  <circle cx="620" cy="460" r="3.5" fill="#64748b" opacity="0.8"/>
-  <text x="340" y="452" text-anchor="middle" font-size="7.5" fill="#64748b">Cap</text>
-  <text x="475" y="452" text-anchor="middle" font-size="7.5" fill="#64748b">Vreg+Hopper</text>
-  <text x="620" y="452" text-anchor="middle" font-size="7.5" fill="#64748b">ESP</text>
+  <line x1="270" y1="480" x2="650" y2="480" stroke="#64748b" stroke-width="3" opacity="0.5"/>
+  <circle cx="340" cy="480" r="3.5" fill="#64748b" opacity="0.8"/>
+  <circle cx="475" cy="480" r="3.5" fill="#64748b" opacity="0.8"/>
+  <circle cx="620" cy="480" r="3.5" fill="#64748b" opacity="0.8"/>
+  <text x="340" y="472" text-anchor="middle" font-size="7.5" fill="#64748b">Cap</text>
+  <text x="475" y="472" text-anchor="middle" font-size="7.5" fill="#64748b">DC+Hopper</text>
+  <text x="620" y="472" text-anchor="middle" font-size="7.5" fill="#64748b">ESP</text>
 
   <!-- PSU GND to bus -->
   <line x1="235" y1="250" x2="270" y2="250" stroke="#64748b" stroke-width="2" opacity="0.7"/>
-  <line x1="270" y1="250" x2="270" y2="460" stroke="#64748b" stroke-width="2" opacity="0.7"/>
-  <circle cx="270" cy="460" r="3.5" fill="#64748b" opacity="0.8"/>
-  <text x="270" y="452" text-anchor="middle" font-size="7.5" fill="#64748b">PSU</text>
+  <line x1="270" y1="250" x2="270" y2="480" stroke="#64748b" stroke-width="2" opacity="0.7"/>
+  <circle cx="270" cy="480" r="3.5" fill="#64748b" opacity="0.8"/>
+  <text x="270" y="472" text-anchor="middle" font-size="7.5" fill="#64748b">PSU</text>
 
-  <rect x="428" y="470" width="90" height="16" rx="4" fill="#1e293b" stroke="#334155" stroke-width="0.8"/>
-  <text x="473" y="482" text-anchor="middle" font-size="9" font-weight="600" fill="#94a3b8">COMMON GND</text>
+  <rect x="428" y="490" width="90" height="16" rx="4" fill="#1e293b" stroke="#334155" stroke-width="0.8"/>
+  <text x="473" y="502" text-anchor="middle" font-size="9" font-weight="600" fill="#94a3b8">COMMON GND</text>
 
   <!-- Earth symbol -->
-  <line x1="460" y1="490" x2="460" y2="500" stroke="#64748b" stroke-width="1.5"/>
-  <line x1="451" y1="500" x2="469" y2="500" stroke="#64748b" stroke-width="1.5"/>
-  <line x1="454" y1="504" x2="466" y2="504" stroke="#64748b" stroke-width="1.2"/>
-  <line x1="456" y1="508" x2="464" y2="508" stroke="#64748b" stroke-width="0.8"/>
+  <line x1="460" y1="510" x2="460" y2="520" stroke="#64748b" stroke-width="1.5"/>
+  <line x1="451" y1="520" x2="469" y2="520" stroke="#64748b" stroke-width="1.5"/>
+  <line x1="454" y1="524" x2="466" y2="524" stroke="#64748b" stroke-width="1.2"/>
+  <line x1="456" y1="528" x2="464" y2="528" stroke="#64748b" stroke-width="0.8"/>
 
   <!-- ═══ LEGEND ═══ -->
-  <rect x="50" y="536" width="880" height="48" rx="8" fill="#1e293b" stroke="#334155" stroke-width="1" opacity="0.85"/>
-  <text x="67" y="556" font-size="10" font-weight="700" fill="#94a3b8">Legend</text>
-  <line x1="120" y1="560" x2="150" y2="560" stroke="#ef4444" stroke-width="2.5"/>
-  <text x="158" y="564" font-size="9.5" fill="#fca5a5">12V Rail</text>
-  <line x1="240" y1="560" x2="270" y2="560" stroke="#a78bfa" stroke-width="2.2"/>
-  <text x="278" y="564" font-size="9.5" fill="#c4b5fd">5V Regulated</text>
-  <line x1="390" y1="560" x2="420" y2="560" stroke="#64748b" stroke-width="2"/>
-  <text x="428" y="564" font-size="9.5" fill="#94a3b8">Ground</text>
-  <text x="520" y="564" font-size="9.5" fill="#64748b">⚠ Separate 12V PSU required — do not power hopper from USB (450mA draw)</text>
+  <rect x="50" y="556" width="880" height="48" rx="8" fill="#1e293b" stroke="#334155" stroke-width="1" opacity="0.85"/>
+  <text x="67" y="576" font-size="10" font-weight="700" fill="#94a3b8">Legende</text>
+  <line x1="120" y1="580" x2="150" y2="580" stroke="#ef4444" stroke-width="2.5"/>
+  <text x="158" y="584" font-size="9.5" fill="#fca5a5">12V Rail</text>
+  <line x1="240" y1="580" x2="270" y2="580" stroke="#a78bfa" stroke-width="2.2"/>
+  <text x="278" y="584" font-size="9.5" fill="#c4b5fd">5V/3.3V</text>
+  <line x1="360" y1="580" x2="390" y2="580" stroke="#64748b" stroke-width="2"/>
+  <text x="398" y="584" font-size="9.5" fill="#94a3b8">Ground</text>
+  <text x="490" y="584" font-size="9.5" fill="#64748b">⚠ 12V Netzteil erforderlich — Hopper nicht über USB versorgen (450mA)</text>
 </svg>

@@ -26,10 +26,13 @@
 #endif
 
 // GPIO Pins (Wemos D1 Mini ESP8266)
-#define MOTOR_PIN          D5    // GPIO14 - Motor control output
-#define COIN_PULSE_PIN     D6    // GPIO12 - Interrupt input (30ms pulses)
-#define ERROR_SIGNAL_PIN   D7    // GPIO13 - Hopper error (optional)
-#define HOPPER_LOW_PIN     D8    // GPIO15 - Low token warning (optional)
+// ⚠️ INVERTED LOGIC (optocoupler-based design using PC817 modules):
+//   - Control output: LOW = motor ON, HIGH = motor OFF
+//   - Input signals:  LOW = signal active (coin pulse/error/empty detected)
+#define MOTOR_PIN          D1    // GPIO5  - Motor control output (via PC817 #1)
+#define COIN_PULSE_PIN     D2    // GPIO4  - Coin pulse input (via PC817 #2)
+#define ERROR_SIGNAL_PIN   D5    // GPIO14 - Hopper error input (via PC817 #3)
+#define HOPPER_LOW_PIN     D6    // GPIO12 - Empty sensor input (via PC817 #4)
 
 // Timing Constants
 #define JAM_TIMEOUT_MS     5000   // 5 seconds per token

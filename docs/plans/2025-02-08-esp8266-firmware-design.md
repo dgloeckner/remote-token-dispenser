@@ -1,5 +1,10 @@
 # ESP8266 Firmware Design - Token Dispenser
 
+> ⚠️ **OUTDATED DOCUMENT WARNING:**
+> This design document references transistor-based control circuits (BC547) with specific pin assignments and active-HIGH logic.
+> **Current hardware uses PC817 optocouplers** with different pins (D1/D2/D5/D6) and **inverted logic** (active-LOW).
+> See [hardware/README.md](../../hardware/README.md) for the current optocoupler-based design.
+
 **Date:** 2025-02-08
 **Hardware:** Wemos D1 Mini (ESP8266)
 **Purpose:** HTTP-controlled token dispenser with crash recovery and jam detection

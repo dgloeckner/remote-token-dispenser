@@ -101,7 +101,7 @@ Instead of replacing all your legacy coin-operated equipment (expensive and wast
 | **Azkoyen Hopper U-II** | Industrial coin/token dispenser | Mechanical dispense unit |
 | **Wemos D1 Mini** | ESP8266-based dev board | WiFi controller |
 | **12V Power Supply** | 2A minimum | Hopper motor power |
-| **Level Shifter/Relay** | 3.3V → 12V | Motor control interface |
+| **PC817 Optocouplers** | 4× modules (bestep) | Galvanic isolation |
 | **Jumper wires** | - | GPIO connections |
 
 **Hopper Configuration:**
@@ -155,11 +155,12 @@ See [firmware/README.md](firmware/README.md) for detailed setup instructions.
 ### 2. Wire Hardware
 
 Connect ESP8266 to Azkoyen Hopper (see [hardware/README.md](hardware/README.md) for complete wiring):
-- **D1** (GPIO5) → Control output (via BC547 transistor)
-- **D2** (GPIO4) ← Coin pulse input (via voltage divider)
-- **D5** (GPIO14) ← Error signal input (via voltage divider)
-- **D6** (GPIO12) ← Empty sensor input (via voltage divider)
+- **D1** (GPIO5) → Control output (via PC817 optocoupler #1) - **⚠️ Active LOW: GPIO LOW = motor ON**
+- **D2** (GPIO4) ← Coin pulse input (via PC817 optocoupler #2) - **Active LOW**
+- **D5** (GPIO14) ← Error signal input (via PC817 optocoupler #3) - **Active LOW**
+- **D6** (GPIO12) ← Empty sensor input (via PC817 optocoupler #4) - **Active LOW**
 - **12V supply** → Hopper motor + voltage regulator (separate from ESP)
+- **Galvanic isolation** provided by PC817 modules (no additional resistors needed)
 
 ### 3. Test API
 

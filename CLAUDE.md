@@ -89,10 +89,15 @@ Transaction fields: `tx_id`, `user_id`, `quantity`, `dispensed`, `state`, `times
 ## Hardware Interfaces
 
 ### ESP8266 ↔ Azkoyen Hopper
-- 12V power (2A DC adapter)
-- 2200µF capacitor for motor startup surge
-- GPIO control pin for motor trigger
-- Opto-sensor interrupt for token counting
+- **Power:** 12V/2A DC adapter with 2200µF capacitor for motor startup surge
+- **Isolation:** 4× PC817 optocoupler modules (bestep brand) for galvanic isolation
+- **Control logic:** INVERTED - GPIO LOW = motor ON, inputs LOW = signal active
+- **Pin assignments:**
+  - D1 (GPIO5) → Control output (via PC817 #1) - active LOW
+  - D2 (GPIO4) ← Coin pulse input (via PC817 #2) - active LOW, FALLING edge interrupt
+  - D5 (GPIO14) ← Error signal input (via PC817 #3) - active LOW
+  - D6 (GPIO12) ← Empty sensor input (via PC817 #4) - active LOW
+- **No additional resistors needed** - PC817 modules include onboard current-limiting resistors
 
 ### Raspberry Pi ↔ ESP8266
 - **WiFi HTTP**: Pi communicates with ESP8266 over local WiFi network

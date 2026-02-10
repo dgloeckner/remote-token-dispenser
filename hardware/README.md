@@ -13,30 +13,25 @@ This guide covers the physical hardware assembly for the Remote Token Dispenser 
 | **Coin Dispenser** | Azkoyen Hopper U-II (used) | Industrial token/coin dispensing | ~€30 |
 | **WiFi Controller** | Wemos D1 Mini (ESP8266) | HTTP server, state machine | ~€5 |
 | **Power Supply** | 12V/2A DC adapter | Hopper motor power | ~€10 |
-| **Transistor** | BC547 NPN | Control output switching | <€1 |
+| **Optocouplers** | 4× PC817 modules (bestep) | Galvanic isolation, signal conditioning | ~€5 |
 | **Capacitor** | 2200µF 25V electrolytic | Motor startup surge protection | ~€1 |
 
 ### Electronic Components
 
-**Required resistors (see combinations below):**
+**Required components:**
 
 | Component | Quantity | Purpose |
 |-----------|----------|---------|
-| BC547 NPN transistor | 1 | Control output switching |
+| PC817 optocoupler modules (bestep brand) | 4 | Galvanic isolation with onboard resistors |
 | 2200µF 25V capacitor | 1 | Motor startup surge protection |
 
-**Resistors - Option A (Series combination for 3.3kΩ):**
-- 10kΩ (¼W) × 4 | R2, R3, R5, R7
-- 2kΩ (¼W) × 3 | R4, R6, R8 (part 1)
-- 1kΩ (¼W) × 4 | R1, R4, R6, R8 (part 2)
-- 330Ω (¼W) × 3 | R4, R6, R8 (part 3)
-- **Total: 14 resistors**
+**Note:** PC817 modules include onboard current-limiting resistors (R1+R2). No additional resistors needed!
 
-**Resistors - Option B (Parallel combination for 3.3kΩ):**
-- 10kΩ (¼W) × 7 | R2, R3, R5, R7, R4, R6, R8 (part 1)
-- 5kΩ (¼W) × 3 | R4, R6, R8 (part 2)
-- 1kΩ (¼W) × 1 | R1
-- **Total: 11 resistors**
+<p align="center">
+  <img src="../docs/optocoupler.jpg" alt="PC817 Optocoupler Module (bestep brand)" width="700"/>
+  <br>
+  <em>PC817 optocoupler module showing INPUT/OUTPUT terminals, LED indicator, and onboard R1/R2 resistors</em>
+</p>
 
 ### Supporting Hardware
 
@@ -46,7 +41,7 @@ This guide covers the physical hardware assembly for the Remote Token Dispenser 
 - Enclosure/junction box (optional, for protection)
 - Wire terminals and connectors
 
-**Total Cost:** ~€50-60 (excluding enclosure)
+**Total Cost:** ~€50-55 (excluding enclosure)
 
 ---
 
@@ -74,16 +69,16 @@ This guide covers the physical hardware assembly for the Remote Token Dispenser 
 ### Main Wiring: ESP8266 ↔ Hopper
 
 <p align="center">
-  <img src="../docs/wiring-diagram.svg" alt="Wiring Diagram" width="100%"/>
+  <img src="../docs/wiring-diagram-optocoupler.svg" alt="Wiring Diagram" width="100%"/>
   <br>
-  <em>Complete wiring schematic showing BC547 transistor and voltage dividers</em>
+  <em>Complete wiring schematic showing PC817 optocoupler modules for galvanic isolation</em>
 </p>
 
 **Key connections:**
-- **D1 (GPIO5)** → Control output (via BC547 NPN transistor + R1: 1kΩ, R2: 10kΩ pull-up)
-- **D2 (GPIO4)** ← Coin pulse input (via R3/R4: 10kΩ/3.3kΩ voltage divider)
-- **D5 (GPIO14)** ← Error signal input (via R5/R6: 10kΩ/3.3kΩ voltage divider)
-- **D6 (GPIO12)** ← Empty sensor input (via R7/R8: 10kΩ/3.3kΩ voltage divider)
+- **D1 (GPIO5)** → Control output (via PC817 optocoupler #1) - **⚠️ Active LOW: GPIO LOW = motor ON**
+- **D2 (GPIO4)** ← Coin pulse input (via PC817 optocoupler #2) - **Active LOW**
+- **D5 (GPIO14)** ← Error signal input (via PC817 optocoupler #3) - **Active LOW**
+- **D6 (GPIO12)** ← Empty sensor input (via PC817 optocoupler #4) - **Active LOW**
 - **GND** → Common ground (essential for all circuits!)
 
 ---
@@ -91,23 +86,23 @@ This guide covers the physical hardware assembly for the Remote Token Dispenser 
 ### Pinout Reference: Wemos D1 Mini
 
 <p align="center">
-  <img src="../docs/pinout-diagram.svg" alt="Pinout Diagram" width="100%"/>
+  <img src="../docs/pinout-diagram-optocoupler.svg" alt="Pinout Diagram" width="100%"/>
   <br>
   <em>Wemos D1 Mini pinout with used pins highlighted in red</em>
 </p>
 
 **Used pins (highlighted in red):**
-- **D1 (GPIO5)** - Control output (via BC547 transistor)
-- **D2 (GPIO4)** - Coin pulse interrupt input (via voltage divider)
-- **D5 (GPIO14)** - Error signal input (via voltage divider)
-- **D6 (GPIO12)** - Empty sensor input (via voltage divider)
+- **D1 (GPIO5)** - Control output (via PC817 optocoupler #1) - **Active LOW**
+- **D2 (GPIO4)** - Coin pulse interrupt input (via PC817 optocoupler #2) - **Active LOW**
+- **D5 (GPIO14)** - Error signal input (via PC817 optocoupler #3) - **Active LOW**
+- **D6 (GPIO12)** - Empty sensor input (via PC817 optocoupler #4) - **Active LOW**
 
 ---
 
 ### Power Supply Wiring
 
 <p align="center">
-  <img src="../docs/power-diagram.svg" alt="Power Diagram" width="100%"/>
+  <img src="../docs/power-diagram-optocoupler.svg" alt="Power Diagram" width="100%"/>
   <br>
   <em>Power supply connections with voltage regulator and common ground</em>
 </p>
@@ -119,107 +114,6 @@ This guide covers the physical hardware assembly for the Remote Token Dispenser 
 - **2200µF capacitor** across 12V rail absorbs motor startup surge
 - All 3 hopper VCC pins connected to +12V
 - Both hopper GND pins connected to common ground
-
----
-
-## 🔬 Resistor Configurations
-
-The circuit requires specific resistor values. If you don't have exact values, you can combine standard resistors:
-
-### BC547 Transistor Circuit
-
-**R1 (Base Resistor):** 1kΩ
-- Use: 1× 1kΩ resistor ✅
-
-**R2 (Pull-up Resistor):** 10kΩ
-- Use: 1× 10kΩ resistor ✅
-
-### Voltage Dividers (×3 for Coin, Error, Empty)
-
-Target: **10kΩ (top) + 3.3kΩ (bottom)** to convert 12V → 3.0V
-
-**Top Resistor (R3, R5, R7):** 10kΩ each
-- Use: 3× 10kΩ resistors ✅
-
-**Bottom Resistor (R4, R6, R8):** 3.3kΩ each
-
-#### Option A: Series Combination (RECOMMENDED if you have these values)
-
-```
-Bottom = 2kΩ + 1kΩ + 330Ω (in series) = 3.33kΩ ✅
-
-Hopper Signal ──[10kΩ]──┬── To Wemos GPIO
-                         │
-                     [2kΩ]   ← Series
-                         │
-                     [1kΩ]   ← Series
-                         │
-                     [330Ω]  ← Series
-                         │
-                        GND
-```
-
-**Per divider:** 1× 10kΩ + 1× 2kΩ + 1× 1kΩ + 1× 330Ω
-
-**For 3 dividers:**
-- 3× 10kΩ (tops)
-- 3× 2kΩ (bottom part 1)
-- 3× 1kΩ (bottom part 2)
-- 3× 330Ω (bottom part 3)
-
-**Voltage:** 12V × (3.33 / 13.33) = **3.0V** ✅
-
----
-
-#### Option B: Parallel Combination (if you have 5kΩ resistors)
-
-```
-Bottom = 10kΩ || 5kΩ (in parallel) = 3.33kΩ ✅
-
-Hopper Signal ──[10kΩ]──┬── To Wemos GPIO
-                         │
-                      ┌──┴──┐
-                      │     │
-                    [10kΩ][5kΩ]  ← Parallel
-                      │     │
-                      └──┬──┘
-                         │
-                        GND
-```
-
-**Per divider:** 1× 10kΩ (top) + 1× 10kΩ + 1× 5kΩ (parallel bottom)
-
-**For 3 dividers:**
-- 3× 10kΩ (tops)
-- 3× 10kΩ (bottom part 1)
-- 3× 5kΩ (bottom part 2)
-
-**Voltage:** 12V × (3.33 / 13.33) = **3.0V** ✅
-
----
-
-### Complete Bill of Materials
-
-**Option A (14 resistors total):**
-- 10kΩ × 4 (R2 + R3, R5, R7)
-- 2kΩ × 3 (R4, R6, R8 part 1)
-- 1kΩ × 4 (R1 + R4, R6, R8 part 2)
-- 330Ω × 3 (R4, R6, R8 part 3)
-
-**Option B (11 resistors total):**
-- 10kΩ × 7 (R2 + R3, R5, R7 + R4, R6, R8 part 1)
-- 5kΩ × 3 (R4, R6, R8 part 2)
-- 1kΩ × 1 (R1)
-
-**Choose Option A if:**
-- You have 2kΩ, 1kΩ, and 330Ω resistors
-- You have limited 10kΩ resistors
-
-**Choose Option B if:**
-- You have plenty of 10kΩ and 5kΩ resistors
-- You prefer fewer solder joints (2 vs 3 per divider)
-
-⚠️ **DO NOT use 10kΩ + 5kΩ in series!** This gives 4.0V which will damage the ESP8266!
 
 ---
 
@@ -246,40 +140,40 @@ The Azkoyen Hopper U-II must be configured in **PULSES** mode:
    - Positive lead → 12V
 4. Keep ESP8266 powered separately via USB
 
-### Step 3: Wire the Control Signals
+### Step 3: Wire the Control Signals via PC817 Optocouplers
 
 **Components needed:**
-- BC547 NPN transistor (Q1)
-- Resistors: 1kΩ (R1), 10kΩ (R2, R3, R5, R7), 3.3kΩ (R4, R6, R8)
-- Optional: 100nF capacitor for debouncing
+- 4× PC817 optocoupler modules (bestep brand with onboard resistors)
+- No additional resistors required!
 
-1. **Control output (D1 → BC547 → Hopper Control):**
-   - Connect D1 → 1kΩ resistor (R1) → BC547 base
-   - Connect BC547 collector → 10kΩ pull-up (R2) → +12V
-   - Connect BC547 collector → Hopper "Control" pin
-   - Connect BC547 emitter → GND
-   - Logic: D1 HIGH = transistor ON = Control LOW = hopper dispenses
+**⚠️ INVERTED LOGIC:** GPIO LOW = motor ON, inputs read LOW when active
 
-2. **Coin pulse input (Hopper Coin → voltage divider → D2):**
-   - Hopper "Coin" pin → 10kΩ resistor (R3) → junction → D2
-   - Junction → 3.3kΩ resistor (R4) → GND
-   - Voltage divider steps 12V down to ~2.98V (safe for 3.3V GPIO)
-   - Use RISING or FALLING edge interrupt on D2
+1. **Control output (D1 → PC817 #1 → Hopper Control):**
+   - Connect D1 (GPIO5) → PC817 module #1 input side
+   - Connect PC817 module #1 output → Hopper "Control" pin
+   - Connect module grounds appropriately (galvanic isolation!)
+   - **Logic:** D1 LOW = optocoupler ON = motor runs
 
-3. **Error signal input (Hopper Error → voltage divider → D5):**
-   - Hopper "Error" pin → 10kΩ resistor (R5) → junction → D5
-   - Junction → 3.3kΩ resistor (R6) → GND
-   - HIGH (~2.98V) = jam or motor error detected
+2. **Coin pulse input (Hopper Coin → PC817 #2 → D2):**
+   - Connect Hopper "Coin" pin → PC817 module #2 input side (with 12V)
+   - Connect PC817 module #2 output → D2 (GPIO4)
+   - Use FALLING edge interrupt on D2
+   - **Signal is active LOW** (optocoupler inverts)
 
-4. **Empty sensor input (Hopper Empty → voltage divider → D6):**
-   - Hopper "Empty" pin → 10kΩ resistor (R7) → junction → D6
-   - Junction → 3.3kΩ resistor (R8) → GND
-   - HIGH (~2.98V) = hopper coin bay is empty
+3. **Error signal input (Hopper Error → PC817 #3 → D5):**
+   - Connect Hopper "Error" pin → PC817 module #3 input side (12V)
+   - Connect PC817 module #3 output → D5 (GPIO14)
+   - LOW = jam or motor error detected
+
+4. **Empty sensor input (Hopper Empty → PC817 #4 → D6):**
+   - Connect Hopper "Empty" pin → PC817 module #4 input side (12V)
+   - Connect PC817 module #4 output → D6 (GPIO12)
+   - LOW = hopper coin bay is empty
 
 5. **Common ground:**
-   - Connect ESP8266 GND to hopper GND
-   - Connect all voltage divider bottoms to common GND
-   - **This is critical for signal integrity!**
+   - Connect ESP8266 GND to optocoupler output-side grounds
+   - Connect hopper GND to optocoupler input-side grounds
+   - **Optocouplers provide galvanic isolation between 12V and 3.3V sides**
 
 ### Step 4: Test the Wiring
 
@@ -338,18 +232,19 @@ Before powering everything on:
 
 ### Motor doesn't activate
 
-- **Check:** BC547 transistor wiring (collector, base, emitter)
-- **Check:** R1 (1kΩ) and R2 (10kΩ) resistor values
-- **Check:** D1 goes HIGH when dispensing (3.3V at base resistor)
+- **Check:** PC817 optocoupler module #1 connections (input and output sides)
+- **Check:** D1 goes LOW when dispensing (inverted logic!)
+- **Check:** Optocoupler LED indicator is lit when D1 is LOW
 - **Check:** 12V power supply voltage
-- **Check:** Common ground connection
+- **Check:** Common ground on both sides of optocoupler
 
 ### Pulse count doesn't increment
 
-- **Check:** D2 connection via voltage divider (R3: 10kΩ, R4: 3.3kΩ)
-- **Check:** Voltage at D2 is ~2.98V when hopper Coin pin is HIGH
+- **Check:** D2 connection via PC817 module #2
+- **Check:** Optocoupler output goes LOW when coin pulse detected
 - **Check:** Hopper is configured in PULSES mode (not LEVEL)
-- **Check:** Firmware interrupt is configured for correct edge
+- **Check:** Firmware interrupt is configured for FALLING edge
+- **Check:** PC817 module #2 LED indicator blinks during dispense
 
 ### Dispense jams frequently
 
@@ -395,13 +290,12 @@ Before deploying your token dispenser:
 
 - [ ] Hopper configured in PULSES mode (30ms pulses)
 - [ ] 12V power supply connected with 2200µF capacitor
-- [ ] Common ground connected between ESP8266 and hopper
-- [ ] BC547 transistor installed with R1 (1kΩ) and R2 (10kΩ)
-- [ ] D1 → BC547 base (via 1kΩ resistor)
-- [ ] BC547 collector → Hopper Control pin (via 10kΩ pull-up to 12V)
-- [ ] D2 ← Hopper Coin (via 10kΩ/3.3kΩ voltage divider)
-- [ ] D5 ← Hopper Error (via 10kΩ/3.3kΩ voltage divider)
-- [ ] D6 ← Hopper Empty (via 10kΩ/3.3kΩ voltage divider)
+- [ ] Common ground connected on both sides of optocouplers
+- [ ] PC817 optocoupler modules installed (4× total, bestep brand)
+- [ ] D1 (GPIO5) → PC817 #1 → Hopper Control pin (inverted: LOW = ON)
+- [ ] D2 (GPIO4) ← PC817 #2 ← Hopper Coin (active LOW)
+- [ ] D5 (GPIO14) ← PC817 #3 ← Hopper Error (active LOW)
+- [ ] D6 (GPIO12) ← PC817 #4 ← Hopper Empty (active LOW)
 - [ ] All connections visually inspected and tested with multimeter
 - [ ] Capacitor polarity verified (critical!)
 - [ ] ESP8266 firmware flashed and WiFi configured

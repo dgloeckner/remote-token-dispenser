@@ -11,8 +11,8 @@ HTTP-controlled token dispenser firmware for Wemos D1 Mini (ESP8266) controlling
 - **Power:**
   - ESP8266: 5V via USB or VIN pin
   - Azkoyen Hopper: 12V/2A separate power supply
-- **Control Circuit:** BC547 NPN transistor with 1kΩ base resistor and 10kΩ pull-up
-- **Input Protection:** 3× voltage dividers (10kΩ/3.3kΩ) for Coin, Error, Empty signals
+- **Isolation:** 4× PC817 optocoupler modules (bestep brand with onboard resistors)
+- **No additional resistors needed** - PC817 modules include current-limiting resistors
 
 ---
 
@@ -98,20 +98,26 @@ firmware/dispenser/
 #define API_KEY "change-this-secret-key"  // CHANGE THIS!
 
 // GPIO Pins (Wemos D1 Mini - using D-labels)
-#define CONTROL_PIN        D1    // GPIO5 - Control output via BC547
-#define COIN_PULSE_PIN     D2    // GPIO4 - Coin pulse input
-#define ERROR_SIGNAL_PIN   D5    // GPIO14 - Error signal input
-#define EMPTY_SENSOR_PIN   D6    // GPIO12 - Empty sensor input
+// ⚠️ INVERTED LOGIC: Control LOW = motor ON, inputs LOW = active
+#define MOTOR_PIN          D1    // GPIO5 - Control output via PC817 #1
+#define COIN_PULSE_PIN     D2    // GPIO4 - Coin pulse input via PC817 #2
+#define ERROR_SIGNAL_PIN   D5    // GPIO14 - Error signal input via PC817 #3
+#define HOPPER_LOW_PIN     D6    // GPIO12 - Empty sensor input via PC817 #4
 ```
 
 ### 2. Verify Pin Connections
 
 | ESP8266 Pin | GPIO | Function | Azkoyen Connection |
 |-------------|------|----------|-------------------|
-| D1 | GPIO5 | Control Output | Via BC547 transistor (1kΩ + 10kΩ pull-up) → Control pin |
-| D2 | GPIO4 | Coin Pulse Input | Coin pin → Voltage divider (10kΩ/3.3kΩ) |
-| D5 | GPIO14 | Error Signal Input | Error pin → Voltage divider (10kΩ/3.3kΩ) |
-| D6 | GPIO12 | Empty Sensor Input | Empty pin → Voltage divider (10kΩ/3.3kΩ) |
+| D1 | GPIO5 | Control Output | Via PC817 optocoupler #1 (active LOW: LOW = motor ON) |
+| D2 | GPIO4 | Coin Pulse Input | Via PC817 optocoupler #2 (active LOW) |
+| D5 | GPIO14 | Error Signal | Via PC817 optocoupler #3 (active LOW) |
+| D6 | GPIO12 | Empty Sensor | Via PC817 optocoupler #4 (active LOW) |
+
+**Control Logic (Optocoupler-Based):**
+- **Motor control:** `digitalWrite(MOTOR_PIN, LOW)` = motor ON (inverted!)
+- **Input signals:** All inputs are active LOW (LOW = signal detected)
+- **Galvanic isolation:** PC817 modules provide electrical isolation between 12V hopper and 3.3V ESP8266
 
 ---
 
@@ -237,17 +243,18 @@ Install missing library via Library Manager.
 
 ### Motor Not Running
 
-- Check D1 → BC547 transistor wiring (1kΩ base, 10kΩ pull-up)
-- Verify D1 goes HIGH when dispense starts
-- Check BC547 collector pulls Control pin LOW when active
+- Check D1 → PC817 optocoupler #1 wiring
+- Verify D1 goes **LOW** when dispense starts (inverted logic!)
+- Check PC817 module #1 LED indicator is lit when D1 is LOW
 - Verify 12V power supply to Azkoyen
-- Measure: D1=3.3V, BC547 base=0.7V, collector=0V when ON
+- Check optocoupler output side connects to hopper Control pin
 
 ### Pulse Counting Issues
 
-- Verify D2 connected to Coin pin via voltage divider (10kΩ/3.3kΩ)
-- Check voltage at D2: should be ~2.98V when Coin pin is HIGH
+- Verify D2 connected via PC817 optocoupler #2
+- Check PC817 module #2 LED blinks during coin dispense
 - Check pulse mode jumper on Azkoyen (STANDARD + PULSES)
+- Verify interrupt configured for FALLING edge (optocoupler inverts signal)
 - Monitor interrupt with Serial.println in ISR (temporarily)
 
 ---
