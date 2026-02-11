@@ -16,6 +16,13 @@ public:
   bool checkJam();
   bool isHopperLow();
 
+  // GPIO state accessors for health endpoint
+  uint8_t getCoinPulseRaw();
+  bool isCoinPulseActive();
+  uint8_t getErrorSignalRaw();
+  bool isErrorSignalActive();
+  uint8_t getHopperLowRaw();
+
 private:
   static void IRAM_ATTR handleCoinPulse();
 };

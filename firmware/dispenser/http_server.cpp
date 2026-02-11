@@ -65,7 +65,21 @@ void HttpServer::handleHealth(AsyncWebServerRequest *request) {
 
   Transaction active = dispenseManager.getActiveTransaction();
   doc["dispenser"] = stateToString(active.state);
-  doc["hopper_low"] = hopperControl.isHopperLow();
+
+  // GPIO pin states
+  JsonObject gpio = doc.createNestedObject("gpio");
+
+  JsonObject coinPulse = gpio.createNestedObject("coin_pulse");
+  coinPulse["raw"] = hopperControl.getCoinPulseRaw();
+  coinPulse["active"] = hopperControl.isCoinPulseActive();
+
+  JsonObject errorSignal = gpio.createNestedObject("error_signal");
+  errorSignal["raw"] = hopperControl.getErrorSignalRaw();
+  errorSignal["active"] = hopperControl.isErrorSignalActive();
+
+  JsonObject hopperLow = gpio.createNestedObject("hopper_low");
+  hopperLow["raw"] = hopperControl.getHopperLowRaw();
+  hopperLow["active"] = hopperControl.isHopperLow();
 
   // Metrics
   JsonObject metrics = doc.createNestedObject("metrics");

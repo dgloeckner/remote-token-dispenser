@@ -17,6 +17,7 @@ void HopperControl::begin() {
   digitalWrite(MOTOR_PIN, HIGH);  // Motor off (inverted logic: HIGH = off)
 
   pinMode(COIN_PULSE_PIN, INPUT_PULLUP);
+  pinMode(ERROR_SIGNAL_PIN, INPUT_PULLUP);
   pinMode(HOPPER_LOW_PIN, INPUT_PULLUP);
 
   // Attach interrupt for coin pulse (FALLING edge)
@@ -61,4 +62,24 @@ bool HopperControl::checkJam() {
 bool HopperControl::isHopperLow() {
   // Hopper low sensor is active LOW
   return digitalRead(HOPPER_LOW_PIN) == LOW;
+}
+
+uint8_t HopperControl::getCoinPulseRaw() {
+  return digitalRead(COIN_PULSE_PIN) == LOW ? 0 : 1;
+}
+
+bool HopperControl::isCoinPulseActive() {
+  return digitalRead(COIN_PULSE_PIN) == LOW;
+}
+
+uint8_t HopperControl::getErrorSignalRaw() {
+  return digitalRead(ERROR_SIGNAL_PIN) == LOW ? 0 : 1;
+}
+
+bool HopperControl::isErrorSignalActive() {
+  return digitalRead(ERROR_SIGNAL_PIN) == LOW;
+}
+
+uint8_t HopperControl::getHopperLowRaw() {
+  return digitalRead(HOPPER_LOW_PIN) == LOW ? 0 : 1;
 }
