@@ -60,6 +60,8 @@ Comprehensive system architecture with mermaid diagrams:
 
 **Why critical:** Violating protocol specs (wrong DIP switch mode, incorrect voltage levels) causes complete motor control failure. Always verify against this document when debugging hopper issues.
 
+**Troubleshooting:** See `docs/troubleshooting/motor-control-issues.md` for step-by-step diagnosis of common hardware issues (NEGATIVE mode, optocoupler saturation, voltage levels).
+
 ### dispenser-protocol.md
 Defines the WiFi HTTP protocol between Raspberry Pi and ESP8266:
 - **Idempotent transactions** with client-generated `tx_id`
