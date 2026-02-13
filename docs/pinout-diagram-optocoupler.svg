@@ -16,10 +16,6 @@
   <text x="360" y="36" text-anchor="middle" font-size="17" font-weight="800" fill="#f1f5f9" letter-spacing="-0.3">Wemos D1 Mini Pinout Reference</text>
   <text x="360" y="54" text-anchor="middle" font-size="11" fill="#64748b">Token Dispenser with PC817 Optocouplers · Inverted Logic (LOW = active)</text>
 
-  <!-- CRITICAL WARNING BANNER -->
-  <rect x="40" y="62" width="640" height="20" rx="4" fill="#7f1d1d" stroke="#991b1b" stroke-width="1.5"/>
-  <text x="360" y="75" text-anchor="middle" font-size="9" font-weight="700" fill="#fecaca">⚠️ CRITICAL: Hopper DIP switch MUST be NEGATIVE mode | Optocoupler #1 R1 requires 330Ω parallel resistor</text>
-
   <!-- Board -->
   <g filter="url(#shadow)">
     <rect x="248" y="72" width="224" height="388" rx="10" fill="#1e293b" stroke="#334155" stroke-width="1.5"/>
