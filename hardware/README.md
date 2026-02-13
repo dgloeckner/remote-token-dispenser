@@ -4,6 +4,74 @@ This guide covers the physical hardware assembly for the Remote Token Dispenser 
 
 ---
 
+## ⚠️ CRITICAL CONFIGURATION REQUIREMENTS
+
+**READ THIS FIRST - These settings are mandatory or the motor will not work correctly:**
+
+### 1. Hopper DIP Switch: NEGATIVE Mode Required
+
+The Azkoyen Hopper U-II **MUST** be configured in **NEGATIVE mode** (active LOW control).
+
+**Official specification:** See `docs/azkoyen-hopper-protocol.md` section 2.1
+
+- ✅ **NEGATIVE mode:** Control pin LOW (< 0.5V) = motor ON, control pin HIGH (> 4V) = motor OFF
+- ❌ **POSITIVE mode:** Will cause inverted behavior - motor runs at wrong times
+
+**DIP switch configuration:**
+- Required setting: **STANDARD + NEGATIVE** (see protocol doc section 5 for DIP matrix)
+- Connector #6 on hopper control board
+
+**How to set:**
+1. Open hopper (4 screws on top panel)
+2. Locate DIP switches (connector #6 near motor/circuit board)
+3. Set to STANDARD + NEGATIVE configuration per protocol diagram
+4. Close hopper and test
+
+**Symptoms of wrong mode:**
+- Motor doesn't engage during dispense request
+- Motor engages AFTER timeout/error instead of during dispense
+- Backwards behavior compared to LED indicator
+
+**Reference:** Azkoyen protocol section 2.1 (NEGATIVE Logic Mode)
+
+---
+
+### 2. PC817 Optocoupler Resistor Modifications Required
+
+The bestep brand PC817 optocoupler modules ship with **inadequate resistor values** that prevent proper motor control.
+
+**Stock resistor values (DON'T WORK):**
+- R1 (input) = 1kΩ → Provides only 3.3mA drive current (too weak!)
+- R2 (output) = 10kΩ → Creates voltage divider with hopper input (unreliable voltages)
+
+**Required modifications:**
+
+| Resistor | Location | Stock Value | Add in Parallel | Result | Purpose |
+|----------|----------|-------------|-----------------|--------|---------|
+| R1 | Input side | 1kΩ | 330Ω | 248Ω total | 13.3mA drive current for saturation |
+| R2 | Output side | 10kΩ | *(remove)* | 10kΩ | Weak pull-up works with modification |
+
+**Why this matters:**
+- Without R1 modification: Phototransistor won't saturate, OUT stays at ~3-7V instead of 0V
+- With weak R2: Hopper input impedance creates voltage divider (6V instead of 12V)
+- Result: Unreliable motor control, inconsistent operation
+
+**How to modify:**
+1. Locate R1 on optocoupler module #1 (motor control)
+2. Solder 330Ω resistor in parallel across R1's two connection points
+3. For R2: Remove any parallel resistors added during testing, leave at 10kΩ
+4. Verify: Input current should be 10-15mA, output should saturate to < 0.2V
+
+**Expected voltages after modification (motor control optocoupler #1):**
+- LED OFF: OUT = ~6V (above 4V threshold, motor OFF per NEGATIVE mode)
+- LED ON: OUT = ~0.1V (below 0.5V threshold, motor ON per NEGATIVE mode)
+
+**Voltage thresholds (from Azkoyen protocol section 2.1):**
+- Motor ON: Control pin < 0.5V
+- Motor OFF: Control pin 4V to Vcc ±10% (typically 4-13.2V for 12V supply)
+
+---
+
 ## 📦 Components
 
 ### Core Hardware
@@ -20,12 +88,22 @@ This guide covers the physical hardware assembly for the Remote Token Dispenser 
 
 **Required components:**
 
-| Component | Quantity | Purpose |
-|-----------|----------|---------|
-| PC817 optocoupler modules (bestep brand) | 4 | Galvanic isolation with onboard resistors |
-| 2200µF 25V capacitor | 1 | Motor startup surge protection |
+| Component | Quantity | Purpose | Notes |
+|-----------|----------|---------|-------|
+| PC817 optocoupler modules (bestep brand) | 4 | Galvanic isolation | ⚠️ Requires resistor modification! |
+| 330Ω resistor (1/4W) | 1 | R1 modification for motor control optocoupler | Solder in parallel with stock 1kΩ |
+| 2200µF 25V capacitor | 1 | Motor startup surge protection | Observe polarity! |
 
-**Note:** PC817 modules include onboard current-limiting resistors (R1+R2). No additional resistors needed!
+**⚠️ PC817 Module Resistor Modification:**
+
+The stock PC817 modules include onboard resistors R1 (1kΩ) and R2 (10kΩ), but R1 is too high for reliable operation.
+
+**You MUST modify R1 on the motor control optocoupler (channel #1):**
+- Add 330Ω resistor in parallel with existing 1kΩ R1
+- This provides proper drive current (13.3mA) for phototransistor saturation
+- Without this: motor control will be unreliable or non-functional
+
+**Coin pulse optocouplers (channels #2, #3, #4) can use stock resistors** - they don't need modification for input sensing.
 
 <p align="center">
   <img src="../docs/optocoupler.jpg" alt="PC817 Optocoupler Module (bestep brand)" width="700"/>
@@ -76,7 +154,7 @@ This guide covers the physical hardware assembly for the Remote Token Dispenser 
 
 **Key connections:**
 - **D1 (GPIO5)** → Control output (via PC817 optocoupler #1) - **⚠️ Active LOW: GPIO LOW = motor ON**
-- **D2 (GPIO4)** ← Coin pulse input (via PC817 optocoupler #2) - **Active LOW**
+- **D7 (GPIO13)** ← Coin pulse input (via PC817 optocoupler #2) - **Active LOW**
 - **D5 (GPIO14)** ← Error signal input (via PC817 optocoupler #3) - **Active LOW**
 - **D6 (GPIO12)** ← Empty sensor input (via PC817 optocoupler #4) - **Active LOW**
 - **GND** → Common ground (essential for all circuits!)
@@ -93,7 +171,7 @@ This guide covers the physical hardware assembly for the Remote Token Dispenser 
 
 **Used pins (highlighted in red):**
 - **D1 (GPIO5)** - Control output (via PC817 optocoupler #1) - **Active LOW**
-- **D2 (GPIO4)** - Coin pulse interrupt input (via PC817 optocoupler #2) - **Active LOW**
+- **D7 (GPIO13)** - Coin pulse interrupt input (via PC817 optocoupler #2) - **Active LOW**
 - **D5 (GPIO14)** - Error signal input (via PC817 optocoupler #3) - **Active LOW**
 - **D6 (GPIO12)** - Empty sensor input (via PC817 optocoupler #4) - **Active LOW**
 
@@ -121,13 +199,28 @@ This guide covers the physical hardware assembly for the Remote Token Dispenser 
 
 ### Step 1: Configure the Hopper
 
-The Azkoyen Hopper U-II must be configured in **PULSES** mode:
+The Azkoyen Hopper U-II has DIP switches that MUST be configured correctly.
 
-1. Open the hopper (4 screws on top panel)
-2. Locate the DIP switches inside (usually near the motor)
-3. Set to **PULSES** mode (30ms pulse per coin)
-   - Refer to [Azkoyen U-II manual](https://www.casino-software.de/download/hopper-azkoyen-u2-manual.pdf) for exact switch positions
-4. Close and test manually (should click 30ms per coin)
+**Required settings:**
+
+1. **Control Mode: NEGATIVE (CRITICAL!)**
+   - Switch labeled "NEGATIVE/POSITIVE" or "POLARITY" → set to **NEGATIVE**
+   - This makes control pin active LOW (LOW = motor ON)
+   - Wrong setting causes inverted motor behavior
+
+2. **Coin Detection Mode: PULSES**
+   - Switch for coin sensing mode → set to **PULSES**
+   - Provides 30ms pulse per coin dispensed
+   - Refer to [Azkoyen U-II manual](https://www.casino-software.de/download/hopper-azkoyen-u2-manual.pdf) for switch positions
+
+**How to configure:**
+1. Open hopper (4 screws on top panel)
+2. Locate DIP switches inside (usually near motor)
+3. Set switches per table above
+4. Test manually: hopper should click 30ms per coin
+5. Close hopper
+
+**⚠️ WARNING:** If motor engages at wrong times or doesn't engage during dispense, check NEGATIVE mode setting first!
 
 ### Step 2: Wire the Power Supply
 
@@ -154,10 +247,10 @@ The Azkoyen Hopper U-II must be configured in **PULSES** mode:
    - Connect module grounds appropriately (galvanic isolation!)
    - **Logic:** D1 LOW = optocoupler ON = motor runs
 
-2. **Coin pulse input (Hopper Coin → PC817 #2 → D2):**
+2. **Coin pulse input (Hopper Coin → PC817 #2 → D7):**
    - Connect Hopper "Coin" pin → PC817 module #2 input side (with 12V)
-   - Connect PC817 module #2 output → D2 (GPIO4)
-   - Use FALLING edge interrupt on D2
+   - Connect PC817 module #2 output → D7 (GPIO13)
+   - Use FALLING edge interrupt on D7
    - **Signal is active LOW** (optocoupler inverts)
 
 3. **Error signal input (Hopper Error → PC817 #3 → D5):**
@@ -240,7 +333,7 @@ Before powering everything on:
 
 ### Pulse count doesn't increment
 
-- **Check:** D2 connection via PC817 module #2
+- **Check:** D7 connection via PC817 module #2
 - **Check:** Optocoupler output goes LOW when coin pulse detected
 - **Check:** Hopper is configured in PULSES mode (not LEVEL)
 - **Check:** Firmware interrupt is configured for FALLING edge
@@ -258,6 +351,76 @@ Before powering everything on:
 - **Check:** Power supply has sufficient current (2A minimum)
 - **Check:** Capacitor is present and functional
 - **Check:** ESP8266 has separate power source (not sharing 12V)
+
+---
+
+## 🔧 Troubleshooting: Motor Control Issues
+
+### Motor doesn't engage during dispense (or engages at wrong time)
+
+**Symptom:** Motor starts AFTER dispense timeout instead of during dispense request, or never engages.
+
+**Root cause:** Hopper DIP switch set to POSITIVE mode instead of NEGATIVE mode.
+
+**Fix:**
+1. Open hopper and check DIP switch labeled "NEGATIVE/POSITIVE"
+2. Set to **NEGATIVE** position
+3. Test: motor should engage immediately when dispense is triggered
+
+**How to verify:**
+- Measure hopper control pin (7) during dispense:
+  - Should go LOW (~0V) when motor should run
+  - Should stay HIGH (~6-12V) when motor should be off
+- If inverted (HIGH when should run), hopper is in POSITIVE mode
+
+---
+
+### Motor control unreliable / inconsistent operation
+
+**Symptoms:**
+- Motor sometimes engages, sometimes doesn't
+- Measured voltages on optocoupler OUT are wrong:
+  - LED ON: OUT = 3-7V (should be < 0.5V)
+  - LED OFF: OUT = 2-6V (should be 10-12V without hopper, 6V with hopper)
+
+**Root cause:** PC817 optocoupler R1 (input resistor) is too high (1kΩ stock value).
+
+**Fix:**
+1. Locate R1 on motor control optocoupler module (channel #1)
+2. Solder 330Ω resistor in parallel with R1
+3. Verify with multimeter: resistance between IN+ and IN- should be ~250Ω
+
+**Expected voltages after fix:**
+- LED ON: OUT < 0.2V (motor engages reliably)
+- LED OFF: OUT ~6V with hopper connected (motor off reliably)
+
+**Technical explanation:**
+- Stock R1 = 1kΩ provides only 3.3mA input current (3.3V / 1kΩ)
+- PC817 needs 10-20mA for proper saturation
+- Adding 330Ω in parallel: (1kΩ || 330Ω) = 248Ω → 13.3mA ✓
+
+---
+
+### Optocoupler LED is bright but motor doesn't respond
+
+**Symptom:** Input LED on optocoupler module is bright red, but OUT voltage doesn't drop low enough.
+
+**Root cause:** Input current is good, but output pull-up (R2) may be too strong, or hopper input impedance is loading the output.
+
+**Fix:**
+1. Verify R1 modification is correct (330Ω in parallel)
+2. Remove any extra parallel resistors from R2 (should be 10kΩ only)
+3. Measure OUT to GND with hopper connected:
+   - LED ON: Should be < 0.5V
+   - LED OFF: Will be ~6V (this is normal with hopper's input impedance)
+
+**Why 6V is OK for HIGH:**
+- Hopper input has ~10kΩ impedance to ground
+- Creates voltage divider with R2 (10kΩ pull-up): 12V × (10kΩ / 20kΩ) = 6V
+- NEGATIVE mode threshold: > 4V = HIGH (per protocol section 2.1), so 6V is well above ✓
+- Official spec: 4V to Vcc ±10% qualifies as HIGH
+
+**Reference:** `docs/azkoyen-hopper-protocol.md` section 2.1 for voltage thresholds
 
 ---
 
@@ -293,7 +456,7 @@ Before deploying your token dispenser:
 - [ ] Common ground connected on both sides of optocouplers
 - [ ] PC817 optocoupler modules installed (4× total, bestep brand)
 - [ ] D1 (GPIO5) → PC817 #1 → Hopper Control pin (inverted: LOW = ON)
-- [ ] D2 (GPIO4) ← PC817 #2 ← Hopper Coin (active LOW)
+- [ ] D7 (GPIO13) ← PC817 #2 ← Hopper Coin (active LOW)
 - [ ] D5 (GPIO14) ← PC817 #3 ← Hopper Error (active LOW)
 - [ ] D6 (GPIO12) ← PC817 #4 ← Hopper Empty (active LOW)
 - [ ] All connections visually inspected and tested with multimeter
