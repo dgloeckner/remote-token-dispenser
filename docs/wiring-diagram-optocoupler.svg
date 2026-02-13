@@ -32,7 +32,7 @@
   <rect x="280" y="510" width="240" height="160" rx="8" fill="#7f1d1d" stroke="#991b1b" stroke-width="2"/>
   <text x="400" y="530" text-anchor="middle" font-size="11" font-weight="700" fill="#fecaca">⚠️ HOPPER DIP SWITCH: NEGATIVE MODE</text>
   <text x="400" y="550" text-anchor="middle" font-size="8" fill="#fecaca">CRITICAL: Hopper MUST be in NEGATIVE mode</text>
-  <text x="290" y="568" font-size="8" fill="#fecaca">• Control: Active LOW (< 0.5V = ON, > 4V = OFF)</text>
+  <text x="290" y="568" font-size="8" fill="#fecaca">• Control: Active LOW (&lt; 0.5V = ON, &gt; 4V = OFF)</text>
   <text x="290" y="582" font-size="8" fill="#fecaca">• DIP switch: STANDARD + NEGATIVE</text>
   <text x="290" y="596" font-size="8" fill="#fecaca">• Location: Connector #6 on hopper board</text>
   <text x="290" y="616" font-size="7.5" font-weight="700" fill="#fca5a5">WRONG MODE SYMPTOMS:</text>
@@ -141,7 +141,7 @@
   <text x="660" y="193" font-size="7.5" font-weight="700" fill="#fb923c">REQUIRED: Add 330Ω resistor in PARALLEL</text>
   <text x="660" y="206" font-size="7.5" fill="#fbbf24">Result: 248Ω → 13.3mA drive current ✓</text>
   <text x="660" y="222" font-size="7" fill="#fca5a5">Without modification:</text>
-  <text x="660" y="233" font-size="7" fill="#fca5a5">• OUT stays 3-7V (not < 0.5V)</text>
+  <text x="660" y="233" font-size="7" fill="#fca5a5">• OUT stays 3-7V (not &lt; 0.5V)</text>
   <text x="740" y="245" text-anchor="middle" font-size="7" fill="#fca5a5">• Motor control unreliable/broken</text>
 
   <!-- Opto Module 1 -->
@@ -342,8 +342,8 @@
   <text x="56" y="728" font-size="9" fill="#94a3b8">Empty:   GPIO LOW = Hopper empty</text>
   <line x1="50" y1="738" x2="230" y2="738" stroke="#334155" stroke-width="0.5"/>
   <text x="56" y="752" font-size="8" font-weight="700" fill="#fbbf24">Voltage Levels (R1 modified):</text>
-  <text x="56" y="764" font-size="8" fill="#94a3b8">Motor ON:  OUT < 0.5V</text>
-  <text x="56" y="776" font-size="8" fill="#94a3b8">Motor OFF: OUT ~6V (> 4V OK)</text>
+  <text x="56" y="764" font-size="8" fill="#94a3b8">Motor ON:  OUT &lt; 0.5V</text>
+  <text x="56" y="776" font-size="8" fill="#94a3b8">Motor OFF: OUT ~6V (&gt; 4V OK)</text>
 
   <!-- Connector map box -->
   <rect x="850" y="318" width="240" height="100" rx="8" fill="#1e293b" stroke="#334155" stroke-width="1" opacity="0.85"/>
