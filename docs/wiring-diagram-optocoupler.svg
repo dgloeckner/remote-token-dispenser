@@ -26,7 +26,19 @@
 
   <!-- Title -->
   <text x="560" y="32" text-anchor="middle" font-size="17" font-weight="800" fill="#f1f5f9" letter-spacing="-0.3">Azkoyen Hopper U-II ↔ Wemos D1 Mini — Optocoupler Wiring</text>
-  <text x="560" y="50" text-anchor="middle" font-size="11" fill="#64748b">4× PC817 Optokoppler-Module (bestep) · Galvanische Trennung · Invertierte Logik</text>
+  <text x="560" y="50" text-anchor="middle" font-size="11" fill="#64748b">4× PC817 Optocoupler Modules (bestep) · Galvanic Isolation · Normal Logic</text>
+
+  <!-- CRITICAL WARNING BANNER -->
+  <rect x="850" y="440" width="240" height="160" rx="8" fill="#7f1d1d" stroke="#991b1b" stroke-width="2"/>
+  <text x="970" y="460" text-anchor="middle" font-size="11" font-weight="700" fill="#fecaca">⚠️ HOPPER DIP SWITCH: NEGATIVE MODE</text>
+  <text x="970" y="480" text-anchor="middle" font-size="8" fill="#fecaca">CRITICAL: Hopper MUST be in NEGATIVE mode</text>
+  <text x="860" y="498" font-size="8" fill="#fecaca">• Control: Active LOW (< 0.5V = ON, > 4V = OFF)</text>
+  <text x="860" y="512" font-size="8" fill="#fecaca">• DIP switch: STANDARD + NEGATIVE</text>
+  <text x="860" y="526" font-size="8" fill="#fecaca">• Location: Connector #6 on hopper board</text>
+  <text x="860" y="546" font-size="7.5" font-weight="700" fill="#fca5a5">WRONG MODE SYMPTOMS:</text>
+  <text x="860" y="560" font-size="7.5" fill="#fecaca">• Motor doesn't engage during dispense</text>
+  <text x="860" y="572" font-size="7.5" fill="#fecaca">• Motor runs AFTER timeout (inverted)</text>
+  <text x="860" y="590" font-size="7" fill="#94a3b8">Reference: docs/azkoyen-hopper-protocol.md §2.1</text>
 
 
   <!-- ╔══════════════════════════════════════════╗ -->
@@ -48,8 +60,8 @@
   <text x="226" y="193" text-anchor="end" font-size="8" fill="#94a3b8">GPIO5 · OUT</text>
 
   <circle cx="240" cy="265" r="5" fill="#3b82f6"/>
-  <text x="226" y="261" text-anchor="end" font-size="11" font-weight="600" fill="#3b82f6" font-family="monospace">D2</text>
-  <text x="226" y="273" text-anchor="end" font-size="8" fill="#94a3b8">GPIO4 · IN</text>
+  <text x="226" y="261" text-anchor="end" font-size="11" font-weight="600" fill="#3b82f6" font-family="monospace">D7</text>
+  <text x="226" y="273" text-anchor="end" font-size="8" fill="#94a3b8">GPIO13 · IN</text>
 
   <circle cx="240" cy="345" r="5" fill="#f59e0b"/>
   <text x="226" y="341" text-anchor="end" font-size="11" font-weight="600" fill="#f59e0b" font-family="monospace">D5</text>
@@ -120,7 +132,17 @@
 
   <!-- CH1: CONTROL Optocoupler (ESP→Hopper) -->
   <rect x="420" y="130" width="200" height="16" rx="3" fill="#14532d" opacity="0.6"/>
-  <text x="520" y="141" text-anchor="middle" font-size="9" font-weight="700" fill="#4ade80">CH1 · CONTROL OUTPUT — Optokoppler #1 · D1 → Pin 7 ✓</text>
+  <text x="520" y="141" text-anchor="middle" font-size="9" font-weight="700" fill="#4ade80">CH1 · MOTOR CONTROL — Optocoupler #1 · D1 → Pin 7 ✓ (R1 mod required!)</text>
+
+  <!-- R1 MODIFICATION WARNING -->
+  <rect x="650" y="145" width="180" height="95" rx="6" fill="#78350f" stroke="#f97316" stroke-width="2"/>
+  <text x="740" y="163" text-anchor="middle" font-size="9" font-weight="700" fill="#fb923c">⚠️ CRITICAL: R1 MODIFICATION</text>
+  <text x="660" y="180" font-size="7.5" fill="#fbbf24">Stock R1 = 1kΩ (only 3.3mA - TOO LOW!)</text>
+  <text x="660" y="193" font-size="7.5" font-weight="700" fill="#fb923c">REQUIRED: Add 330Ω resistor in PARALLEL</text>
+  <text x="660" y="206" font-size="7.5" fill="#fbbf24">Result: 248Ω → 13.3mA drive current ✓</text>
+  <text x="660" y="222" font-size="7" fill="#fca5a5">Without modification:</text>
+  <text x="660" y="233" font-size="7" fill="#fca5a5">• OUT stays 3-7V (not < 0.5V)</text>
+  <text x="740" y="245" text-anchor="middle" font-size="7" fill="#fca5a5">• Motor control unreliable/broken</text>
 
   <!-- Opto Module 1 -->
   <g filter="url(#shadow)">
@@ -152,9 +174,10 @@
   <line x1="280" y1="185" x2="280" y2="90" stroke="#22c55e" stroke-width="2"/>
   <line x1="280" y1="90" x2="510" y2="90" stroke="#22c55e" stroke-width="2"/>
   <line x1="510" y1="90" x2="510" y2="196" stroke="#22c55e" stroke-width="2"/>
-  <!-- VCC → 12V -->
-  <line x1="550" y1="196" x2="550" y2="155" stroke="#ef4444" stroke-width="1.5"/>
-  <text x="555" y="152" font-size="7" fill="#fca5a5">12V</text>
+  <!-- VCC → 12V (provides pull-up voltage) -->
+  <text x="550" y="188" text-anchor="middle" font-size="8" font-weight="700" fill="#4ade80">✓ 12V</text>
+  <text x="550" y="232" text-anchor="middle" font-size="6" fill="#4ade80">Connect to 12V VCC</text>
+  <text x="550" y="240" text-anchor="middle" font-size="5" fill="#94a3b8">Provides pull-up voltage</text>
   <!-- OUT → Hopper Control (pin 7, now at top row) -->
   <line x1="574" y1="200" x2="740" y2="200" stroke="#22c55e" stroke-width="2"/>
   <line x1="740" y1="200" x2="740" y2="208" stroke="#22c55e" stroke-width="2"/>
@@ -166,7 +189,7 @@
 
   <!-- CH2: COIN Optocoupler (Hopper→ESP) -->
   <rect x="420" y="270" width="200" height="16" rx="3" fill="#1e3a5f" opacity="0.6"/>
-  <text x="520" y="281" text-anchor="middle" font-size="9" font-weight="700" fill="#60a5fa">CH2 · COIN INPUT — Optokoppler #2 · Pin 9 → D2 ✓</text>
+  <text x="520" y="281" text-anchor="middle" font-size="9" font-weight="700" fill="#60a5fa">CH2 · COIN INPUT — Optocoupler #2 · Pin 9 → D7 ✓</text>
 
   <!-- Opto Module 2 (FLIPPED: output on left, input on right) -->
   <g filter="url(#shadow)">
@@ -199,7 +222,7 @@
   <!-- VCC → 3.3V -->
   <line x1="490" y1="336" x2="490" y2="295" stroke="#a78bfa" stroke-width="1.5"/>
   <text x="495" y="292" font-size="7" fill="#c4b5fd">3.3V</text>
-  <!-- OUT → ESP D2 -->
+  <!-- OUT → ESP D7 -->
   <line x1="506" y1="340" x2="350" y2="340" stroke="#3b82f6" stroke-width="2"/>
   <line x1="350" y1="340" x2="350" y2="265" stroke="#3b82f6" stroke-width="2"/>
   <line x1="350" y1="265" x2="249" y2="265" stroke="#3b82f6" stroke-width="2" marker-end="url(#arr-blu-l)"/>
@@ -210,7 +233,7 @@
 
   <!-- CH3: ERROR Optocoupler (Hopper→ESP) -->
   <rect x="420" y="410" width="200" height="16" rx="3" fill="#422006" opacity="0.6"/>
-  <text x="520" y="421" text-anchor="middle" font-size="9" font-weight="700" fill="#fbbf24">CH3 · ERROR INPUT — Optokoppler #3 · Pin 8 → D5 ✓</text>
+  <text x="520" y="421" text-anchor="middle" font-size="9" font-weight="700" fill="#fbbf24">CH3 · ERROR INPUT — Optocoupler #3 · Pin 8 → D5 ✓</text>
 
   <!-- Opto Module 3 (FLIPPED: output on left, input on right) -->
   <g filter="url(#shadow)">
@@ -254,7 +277,7 @@
 
   <!-- CH4: EMPTY Optocoupler (Hopper→ESP) -->
   <rect x="420" y="550" width="200" height="16" rx="3" fill="#431407" opacity="0.6"/>
-  <text x="520" y="561" text-anchor="middle" font-size="9" font-weight="700" fill="#fb923c">CH4 · EMPTY INPUT — Optokoppler #4 · Pin 10 → D6 ✓</text>
+  <text x="520" y="561" text-anchor="middle" font-size="9" font-weight="700" fill="#fb923c">CH4 · EMPTY INPUT — Optocoupler #4 · Pin 10 → D6 ✓</text>
 
   <!-- Opto Module 4 (FLIPPED: output on left, input on right) -->
   <g filter="url(#shadow)">
@@ -304,19 +327,23 @@
   <!-- BOM box -->
   <rect x="40" y="510" width="200" height="120" rx="8" fill="#1e293b" stroke="#334155" stroke-width="1" opacity="0.85"/>
   <text x="56" y="530" font-size="10" font-weight="700" fill="#94a3b8">Bill of Materials</text>
-  <text x="56" y="548" font-size="9" fill="#94a3b8">4× PC817 Optokoppler-Modul</text>
-  <text x="56" y="562" font-size="9" fill="#94a3b8">   (bestep, mit R1+R2 onboard)</text>
-  <text x="56" y="580" font-size="9" fill="#94a3b8">1× 2200µF 25V Elko</text>
-  <text x="56" y="598" font-size="9" fill="#64748b">Keine zusätzlichen Widerstände</text>
-  <text x="56" y="616" font-size="9" fill="#64748b">benötigt!</text>
+  <text x="56" y="548" font-size="9" fill="#94a3b8">4× PC817 Optocoupler Module</text>
+  <text x="56" y="562" font-size="9" fill="#94a3b8">   (bestep, with R1+R2 onboard)</text>
+  <text x="56" y="580" font-size="9" fill="#94a3b8">1× 2200µF 25V capacitor</text>
+  <text x="56" y="598" font-size="9" font-weight="700" fill="#f97316">1× 330Ω resistor (1/4W)</text>
+  <text x="56" y="616" font-size="9" fill="#fb923c">   For R1 mod on Opto #1 ⚠️</text>
 
   <!-- Logic notes box -->
-  <rect x="40" y="640" width="200" height="100" rx="8" fill="#1e293b" stroke="#334155" stroke-width="1" opacity="0.85"/>
-  <text x="56" y="660" font-size="10" font-weight="700" fill="#fbbf24">⚠️ Invertierte Logik!</text>
-  <text x="56" y="680" font-size="9" fill="#94a3b8">Control: GPIO LOW = Hopper AN</text>
-  <text x="56" y="696" font-size="9" fill="#94a3b8">Coin:    GPIO LOW = Münze</text>
-  <text x="56" y="712" font-size="9" fill="#94a3b8">Error:   GPIO LOW = Fehler</text>
-  <text x="56" y="728" font-size="9" fill="#94a3b8">Empty:   GPIO LOW = Leer</text>
+  <rect x="40" y="640" width="200" height="145" rx="8" fill="#1e293b" stroke="#334155" stroke-width="1" opacity="0.85"/>
+  <text x="56" y="660" font-size="10" font-weight="700" fill="#4ade80">✓ Normal Logic (NEGATIVE mode)</text>
+  <text x="56" y="680" font-size="9" fill="#94a3b8">Control: GPIO HIGH = Motor ON</text>
+  <text x="56" y="696" font-size="9" fill="#94a3b8">Coin:    GPIO LOW = Coin pulse</text>
+  <text x="56" y="712" font-size="9" fill="#94a3b8">Error:   GPIO LOW = Error active</text>
+  <text x="56" y="728" font-size="9" fill="#94a3b8">Empty:   GPIO LOW = Hopper empty</text>
+  <line x1="50" y1="738" x2="230" y2="738" stroke="#334155" stroke-width="0.5"/>
+  <text x="56" y="752" font-size="8" font-weight="700" fill="#fbbf24">Voltage Levels (R1 modified):</text>
+  <text x="56" y="764" font-size="8" fill="#94a3b8">Motor ON:  OUT < 0.5V</text>
+  <text x="56" y="776" font-size="8" fill="#94a3b8">Motor OFF: OUT ~6V (> 4V OK)</text>
 
   <!-- Connector map box -->
   <rect x="850" y="318" width="240" height="100" rx="8" fill="#1e293b" stroke="#334155" stroke-width="1" opacity="0.85"/>
@@ -325,7 +352,7 @@
   <text x="866" y="372" font-size="8.5" fill="#94a3b8" font-family="monospace">B: VCC  VCC  GND    Error  Empty</text>
   <line x1="866" y1="380" x2="1070" y2="380" stroke="#334155" stroke-width="0.5"/>
   <text x="866" y="396" font-size="8" fill="#64748b">Pins 7-10: Ctrl(7) Error(8) Coin(9) Empty(10)</text>
-  <text x="866" y="410" font-size="8" fill="#64748b">H Level pin nicht verbunden (N/C)</text>
+  <text x="866" y="410" font-size="8" fill="#64748b">H Level pin not connected (N/C)</text>
 
 
   <!-- ╔══════════════════════════════════════════╗ -->

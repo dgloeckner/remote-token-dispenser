@@ -14,7 +14,11 @@
 
   <!-- Title -->
   <text x="360" y="36" text-anchor="middle" font-size="17" font-weight="800" fill="#f1f5f9" letter-spacing="-0.3">Wemos D1 Mini Pinout Reference</text>
-  <text x="360" y="54" text-anchor="middle" font-size="11" fill="#64748b">Token Dispenser mit PC817 Optokopplern · Invertierte Logik (LOW = aktiv)</text>
+  <text x="360" y="54" text-anchor="middle" font-size="11" fill="#64748b">Token Dispenser with PC817 Optocouplers · Inverted Logic (LOW = active)</text>
+
+  <!-- CRITICAL WARNING BANNER -->
+  <rect x="40" y="62" width="640" height="20" rx="4" fill="#7f1d1d" stroke="#991b1b" stroke-width="1.5"/>
+  <text x="360" y="75" text-anchor="middle" font-size="9" font-weight="700" fill="#fecaca">⚠️ CRITICAL: Hopper DIP switch MUST be NEGATIVE mode | Optocoupler #1 R1 requires 330Ω parallel resistor</text>
 
   <!-- Board -->
   <g filter="url(#shadow)">
@@ -60,11 +64,11 @@
   <text x="192" y="276" text-anchor="end" font-size="11" font-weight="700" fill="#f97316" font-family="monospace">D6</text>
   <text x="192" y="287" text-anchor="end" font-size="9" fill="#fb923c">← Empty (Opto #4)</text>
 
-  <!-- D7 -->
-  <circle cx="248" cy="315" r="5" fill="#475569"/>
-  <line x1="243" y1="315" x2="200" y2="315" stroke="#475569" stroke-width="1.5"/>
-  <text x="192" y="312" text-anchor="end" font-size="11" font-weight="600" fill="#94a3b8" font-family="monospace">D7</text>
-  <text x="192" y="323" text-anchor="end" font-size="9" fill="#64748b">GPIO13</text>
+  <!-- D7 ★ Coin IN via Opto #2 -->
+  <circle cx="248" cy="315" r="6" fill="#3b82f6"/>
+  <line x1="243" y1="315" x2="200" y2="315" stroke="#3b82f6" stroke-width="1.8"/>
+  <text x="192" y="312" text-anchor="end" font-size="11" font-weight="700" fill="#3b82f6" font-family="monospace">D7</text>
+  <text x="192" y="323" text-anchor="end" font-size="9" fill="#60a5fa">← Coin (Opto #2)</text>
 
   <!-- D8 -->
   <circle cx="248" cy="351" r="5" fill="#475569"/>
@@ -94,14 +98,15 @@
   <!-- D1 ★ Control OUT via Opto #1 -->
   <circle cx="472" cy="207" r="6" fill="#22c55e"/>
   <line x1="478" y1="207" x2="520" y2="207" stroke="#22c55e" stroke-width="1.8"/>
-  <text x="528" y="204" font-size="11" font-weight="700" fill="#22c55e" font-family="monospace">D1</text>
+  <text x="528" y="204" font-size="11" font-weight="700" fill="#22c55e" font-family="monospace">D1 ⚠️</text>
   <text x="528" y="215" font-size="9" fill="#4ade80">→ Control (Opto #1)</text>
+  <text x="528" y="226" font-size="7" fill="#fb923c">R1 mod required!</text>
 
-  <!-- D2 ★ Coin IN via Opto #2 -->
-  <circle cx="472" cy="243" r="6" fill="#3b82f6"/>
-  <line x1="478" y1="243" x2="520" y2="243" stroke="#3b82f6" stroke-width="1.8"/>
-  <text x="528" y="240" font-size="11" font-weight="700" fill="#3b82f6" font-family="monospace">D2</text>
-  <text x="528" y="251" font-size="9" fill="#60a5fa">← Coin (Opto #2)</text>
+  <!-- D2 -->
+  <circle cx="472" cy="243" r="5" fill="#475569"/>
+  <line x1="478" y1="243" x2="520" y2="243" stroke="#475569" stroke-width="1.5"/>
+  <text x="528" y="240" font-size="11" font-weight="600" fill="#94a3b8" font-family="monospace">D2</text>
+  <text x="528" y="251" font-size="9" fill="#64748b">GPIO4</text>
 
   <!-- D3 -->
   <circle cx="472" cy="279" r="5" fill="#475569"/>
@@ -143,5 +148,5 @@
   <text x="512" y="491" font-size="9.5" fill="#fca5a5">Power</text>
   <circle cx="570" cy="487" r="5" fill="#a78bfa"/>
   <text x="582" y="491" font-size="9.5" fill="#c4b5fd">3.3V</text>
-  <text x="628" y="491" font-size="9" fill="#fbbf24">⚠ LOW=aktiv</text>
+  <text x="625" y="491" font-size="9" fill="#fb923c">⚠️ = Modification</text>
 </svg>
