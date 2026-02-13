@@ -28,18 +28,6 @@
   <text x="560" y="32" text-anchor="middle" font-size="17" font-weight="800" fill="#f1f5f9" letter-spacing="-0.3">Azkoyen Hopper U-II ↔ Wemos D1 Mini — Optocoupler Wiring</text>
   <text x="560" y="50" text-anchor="middle" font-size="11" fill="#64748b">4× PC817 Optocoupler Modules (bestep) · Galvanic Isolation · Normal Logic</text>
 
-  <!-- CRITICAL WARNING BANNER -->
-  <rect x="280" y="510" width="240" height="160" rx="8" fill="#7f1d1d" stroke="#991b1b" stroke-width="2"/>
-  <text x="400" y="530" text-anchor="middle" font-size="11" font-weight="700" fill="#fecaca">⚠️ HOPPER DIP SWITCH: NEGATIVE MODE</text>
-  <text x="400" y="550" text-anchor="middle" font-size="8" fill="#fecaca">CRITICAL: Hopper MUST be in NEGATIVE mode</text>
-  <text x="290" y="568" font-size="8" fill="#fecaca">• Control: Active LOW (&lt; 0.5V = ON, &gt; 4V = OFF)</text>
-  <text x="290" y="582" font-size="8" fill="#fecaca">• DIP switch: STANDARD + NEGATIVE</text>
-  <text x="290" y="596" font-size="8" fill="#fecaca">• Location: Connector #6 on hopper board</text>
-  <text x="290" y="616" font-size="7.5" font-weight="700" fill="#fca5a5">WRONG MODE SYMPTOMS:</text>
-  <text x="290" y="630" font-size="7.5" fill="#fecaca">• Motor doesn't engage during dispense</text>
-  <text x="290" y="642" font-size="7.5" fill="#fecaca">• Motor runs AFTER timeout (inverted)</text>
-  <text x="290" y="660" font-size="7" fill="#94a3b8">Reference: docs/azkoyen-hopper-protocol.md §2.1</text>
-
 
   <!-- ╔══════════════════════════════════════════╗ -->
   <!-- ║           ESP8266 BOX (left)              ║ -->
@@ -133,16 +121,6 @@
   <!-- CH1: CONTROL Optocoupler (ESP→Hopper) -->
   <rect x="420" y="130" width="200" height="16" rx="3" fill="#14532d" opacity="0.6"/>
   <text x="520" y="141" text-anchor="middle" font-size="9" font-weight="700" fill="#4ade80">CH1 · MOTOR CONTROL — Optocoupler #1 · D1 → Pin 7 ✓ (R1 mod required!)</text>
-
-  <!-- R1 MODIFICATION WARNING -->
-  <rect x="650" y="145" width="180" height="95" rx="6" fill="#78350f" stroke="#f97316" stroke-width="2"/>
-  <text x="740" y="163" text-anchor="middle" font-size="9" font-weight="700" fill="#fb923c">⚠️ CRITICAL: R1 MODIFICATION</text>
-  <text x="660" y="180" font-size="7.5" fill="#fbbf24">Stock R1 = 1kΩ (only 3.3mA - TOO LOW!)</text>
-  <text x="660" y="193" font-size="7.5" font-weight="700" fill="#fb923c">REQUIRED: Add 330Ω resistor in PARALLEL</text>
-  <text x="660" y="206" font-size="7.5" fill="#fbbf24">Result: 248Ω → 13.3mA drive current ✓</text>
-  <text x="660" y="222" font-size="7" fill="#fca5a5">Without modification:</text>
-  <text x="660" y="233" font-size="7" fill="#fca5a5">• OUT stays 3-7V (not &lt; 0.5V)</text>
-  <text x="740" y="245" text-anchor="middle" font-size="7" fill="#fca5a5">• Motor control unreliable/broken</text>
 
   <!-- Opto Module 1 -->
   <g filter="url(#shadow)">
