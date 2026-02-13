@@ -84,6 +84,41 @@ Instead of replacing all your legacy coin-operated equipment (expensive and wast
 
 ---
 
+## ⚠️ Before You Start - Critical Setup Requirements
+
+**These configurations are mandatory. Incorrect settings will cause motor control failures:**
+
+### 1. Hopper Configuration: NEGATIVE Mode
+
+The Azkoyen Hopper U-II has a DIP switch for control signal polarity. **It MUST be set to NEGATIVE mode.**
+
+- ✅ Correct: **NEGATIVE** mode (active LOW - control pin LOW = motor ON)
+- ❌ Wrong: POSITIVE mode (causes inverted motor behavior)
+
+**Symptom of wrong mode:** Motor doesn't engage during dispense, or engages at wrong times.
+
+**How to fix:** Open hopper, locate DIP switches, set "NEGATIVE/POSITIVE" switch to NEGATIVE position.
+
+See [hardware/README.md](hardware/README.md#-critical-configuration-requirements) for detailed instructions.
+
+---
+
+### 2. Optocoupler Resistor Modification Required
+
+The PC817 optocoupler modules (bestep brand) require hardware modification for reliable operation.
+
+**What to modify:**
+- Motor control optocoupler (channel #1): Add 330Ω resistor in parallel with R1 (stock 1kΩ)
+- This provides proper 13.3mA drive current for saturation
+
+**Without this modification:**
+- Output voltage won't drop low enough (stays at 3-7V instead of < 0.5V)
+- Motor control unreliable or non-functional
+
+See [hardware/README.md - Electronic Components](hardware/README.md#electronic-components) for modification procedure.
+
+---
+
 ## 🛠️ Hardware Requirements
 
 <p align="center">
@@ -155,12 +190,14 @@ See [firmware/README.md](firmware/README.md) for detailed setup instructions.
 ### 2. Wire Hardware
 
 Connect ESP8266 to Azkoyen Hopper (see [hardware/README.md](hardware/README.md) for complete wiring):
-- **D1** (GPIO5) → Control output (via PC817 optocoupler #1) - **⚠️ Active LOW: GPIO LOW = motor ON**
-- **D2** (GPIO4) ← Coin pulse input (via PC817 optocoupler #2) - **Active LOW**
+- **D1** (GPIO5) → Motor control output (via PC817 optocoupler #1) - **Active LOW** (with NEGATIVE mode)
+  - ⚠️ **Requires optocoupler R1 modification** (330Ω parallel resistor)
+  - Wiring: D1→IN+, so GPIO HIGH = motor ON
+- **D7** (GPIO13) ← Coin pulse input (via PC817 optocoupler #2) - **Active LOW**
 - **D5** (GPIO14) ← Error signal input (via PC817 optocoupler #3) - **Active LOW**
 - **D6** (GPIO12) ← Empty sensor input (via PC817 optocoupler #4) - **Active LOW**
 - **12V supply** → Hopper motor + voltage regulator (separate from ESP)
-- **Galvanic isolation** provided by PC817 modules (no additional resistors needed)
+- **Galvanic isolation** provided by PC817 modules
 
 ### 3. Test API
 
