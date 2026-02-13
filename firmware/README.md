@@ -12,7 +12,35 @@ HTTP-controlled token dispenser firmware for Wemos D1 Mini (ESP8266) controlling
   - ESP8266: 5V via USB or VIN pin
   - Azkoyen Hopper: 12V/2A separate power supply
 - **Isolation:** 4× PC817 optocoupler modules (bestep brand with onboard resistors)
-- **No additional resistors needed** - PC817 modules include current-limiting resistors
+- **Resistor modification required** - See Critical Hardware Configuration below
+
+---
+
+## ⚠️ Critical Hardware Configuration
+
+**Before flashing firmware, verify hardware is configured correctly:**
+
+### 1. Hopper DIP Switch: NEGATIVE Mode
+
+The Azkoyen Hopper U-II **MUST** be in NEGATIVE mode:
+- Control signal: active LOW (< 0.5V = motor ON, > 4V = motor OFF)
+- DIP switch: STANDARD + NEGATIVE configuration
+- If in POSITIVE mode: motor behavior will be inverted
+- **Protocol reference:** `docs/azkoyen-hopper-protocol.md` section 2.1
+- **Setup guide:** [hardware/README.md](../hardware/README.md#-critical-configuration-requirements)
+
+### 2. Optocoupler Resistor Modification
+
+PC817 module #1 (motor control, channel D1) requires resistor modification:
+- Add 330Ω in parallel with R1 (stock 1kΩ) → 248Ω total
+- Provides 13.3mA drive current for proper saturation
+- Without this: motor control unreliable or non-functional
+
+**Firmware assumes:**
+- Hopper in NEGATIVE mode (active LOW control)
+- Optocoupler wiring: D1 → IN+, GND → IN-
+- GPIO HIGH → LED ON → OUT LOW → motor ON
+- GPIO LOW → LED OFF → OUT HIGH → motor OFF
 
 ---
 
@@ -100,24 +128,25 @@ firmware/dispenser/
 // GPIO Pins (Wemos D1 Mini - using D-labels)
 // ⚠️ INVERTED LOGIC: Control LOW = motor ON, inputs LOW = active
 #define MOTOR_PIN          D1    // GPIO5 - Control output via PC817 #1
-#define COIN_PULSE_PIN     D2    // GPIO4 - Coin pulse input via PC817 #2
+#define COIN_PULSE_PIN     D7    // GPIO13 - Coin pulse input via PC817 #2
 #define ERROR_SIGNAL_PIN   D5    // GPIO14 - Error signal input via PC817 #3
 #define HOPPER_LOW_PIN     D6    // GPIO12 - Empty sensor input via PC817 #4
 ```
 
 ### 2. Verify Pin Connections
 
-| ESP8266 Pin | GPIO | Function | Azkoyen Connection |
-|-------------|------|----------|-------------------|
-| D1 | GPIO5 | Control Output | Via PC817 optocoupler #1 (active LOW: LOW = motor ON) |
-| D2 | GPIO4 | Coin Pulse Input | Via PC817 optocoupler #2 (active LOW) |
-| D5 | GPIO14 | Error Signal | Via PC817 optocoupler #3 (active LOW) |
-| D6 | GPIO12 | Empty Sensor | Via PC817 optocoupler #4 (active LOW) |
+| ESP8266 Pin | GPIO | Function | Details |
+|-------------|------|----------|---------|
+| D1 | GPIO5 | Motor Control Output | Via PC817 optocoupler #1. **Wiring: D1→IN+, GND→IN-, VCC→12V**. GPIO HIGH = LED ON = OUT LOW = motor ON (with NEGATIVE mode). **⚠️ Requires R1 modification (330Ω in parallel with 1kΩ stock resistor).** Voltage thresholds: < 0.5V = motor ON, > 4V = motor OFF (protocol section 2.1) |
+| D7 | GPIO13 | Coin Pulse Input | Via PC817 optocoupler #2 (active LOW). FALLING edge interrupt. Stock resistors OK. |
+| D5 | GPIO14 | Error Signal Input | Via PC817 optocoupler #3 (active LOW). Stock resistors OK. |
+| D6 | GPIO12 | Empty Sensor Input | Via PC817 optocoupler #4 (active LOW). Stock resistors OK. |
 
 **Control Logic (Optocoupler-Based):**
-- **Motor control:** `digitalWrite(MOTOR_PIN, LOW)` = motor ON (inverted!)
+- **Motor control:** GPIO HIGH → optocoupler LED ON → OUT LOW (< 0.5V) → motor ON (NEGATIVE mode)
 - **Input signals:** All inputs are active LOW (LOW = signal detected)
 - **Galvanic isolation:** PC817 modules provide electrical isolation between 12V hopper and 3.3V ESP8266
+- **R1 modification critical:** Only motor control optocoupler needs modification for reliable saturation
 
 ---
 
@@ -241,17 +270,45 @@ If you get compilation errors:
 
 Install missing library via Library Manager.
 
-### Motor Not Running
+### Motor Control Issues
 
-- Check D1 → PC817 optocoupler #1 wiring
-- Verify D1 goes **LOW** when dispense starts (inverted logic!)
-- Check PC817 module #1 LED indicator is lit when D1 is LOW
-- Verify 12V power supply to Azkoyen
-- Check optocoupler output side connects to hopper Control pin
+#### Motor doesn't engage during dispense
+
+**Check hardware first:**
+1. Hopper DIP switch set to NEGATIVE mode (not POSITIVE)
+2. Optocoupler R1 modified (330Ω in parallel with 1kΩ)
+3. VCC pin on optocoupler connected to 12V
+
+**Verify with multimeter:**
+- D1 pin HIGH during dispense: should measure 3.3V
+- Optocoupler OUT LOW during dispense: should be < 0.5V to GND
+- Hopper control pin (7) LOW during dispense: should be < 0.5V to GND
+
+**If control pin HIGH when should be LOW:**
+- Hopper is in POSITIVE mode → change DIP switch to NEGATIVE
+
+**If OUT voltage too high (> 1V) when LED ON:**
+- R1 not modified correctly → verify 330Ω parallel resistor
+- Measure IN+ to IN-: should be ~250Ω, not 1kΩ
+
+#### Motor engages at wrong time (after timeout instead of during dispense)
+
+**Cause:** Hopper in POSITIVE mode (active HIGH) instead of NEGATIVE mode (active LOW).
+
+**Fix:** Open hopper, set DIP switch to NEGATIVE, retest.
+
+**Expected behavior with correct configuration:**
+- Dispense triggered → D1 goes HIGH (3.3V)
+- Optocoupler LED turns ON
+- OUT drops to < 0.5V
+- Motor engages immediately
+- Coins dispense with pulses on D7
+
+**See also:** [Motor Control Troubleshooting Guide](../docs/troubleshooting/motor-control-issues.md) for detailed diagnostics
 
 ### Pulse Counting Issues
 
-- Verify D2 connected via PC817 optocoupler #2
+- Verify D7 connected via PC817 optocoupler #2
 - Check PC817 module #2 LED blinks during coin dispense
 - Check pulse mode jumper on Azkoyen (STANDARD + PULSES)
 - Verify interrupt configured for FALLING edge (optocoupler inverts signal)
