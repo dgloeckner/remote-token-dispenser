@@ -43,6 +43,23 @@ Comprehensive system architecture with mermaid diagrams:
 - **Sequence diagrams** - Detailed flow visualization
 - **Deployment** - Physical layout, network topology, data persistence
 
+### azkoyen-hopper-protocol.md ⚠️ CRITICAL REFERENCE
+**Official Azkoyen Hopper U-II parallel protocol specification** extracted from manufacturer documentation:
+- **MUST READ** before modifying hopper control code
+- **Connector pinout** - 10-pin Molex, power/signal assignments
+- **Working modes** - NEGATIVE (required!), POSITIVE, PULSES
+- **Control signal (Pin 7)** - Voltage thresholds, timing requirements
+- **Coin detection (Pin 9)** - Pulse characteristics (30-65ms per coin)
+- **Error codes (Pin 8)** - 7 error types, pulse-encoded reporting
+- **DIP switch configuration** - STANDARD + NEGATIVE mode required
+- **Timing specifications** - Control pulse widths, pulse validation
+- **Electrical specs** - Voltage levels, open collector outputs
+
+**Location:** `docs/azkoyen-hopper-protocol.md`
+**Source:** Official Azkoyen manual (`docs/hopper-protocol.pdf`)
+
+**Why critical:** Violating protocol specs (wrong DIP switch mode, incorrect voltage levels) causes complete motor control failure. Always verify against this document when debugging hopper issues.
+
 ### dispenser-protocol.md
 Defines the WiFi HTTP protocol between Raspberry Pi and ESP8266:
 - **Idempotent transactions** with client-generated `tx_id`
@@ -89,15 +106,47 @@ Transaction fields: `tx_id`, `user_id`, `quantity`, `dispensed`, `state`, `times
 ## Hardware Interfaces
 
 ### ESP8266 ↔ Azkoyen Hopper
-- **Power:** 12V/2A DC adapter with 2200µF capacitor for motor startup surge
-- **Isolation:** 4× PC817 optocoupler modules (bestep brand) for galvanic isolation
-- **Control logic:** INVERTED - GPIO LOW = motor ON, inputs LOW = signal active
-- **Pin assignments:**
-  - D1 (GPIO5) → Control output (via PC817 #1) - active LOW
-  - D2 (GPIO4) ← Coin pulse input (via PC817 #2) - active LOW, FALLING edge interrupt
-  - D5 (GPIO14) ← Error signal input (via PC817 #3) - active LOW
-  - D6 (GPIO12) ← Empty sensor input (via PC817 #4) - active LOW
-- **No additional resistors needed** - PC817 modules include onboard current-limiting resistors
+
+⚠️ **CRITICAL:** See `docs/azkoyen-hopper-protocol.md` for complete Azkoyen protocol specification.
+
+**Power:**
+- 12V/2A DC adapter with 2200µF capacitor for motor startup surge
+
+**Isolation:**
+- 4× PC817 optocoupler modules (bestep brand) for galvanic isolation
+
+**Control Logic:**
+- **Hopper mode:** NEGATIVE (active LOW control - **mandatory DIP switch setting**)
+- **Optocoupler wiring:** D1 → IN+, GND → IN- (not inverted)
+- **Control signal chain:**
+  - GPIO HIGH → Optocoupler LED ON → OUT LOW (< 0.5V) → Motor ON
+  - GPIO LOW → Optocoupler LED OFF → OUT HIGH (~6V) → Motor OFF
+- **Input signals:** All active LOW (coin pulse/error/empty detection)
+
+**Pin Assignments:**
+- **D1 (GPIO5)** → Control output (via PC817 #1)
+  - ⚠️ Requires R1 modification: 330Ω in parallel with stock 1kΩ
+  - Provides 13.3mA drive current for PC817 saturation
+- **D7 (GPIO13)** ← Coin pulse input (via PC817 #2)
+  - Active LOW, FALLING edge interrupt
+  - 30-65ms pulses per coin (PULSES coin mode)
+- **D5 (GPIO14)** ← Error signal input (via PC817 #3)
+  - Active LOW (LOW = error condition)
+- **D6 (GPIO12)** ← Empty sensor input (via PC817 #4)
+  - Active LOW (LOW = NOT empty, HIGH = empty)
+
+**Hopper Connector Pinout (10-pin Molex):**
+- Pins 1, 2, 3: 12V VCC
+- Pins 4, 5, 6: GND
+- Pin 7: Control (motor activation)
+- Pin 8: Error signal output
+- Pin 9: Coin pulse output
+- Pin 10: Empty sensor (optional)
+
+**Critical Requirements:**
+- Hopper DIP switch MUST be set to NEGATIVE mode (see protocol doc section 2.1)
+- PC817 R1 must be modified (330Ω parallel) for reliable operation
+- VCC pin on optocoupler modules MUST be connected to 12V
 
 ### Raspberry Pi ↔ ESP8266
 - **WiFi HTTP**: Pi communicates with ESP8266 over local WiFi network
