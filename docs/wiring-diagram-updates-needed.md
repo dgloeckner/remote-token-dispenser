@@ -17,6 +17,76 @@
 
 ---
 
+## ⚠️ CRITICAL: Fix Existing Errors First
+
+**Before adding new annotations, these existing errors MUST be corrected:**
+
+### wiring-diagram-optocoupler.svg
+
+**Line 311-312: INCORRECT BOM text (German + wrong info)**
+```svg
+<!-- WRONG: -->
+<text x="56" y="598" font-size="9" fill="#64748b">Keine zusätzlichen Widerstände</text>
+<text x="56" y="616" font-size="9" fill="#64748b">benötigt!</text>
+
+<!-- CORRECT: -->
+<text x="56" y="598" font-size="9" fill="#f97316">1× 330Ω resistor (1/4W)</text>
+<text x="56" y="616" font-size="9" fill="#fb923c">   For R1 mod on Opto #1 ⚠️</text>
+```
+
+**Line 156-158: INCORRECT VCC annotation**
+```svg
+<!-- WRONG: -->
+<text x="550" y="188" text-anchor="middle" font-size="8" font-weight="700" fill="#ef4444">✗ NC</text>
+<text x="550" y="232" text-anchor="middle" font-size="6" fill="#fca5a5">Do not connect!</text>
+<text x="550" y="240" text-anchor="middle" font-size="5" fill="#94a3b8">Hopper has internal pull-up</text>
+
+<!-- CORRECT: -->
+<text x="550" y="188" text-anchor="middle" font-size="8" font-weight="700" fill="#ef4444">✓ 12V</text>
+<text x="550" y="232" text-anchor="middle" font-size="6" fill="#4ade80">Connect to 12V VCC</text>
+<text x="550" y="240" text-anchor="middle" font-size="5" fill="#94a3b8">Provides pull-up voltage</text>
+```
+
+**Line 123: Remove "VCC: NC!" from header**
+```svg
+<!-- WRONG: -->
+<text x="520" y="141" text-anchor="middle" font-size="9" font-weight="700" fill="#4ade80">CH1 · MOTOR CONTROL — Optocoupler #1 · D1 → Pin 7 ✓ (VCC: NC!)</text>
+
+<!-- CORRECT: -->
+<text x="520" y="141" text-anchor="middle" font-size="9" font-weight="700" fill="#4ade80">CH1 · MOTOR CONTROL — Optocoupler #1 · D1 → Pin 7 ✓ (R1 mod required!)</text>
+```
+
+**Line 329: German text**
+```svg
+<!-- WRONG: -->
+<text x="866" y="410" font-size="8" fill="#64748b">H Level pin nicht verbunden (N/C)</text>
+
+<!-- CORRECT: -->
+<text x="866" y="410" font-size="8" fill="#64748b">H Level pin not connected (N/C)</text>
+```
+
+### pinout-diagram-optocoupler.svg
+
+**Line 17: German subtitle**
+```svg
+<!-- WRONG: -->
+<text x="360" y="54" text-anchor="middle" font-size="11" fill="#64748b">Token Dispenser mit PC817 Optokopplern · Invertierte Logik (LOW = aktiv)</text>
+
+<!-- CORRECT: -->
+<text x="360" y="54" text-anchor="middle" font-size="11" fill="#64748b">Token Dispenser with PC817 Optocouplers · Inverted Logic (LOW = active)</text>
+```
+
+**Line 146: German legend text**
+```svg
+<!-- WRONG: -->
+<text x="628" y="491" font-size="9" fill="#fbbf24">⚠ LOW=aktiv</text>
+
+<!-- CORRECT: -->
+<text x="628" y="491" font-size="9" fill="#fbbf24">⚠ LOW=active</text>
+```
+
+---
+
 ## Required Annotations for `wiring-diagram-optocoupler.svg`
 
 ### 1. Optocoupler #1 (Motor Control) - R1 Modification Callout
