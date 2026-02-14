@@ -118,12 +118,17 @@ void DispenseManager::loop() {
     Serial.println("[DispenseManager] Dispense COMPLETE!");
     hopperControl.stopMotor();
     active_tx.state = STATE_DONE;
+
+    // Clear active error on successful completion (self-healing)
+    hopperControl.errorHistory.clearActive();
+
     persistActiveTransaction();
     addToHistory(active_tx.tx_id, STATE_DONE, active_tx.quantity, active_tx.dispensed);
     flashStorage.clear();
     memset(&active_tx, 0, sizeof(active_tx));
     active_tx.state = STATE_IDLE;
     successful_count++;
+    Serial.println("[DispenseManager] Dispense complete - active error cleared");
     return;
   }
 
