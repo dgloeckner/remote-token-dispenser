@@ -126,6 +126,10 @@ func (m Model) renderDashboard(w, h int) string {
 	b.WriteString(m.renderLatencyPanel(w - 4))
 	b.WriteString("\n")
 
+	// Error history panel
+	b.WriteString(m.renderErrorHistoryPanel(w - 4))
+	b.WriteString("\n")
+
 	// GPIO debug overlay (if enabled)
 	if m.debugMode {
 		b.WriteString(m.renderGPIODebugPanel(w - 4))
@@ -323,6 +327,42 @@ func (m Model) renderGPIODebugPanel(w int) string {
 
 	content := strings.Join(lines, "\n")
 	return debugPanelStyle.Width(w).Render(content)
+}
+
+func (m Model) renderErrorHistoryPanel(w int) string {
+	var lines []string
+	lines = append(lines, sectionHeader.Render("🚨 Recent Errors (Last 5)"))
+	lines = append(lines, "")
+
+	if m.health == nil || m.health.ErrorHistory == nil || len(m.health.ErrorHistory) == 0 {
+		lines = append(lines, statusOK.Render("  ✓ No errors recorded"))
+	} else {
+		for _, err := range m.health.ErrorHistory {
+			// Status indicator
+			status := "✓"
+			style := statusMuted
+			if !err.Cleared {
+				status = "⚠"
+				if err.Code >= 3 {
+					style = statusError // Critical errors = red
+				} else {
+					style = statusWarning // Sensor errors = yellow
+				}
+			}
+
+			// Format age
+			age := formatAge(time.Now().Unix() - err.Timestamp/1000)
+
+			// Error type
+			typeStr := style.Render(fmt.Sprintf("%-15s", err.Type))
+
+			lines = append(lines, fmt.Sprintf("  %s %s %s",
+				status, typeStr, statusMuted.Render(age)))
+		}
+	}
+
+	content := strings.Join(lines, "\n")
+	return panelStyle.Width(w).Render(content)
 }
 
 // --- Dispense View ---
@@ -779,6 +819,16 @@ func formatDuration(seconds int) string {
 	h := int(d.Hours())
 	m := int(d.Minutes()) % 60
 	return fmt.Sprintf("%dh %dm", h, m)
+}
+
+func formatAge(seconds int64) string {
+	if seconds < 60 {
+		return fmt.Sprintf("%ds ago", seconds)
+	}
+	if seconds < 3600 {
+		return fmt.Sprintf("%dm ago", seconds/60)
+	}
+	return fmt.Sprintf("%dh ago", seconds/3600)
 }
 
 func truncate(s string, max int) string {
