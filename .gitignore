@@ -15,3 +15,4 @@ firmware/dispenser/config.local.h
 # Python virtual environment
 .venv/
 dispenser-client-tui/token-*
+.worktrees/
