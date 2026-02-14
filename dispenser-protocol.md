@@ -1,6 +1,6 @@
 # Token Dispenser HTTP API Reference
 
-**Version:** 1.0.0
+**Version:** 1.1.0
 **Base URL:** `http://<ESP8266_IP>` (default: `http://192.168.4.20`)
 **Authentication:** API Key via `X-API-Key` header
 
@@ -60,8 +60,12 @@ Tokens are **physically dispensed before payment processing**. This ensures:
 - No payment refunds for dispense failures
 - Simple reconciliation (what was dispensed = what is charged)
 
-### 5. Persistent Errors
-Jams and hardware errors persist until manual intervention (power cycle). The dispenser enters `error` state and rejects new requests until reset.
+### 5. Self-Healing Error Recovery
+Hardware errors (from Azkoyen error signal) persist until either:
+- **Manual reset:** Power cycle clears error state
+- **Self-healing:** Successful token dispense automatically clears active error
+
+Jams (timeout-based) always require manual intervention (power cycle). The dispenser enters `error` state and rejects new requests until reset.
 
 ---
 
@@ -94,7 +98,7 @@ The following endpoints do NOT require authentication:
 
 | Type | Format | Description | Example |
 |------|--------|-------------|---------|
-| `tx_id` | string | 8-16 hex characters, client-generated | `"a3f8c012"` |
+| `tx_id` | string | 1-16 character string, client-generated | `"a3f8c012"` |
 | `quantity` | integer | 1-20 tokens | `3` |
 | `state` | enum | `"idle"`, `"dispensing"`, `"done"`, `"error"` | `"dispensing"` |
 | `timestamp` | integer | Seconds since boot (uptime) | `84230` |
@@ -120,14 +124,13 @@ Host: 192.168.4.20
 {
   "status": "ok",
   "uptime": 84230,
-  "firmware": "1.0.0",
+  "firmware": "1.1.0",
   "wifi": {
     "rssi": -47,
     "ip": "192.168.188.243",
     "ssid": "Ponyhof"
   },
   "dispenser": "idle",
-  "hopper_low": false,
   "gpio": {
     "coin_pulse": {"raw": 1, "active": false},
     "error_signal": {"raw": 1, "active": false},
@@ -139,7 +142,59 @@ Host: 192.168.4.20
     "jams": 3,
     "partial": 2,
     "failures": 55
-  }
+  },
+  "error": {
+    "active": false
+  },
+  "error_history": []
+}
+```
+
+**Response (200 OK) - With Active Error:**
+```json
+{
+  "status": "ok",
+  "uptime": 84230,
+  "firmware": "1.1.0",
+  "wifi": {
+    "rssi": -47,
+    "ip": "192.168.188.243",
+    "ssid": "Ponyhof"
+  },
+  "dispenser": "error",
+  "gpio": {
+    "coin_pulse": {"raw": 1, "active": false},
+    "error_signal": {"raw": 0, "active": true},
+    "hopper_low": {"raw": 1, "active": false}
+  },
+  "metrics": {
+    "total_dispenses": 1247,
+    "successful": 1189,
+    "jams": 3,
+    "partial": 2,
+    "failures": 55
+  },
+  "error": {
+    "active": true,
+    "code": 3,
+    "type": "JAM_PERMANENT",
+    "timestamp": 82150,
+    "description": "Permanent jam detected"
+  },
+  "error_history": [
+    {
+      "code": 3,
+      "type": "JAM_PERMANENT",
+      "timestamp": 82150,
+      "cleared": false
+    },
+    {
+      "code": 1,
+      "type": "COIN_STUCK",
+      "timestamp": 75400,
+      "cleared": true
+    }
+  ]
 }
 ```
 
@@ -150,21 +205,32 @@ Host: 192.168.4.20
 | `status` | string | Overall health: `"ok"`, `"degraded"`, `"error"` |
 | `uptime` | integer | Seconds since boot |
 | `firmware` | string | Firmware version |
-| `wifi` | object | WiFi connection info (optional) |
+| `wifi` | object | WiFi connection info |
 | `wifi.rssi` | integer | Signal strength in dBm (-30 to -90) |
 | `wifi.ip` | string | ESP8266 IP address |
 | `wifi.ssid` | string | Connected WiFi network name |
 | `dispenser` | string | Current state: `"idle"`, `"dispensing"`, `"error"` |
-| `hopper_low` | boolean | Low token warning (optical sensor) |
-| `gpio` | object | GPIO pin states (optional) |
-| `gpio.coin_pulse` | object | Coin sensor state |
-| `gpio.error_signal` | object | Error signal state |
-| `gpio.hopper_low` | object | Hopper low sensor state |
+| `gpio` | object | GPIO pin states |
+| `gpio.coin_pulse` | object | Coin sensor state (`raw`: pin value, `active`: interpreted state) |
+| `gpio.error_signal` | object | Error signal state (`raw`: pin value, `active`: interpreted state) |
+| `gpio.hopper_low` | object | Hopper low sensor state (`raw`: pin value, `active`: interpreted state) |
+| `metrics` | object | Dispense metrics |
 | `metrics.total_dispenses` | integer | Total dispense attempts since boot |
 | `metrics.successful` | integer | Completed successfully |
-| `metrics.jams` | integer | Jam errors detected |
+| `metrics.jams` | integer | Jam errors detected (timeout-based) |
 | `metrics.partial` | integer | Partial dispenses (subset of jams) |
 | `metrics.failures` | integer | Total failures (jams + other errors) |
+| `error` | object | Active error information |
+| `error.active` | boolean | Whether an error is currently active |
+| `error.code` | integer | Error code (1-7, see Error Codes section) |
+| `error.type` | string | Error type name (e.g., "JAM_PERMANENT") |
+| `error.timestamp` | integer | Uptime when error was detected |
+| `error.description` | string | Human-readable error description |
+| `error_history` | array | Last 5 error events (newest first) |
+| `error_history[].code` | integer | Error code (1-7) |
+| `error_history[].type` | string | Error type name |
+| `error_history[].timestamp` | integer | Uptime when error was detected |
+| `error_history[].cleared` | boolean | Whether error has been cleared |
 
 **Status Levels:**
 - `"ok"` - Operating normally, dispenser idle or active
@@ -338,7 +404,7 @@ X-API-Key: your-secret-api-key-here
 **Response (404 Not Found) - Unknown transaction:**
 ```json
 {
-  "error": "transaction not found"
+  "error": "not found"
 }
 ```
 
@@ -410,14 +476,25 @@ idle ──POST /dispense──► dispensing ──[success]──► done
 
 **Error State Recovery:**
 
-Errors are **persistent** - the dispenser stays in `error` state until:
-1. Operator physically clears jam
-2. Power cycle (reboot)
-3. On boot, ESP8266 clears `error` state → returns to `idle`
+Errors can be cleared in two ways:
+
+1. **Self-healing (hardware errors only):**
+   - When a successful dispense completes (`dispensing` → `done`)
+   - Active hardware error is automatically cleared
+   - Dispenser returns to `idle` and accepts new requests
+   - This handles transient hardware issues
+
+2. **Manual reset (all errors):**
+   - Operator physically clears jam/issue
+   - Power cycle (reboot) ESP8266
+   - On boot, ESP8266 clears `error` state → returns to `idle`
+   - Required for jam timeouts and persistent hardware faults
 
 ---
 
 ## Error Codes
+
+### HTTP Error Codes
 
 | Status Code | Error | Description | Resolution |
 |-------------|-------|-------------|------------|
@@ -425,10 +502,29 @@ Errors are **persistent** - the dispenser stays in `error` state until:
 | `400` | `invalid url` | Malformed URL path | Check URL format |
 | `400` | `invalid request format` | JSON type mismatch | Check field types |
 | `401` | `unauthorized` | Missing or invalid API key | Add/fix `X-API-Key` header |
-| `404` | `transaction not found` | Unknown `tx_id` | Check tx_id, may have expired |
+| `404` | `not found` | Unknown `tx_id` | Check tx_id, may have expired |
 | `409` | `busy` | Another transaction active | Wait and retry |
 | `409` | `error` (dispenser in error state) | Jam or hardware fault | Clear jam, power cycle |
 | `415` | `content-type must be application/json` | Wrong/missing Content-Type | Set `Content-Type: application/json` |
+
+### Azkoyen Hardware Error Codes
+
+These error codes are reported via the error signal pin (GPIO D5) from the Azkoyen Hopper. See `GET /health` endpoint for active error and error history.
+
+| Code | Type | Description | Cause | Resolution |
+|------|------|-------------|-------|------------|
+| `1` | `COIN_STUCK` | Coin stuck in exit sensor (>65ms) | Token jammed at exit sensor | Clear exit path, power cycle |
+| `2` | `SENSOR_OFF` | Exit sensor stuck OFF | Sensor blocked or misaligned | Clean/adjust sensor, power cycle |
+| `3` | `JAM_PERMANENT` | Permanent jam detected | Hopper mechanism jammed | Clear jam, power cycle |
+| `4` | `MAX_SPAN` | Multiple spans exceeded max time | Motor running too long without dispensing | Check hopper load, power cycle |
+| `5` | `MOTOR_FAULT` | Motor doesn't start | Motor or driver failure | Check 12V power, motor connection |
+| `6` | `SENSOR_FAULT` | Exit sensor disconnected/faulty | Sensor wiring issue | Check sensor connection |
+| `7` | `POWER_FAULT` | Power supply out of range | 12V supply voltage abnormal | Check power supply voltage |
+
+**Error Signal Protocol:**
+- Errors are pulse-encoded: 100ms start pulse + N×10ms pulses (where N = error code)
+- Active errors persist until cleared by successful dispense or power cycle
+- Error history tracks last 5 errors with timestamps and cleared status
 
 ---
 
@@ -565,6 +661,60 @@ If (millis() - last_pulse_time > 5000ms):
 
 ---
 
+### Self-Healing Hardware Error
+
+**Scenario:** Hopper reports transient hardware error (e.g., COIN_STUCK), but clears itself.
+
+**Detection:**
+1. ESP8266 detects error signal from hopper
+2. Error decoder identifies error code (e.g., code 1 = COIN_STUCK)
+3. Error recorded in history with `cleared: false`
+4. Health endpoint reports active error
+
+**Client Response:**
+```bash
+$ curl http://192.168.4.20/health
+{
+  "dispenser": "idle",
+  "error": {
+    "active": true,
+    "code": 1,
+    "type": "COIN_STUCK",
+    "timestamp": 75400,
+    "description": "Coin stuck in exit sensor (>65ms)"
+  }
+}
+```
+
+**Self-Healing:**
+1. Client initiates new dispense transaction
+2. Dispense completes successfully (`dispensing` → `done`)
+3. ESP8266 automatically clears active error
+4. Error marked as `cleared: true` in history
+5. Dispenser continues normal operation
+
+```bash
+$ curl http://192.168.4.20/health
+{
+  "dispenser": "idle",
+  "error": {
+    "active": false
+  },
+  "error_history": [
+    {
+      "code": 1,
+      "type": "COIN_STUCK",
+      "timestamp": 75400,
+      "cleared": true
+    }
+  ]
+}
+```
+
+**Resolution:** No manual intervention required. System self-healed.
+
+---
+
 ## Polling Best Practices
 
 ### During Dispense
@@ -690,21 +840,27 @@ $ curl http://192.168.4.20/health
 - **Framework:** Arduino
 - **Libraries:** ESPAsyncWebServer, ArduinoJson 7.x
 - **Memory:** EEPROM for crash recovery (64 bytes per transaction)
-- **GPIO:** D6 (GPIO12) interrupt for pulse counting
+- **GPIO Pins:**
+  - D1 (GPIO5): Motor control output
+  - D7 (GPIO13): Coin pulse input (FALLING edge interrupt)
+  - D5 (GPIO14): Error signal input
+  - D6 (GPIO12): Hopper low sensor input
 
 ### Ring Buffer
 
 The ESP8266 maintains a ring buffer of the last **8 transactions** for idempotency:
 
 ```cpp
-struct History {
-  char tx_id[8][17];
-  TransactionState states[8];
-  uint8_t index;  // Circular index
+struct HistoryEntry {
+  char tx_id[17];
+  TransactionState state;
+  uint8_t quantity;
+  uint8_t dispensed;
 };
+HistoryEntry history[8];
 ```
 
-When the 9th transaction arrives, it overwrites the oldest entry. Clients should not reuse transaction IDs from more than 8 transactions ago.
+When the 9th transaction arrives, it overwrites the oldest entry. Clients should not reuse transaction IDs from more than 8 transactions ago. The ring buffer stores complete transaction data (state, quantity, dispensed count) to support full idempotency.
 
 ### Flash Persistence Format
 
@@ -746,6 +902,13 @@ All inputs validated:
 ---
 
 ## Changelog
+
+### Version 1.1.0 (2026-02-14)
+- **Error decoding:** Added Azkoyen hardware error code detection (7 error types)
+- **Error history:** Track last 5 errors with timestamps and cleared status
+- **Self-healing:** Successful dispenses automatically clear active hardware errors
+- **Enhanced health endpoint:** Added `error` and `error_history` fields
+- **Improved GPIO monitoring:** Raw and interpreted pin states in `/health`
 
 ### Version 1.0.0 (2025-02-08)
 - Initial API specification
