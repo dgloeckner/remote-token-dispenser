@@ -302,10 +302,10 @@ func (m Model) renderGPIODebugPanel(w int) string {
 		lines = append(lines, fmt.Sprintf("  Error Signal:  raw=%d  %s",
 			gpio.ErrorSignal.Raw, errStatus))
 
-		// Hopper low
-		hopperStatus := statusMuted.Render("○ inactive (not empty)")
+		// Hopper low (optional sensor, threshold varies by hopper settings)
+		hopperStatus := statusMuted.Render("○ above threshold")
 		if gpio.HopperLow.Active {
-			hopperStatus = statusWarning.Render("● ACTIVE (empty)")
+			hopperStatus = statusWarning.Render("● LOW (below threshold)")
 		}
 		lines = append(lines, fmt.Sprintf("  Hopper Low:    raw=%d  %s",
 			gpio.HopperLow.Raw, hopperStatus))
