@@ -29,12 +29,12 @@ enum DecoderState {
 
 class ErrorDecoder {
 private:
-  DecoderState state;
+  volatile DecoderState state;
   volatile unsigned long lastFallTime;  // micros() when pin went LOW
   volatile unsigned long lastPulseTime; // micros() when last pulse ended
   volatile uint8_t pulseCount;          // Number of code pulses counted
-  ErrorCode detectedCode;
-  bool newErrorReady;
+  volatile ErrorCode detectedCode;
+  volatile bool newErrorReady;
 
 public:
   ErrorDecoder();
