@@ -297,6 +297,10 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "r", "R":
 		return m, m.fetchHealth()
+
+	case "d", "D":
+		m.debugMode = !m.debugMode
+		return m, nil
 	}
 
 	// Mode-specific keys

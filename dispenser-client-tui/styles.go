@@ -134,3 +134,26 @@ var (
 			Foreground(colorError).
 			Bold(true)
 )
+
+// WiFi signal strength styles
+var (
+	wifiExcellent = lipgloss.NewStyle().
+			Foreground(colorSuccess).
+			Bold(true)
+
+	wifiGood = lipgloss.NewStyle().
+			Foreground(colorWarning).
+			Bold(true)
+
+	wifiPoor = lipgloss.NewStyle().
+			Foreground(colorError).
+			Bold(true)
+)
+
+// GPIO debug panel style
+var (
+	debugPanelStyle = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(colorSecondary).
+			Padding(0, 1)
+)

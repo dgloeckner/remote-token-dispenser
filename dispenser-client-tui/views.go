@@ -126,6 +126,12 @@ func (m Model) renderDashboard(w, h int) string {
 	b.WriteString(m.renderLatencyPanel(w - 4))
 	b.WriteString("\n")
 
+	// GPIO debug overlay (if enabled)
+	if m.debugMode {
+		b.WriteString(m.renderGPIODebugPanel(w - 4))
+		b.WriteString("\n")
+	}
+
 	// Recent log (last 5 entries)
 	b.WriteString(m.renderRecentLog(w-4, 8))
 
@@ -160,6 +166,14 @@ func (m Model) renderHealthPanel(w int) string {
 
 		// Firmware
 		lines = append(lines, labelStyle.Render("Firmware:")+" "+valueBold.Render(hl.Firmware))
+
+		// WiFi RSSI
+		if hl.WiFi != nil {
+			wifiStr := renderWiFiSignal(hl.WiFi.RSSI)
+			lines = append(lines, labelStyle.Render("WiFi:")+" "+wifiStr)
+		} else {
+			lines = append(lines, labelStyle.Render("WiFi:")+" "+statusMuted.Render("─ unavailable"))
+		}
 
 		// Hopper
 		hopperStr := statusOK.Render("● OK")
@@ -259,6 +273,46 @@ func (m Model) renderLatencyPanel(w int) string {
 
 	content := strings.Join(lines, "\n")
 	return panelStyle.Width(w).Render(content)
+}
+
+func (m Model) renderGPIODebugPanel(w int) string {
+	var lines []string
+	lines = append(lines, sectionHeader.Render("🔧 GPIO Debug")+" "+statusMuted.Render("[D] to hide"))
+	lines = append(lines, "")
+
+	if m.health == nil || m.health.GPIO == nil {
+		lines = append(lines, statusMuted.Render("  GPIO data unavailable"))
+		lines = append(lines, statusMuted.Render("  (Firmware may not support)"))
+	} else {
+		gpio := m.health.GPIO
+
+		// Coin pulse
+		coinStatus := statusMuted.Render("○ inactive")
+		if gpio.CoinPulse.Active {
+			coinStatus = statusError.Render("● ACTIVE")
+		}
+		lines = append(lines, fmt.Sprintf("  Coin Pulse:    raw=%d  %s",
+			gpio.CoinPulse.Raw, coinStatus))
+
+		// Error signal
+		errStatus := statusMuted.Render("○ inactive")
+		if gpio.ErrorSignal.Active {
+			errStatus = statusError.Render("● ACTIVE")
+		}
+		lines = append(lines, fmt.Sprintf("  Error Signal:  raw=%d  %s",
+			gpio.ErrorSignal.Raw, errStatus))
+
+		// Hopper low
+		hopperStatus := statusMuted.Render("○ inactive (not empty)")
+		if gpio.HopperLow.Active {
+			hopperStatus = statusWarning.Render("● ACTIVE (empty)")
+		}
+		lines = append(lines, fmt.Sprintf("  Hopper Low:    raw=%d  %s",
+			gpio.HopperLow.Raw, hopperStatus))
+	}
+
+	content := strings.Join(lines, "\n")
+	return debugPanelStyle.Width(w).Render(content)
 }
 
 // --- Dispense View ---
@@ -480,6 +534,39 @@ func (m Model) renderFooter(w int) string {
 }
 
 // --- Rendering Helpers ---
+
+func renderWiFiSignal(rssi int) string {
+	// 5-bar display: ▂▃▅▆█
+	bars := ""
+	strength := 0
+
+	if rssi >= -50 {
+		bars = "▂▃▅▆█"
+		strength = 5
+	} else if rssi >= -60 {
+		bars = "▂▃▅▆_"
+		strength = 4
+	} else if rssi >= -70 {
+		bars = "▂▃▅__"
+		strength = 3
+	} else if rssi >= -80 {
+		bars = "▂▃___"
+		strength = 2
+	} else {
+		bars = "▂____"
+		strength = 1
+	}
+
+	// Color code based on strength
+	style := wifiPoor
+	if strength >= 4 {
+		style = wifiExcellent
+	} else if strength >= 3 {
+		style = wifiGood
+	}
+
+	return style.Render(bars) + " " + statusMuted.Render(fmt.Sprintf("%d dBm", rssi))
+}
 
 func renderStatusBadge(status string) string {
 	switch status {
