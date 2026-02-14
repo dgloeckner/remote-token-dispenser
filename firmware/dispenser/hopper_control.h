@@ -5,6 +5,8 @@
 
 #include <Arduino.h>
 #include "config.h"
+#include "error_decoder.h"
+#include "error_history.h"
 
 class HopperControl {
 public:
@@ -22,6 +24,11 @@ public:
   uint8_t getErrorSignalRaw();
   bool isErrorSignalActive();
   uint8_t getHopperLowRaw();
+
+  // Error handling
+  ErrorDecoder errorDecoder;
+  ErrorHistory errorHistory;
+  void updateErrorDecoder();  // Call in main loop
 
 private:
   static void IRAM_ATTR handleCoinPulse();
