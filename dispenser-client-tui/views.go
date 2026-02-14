@@ -175,10 +175,10 @@ func (m Model) renderHealthPanel(w int) string {
 			lines = append(lines, labelStyle.Render("WiFi:")+" "+statusMuted.Render("─ unavailable"))
 		}
 
-		// Hopper
-		hopperStr := statusOK.Render("● OK")
+		// Hopper (empty sensor: active=true means NOT empty)
+		hopperStr := statusWarning.Render("⚠ EMPTY")
 		if hl.GPIO != nil && hl.GPIO.HopperLow.Active {
-			hopperStr = statusWarning.Render("⚠ LOW")
+			hopperStr = statusOK.Render("● OK")
 		}
 		lines = append(lines, labelStyle.Render("Hopper:")+" "+hopperStr)
 
@@ -302,12 +302,13 @@ func (m Model) renderGPIODebugPanel(w int) string {
 		lines = append(lines, fmt.Sprintf("  Error Signal:  raw=%d  %s",
 			gpio.ErrorSignal.Raw, errStatus))
 
-		// Hopper low (optional sensor, threshold varies by hopper settings)
-		hopperStatus := statusMuted.Render("○ above threshold")
+		// Hopper empty sensor (photocell at bottom of coin bay)
+		// Signal: LOW (raw=0, active=true) = NOT empty, HIGH = empty
+		hopperStatus := statusWarning.Render("⚠ EMPTY (no coins)")
 		if gpio.HopperLow.Active {
-			hopperStatus = statusWarning.Render("● LOW (below threshold)")
+			hopperStatus = statusOK.Render("○ OK (has coins)")
 		}
-		lines = append(lines, fmt.Sprintf("  Hopper Low:    raw=%d  %s",
+		lines = append(lines, fmt.Sprintf("  Hopper Empty:  raw=%d  %s",
 			gpio.HopperLow.Raw, hopperStatus))
 	}
 
