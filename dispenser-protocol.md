@@ -121,13 +121,24 @@ Host: 192.168.4.20
   "status": "ok",
   "uptime": 84230,
   "firmware": "1.0.0",
+  "wifi": {
+    "rssi": -47,
+    "ip": "192.168.188.243",
+    "ssid": "Ponyhof"
+  },
   "dispenser": "idle",
   "hopper_low": false,
+  "gpio": {
+    "coin_pulse": {"raw": 1, "active": false},
+    "error_signal": {"raw": 1, "active": false},
+    "hopper_low": {"raw": 1, "active": false}
+  },
   "metrics": {
     "total_dispenses": 1247,
     "successful": 1189,
     "jams": 3,
-    "partial": 2
+    "partial": 2,
+    "failures": 55
   }
 }
 ```
@@ -139,12 +150,21 @@ Host: 192.168.4.20
 | `status` | string | Overall health: `"ok"`, `"degraded"`, `"error"` |
 | `uptime` | integer | Seconds since boot |
 | `firmware` | string | Firmware version |
+| `wifi` | object | WiFi connection info (optional) |
+| `wifi.rssi` | integer | Signal strength in dBm (-30 to -90) |
+| `wifi.ip` | string | ESP8266 IP address |
+| `wifi.ssid` | string | Connected WiFi network name |
 | `dispenser` | string | Current state: `"idle"`, `"dispensing"`, `"error"` |
 | `hopper_low` | boolean | Low token warning (optical sensor) |
+| `gpio` | object | GPIO pin states (optional) |
+| `gpio.coin_pulse` | object | Coin sensor state |
+| `gpio.error_signal` | object | Error signal state |
+| `gpio.hopper_low` | object | Hopper low sensor state |
 | `metrics.total_dispenses` | integer | Total dispense attempts since boot |
 | `metrics.successful` | integer | Completed successfully |
 | `metrics.jams` | integer | Jam errors detected |
 | `metrics.partial` | integer | Partial dispenses (subset of jams) |
+| `metrics.failures` | integer | Total failures (jams + other errors) |
 
 **Status Levels:**
 - `"ok"` - Operating normally, dispenser idle or active

@@ -46,8 +46,10 @@ export TOKEN_DISPENSER_ENDPOINT=http://192.168.4.20
 ### 1. Dashboard (Tab 1)
 - Real-time health monitoring with auto-refresh every 5s
 - ESP8266 status, uptime, firmware version, hopper status
+- **WiFi signal strength with visual bars** (NEW)
 - Dispense metrics: success rate, jams, partial dispenses, failures
 - Latency sparkline with min/avg/max stats
+- **GPIO debug overlay** - toggle with `D` key (NEW)
 - Recent request log
 
 ### 2. Dispense (Tab 2)
@@ -56,15 +58,17 @@ export TOKEN_DISPENSER_ENDPOINT=http://192.168.4.20
 - Live progress bar during dispensing with coin drop animation
 - TX ID tracking, elapsed time, success/error feedback
 
-### 3. Request Log (Tab 3)
+### 3. Test Cycle (Tab 3) - UPDATED
+- **Preset test quantities**: Single (1), Typical (3), Stress (10), Custom (1-20)
+- Live progress bar during test with coin drop animation
+- TX ID tracking, elapsed time, success/error feedback
+- Last test result display with timing
+- Quick health refresh with `H` key
+
+### 4. Request Log (Tab 4)
 - Full request history with timestamps, methods, status codes, latency
 - Scrollable with keyboard navigation
 - Color-coded status: green=2xx, yellow=4xx, red=5xx/errors
-
-### 4. Burst Test (Tab 4)
-- Sequential stress testing (configurable count + tokens per request)
-- Progress tracking with success/failure counts
-- Great for testing jam detection, recovery flows, and reliability
 
 ## Keyboard Shortcuts
 
@@ -72,12 +76,13 @@ export TOKEN_DISPENSER_ENDPOINT=http://192.168.4.20
 |---------|----------------------------------|
 | `1-4`   | Switch tabs                      |
 | `r`     | Force health refresh             |
+| `d/D`   | Toggle GPIO debug overlay (NEW)  |
 | `q`     | Quit                             |
 | `↑/↓`   | Adjust quantity / scroll         |
-| `←/→`   | Adjust burst tokens per request  |
-| `Enter` | Start dispense / burst           |
+| `Enter` | Start dispense / test            |
 | `g/G`   | Jump to top/bottom of log        |
-| `C`     | Clear request log                |
+| `C`     | Clear result / log               |
+| `H`     | Force health refresh (Test tab)  |
 
 ## Dependencies
 
