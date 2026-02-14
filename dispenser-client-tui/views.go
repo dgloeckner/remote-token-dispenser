@@ -302,13 +302,14 @@ func (m Model) renderGPIODebugPanel(w int) string {
 		lines = append(lines, fmt.Sprintf("  Error Signal:  raw=%d  %s",
 			gpio.ErrorSignal.Raw, errStatus))
 
-		// Hopper empty sensor (photocell at bottom of coin bay)
+		// Hopper empty sensor (photocell at bottom of coin bay, OPTIONAL)
 		// Signal: LOW (raw=0, active=true) = NOT empty, HIGH = empty
-		hopperStatus := statusWarning.Render("⚠ EMPTY (no coins)")
+		// Note: Many hoppers don't have this sensor installed
+		hopperStatus := statusWarning.Render("⚠ EMPTY")
 		if gpio.HopperLow.Active {
-			hopperStatus = statusOK.Render("○ OK (has coins)")
+			hopperStatus = statusOK.Render("○ OK")
 		}
-		lines = append(lines, fmt.Sprintf("  Hopper Empty:  raw=%d  %s",
+		lines = append(lines, fmt.Sprintf("  Hopper Empty:  raw=%d  %s (sensor may not be installed)",
 			gpio.HopperLow.Raw, hopperStatus))
 	}
 
