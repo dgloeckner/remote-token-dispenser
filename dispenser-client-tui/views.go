@@ -286,10 +286,10 @@ func (m Model) renderGPIODebugPanel(w int) string {
 	} else {
 		gpio := m.health.GPIO
 
-		// Coin pulse
-		coinStatus := statusMuted.Render("○ inactive")
+		// Coin pulse (active=true is idle/default for active-LOW signal)
+		coinStatus := statusError.Render("● COIN DETECTED")
 		if gpio.CoinPulse.Active {
-			coinStatus = statusError.Render("● ACTIVE")
+			coinStatus = statusMuted.Render("○ idle (default)")
 		}
 		lines = append(lines, fmt.Sprintf("  Coin Pulse:    raw=%d  %s",
 			gpio.CoinPulse.Raw, coinStatus))
