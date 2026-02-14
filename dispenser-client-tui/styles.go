@@ -66,6 +66,10 @@ var (
 	statusMuted = lipgloss.NewStyle().
 			Foreground(colorMuted)
 
+	statusSecondary = lipgloss.NewStyle().
+			Foreground(colorSecondary).
+			Bold(true)
+
 	// Coin art
 	coinStyle = lipgloss.NewStyle().
 			Foreground(colorCoin).

@@ -256,7 +256,29 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.resp.State == "dispensing" {
 			return m, m.pollDispense()
 		}
-		// Done or error - stop polling, refresh health
+
+		// Done or error - record result if test was running
+		if m.test.Running {
+			m.test.Running = false
+			elapsed := time.Since(m.dispense.StartTime)
+			m.test.LastTime = elapsed
+
+			if msg.resp.State == "done" {
+				m.test.LastSuccess = true
+				m.test.LastResult = fmt.Sprintf("✓ Success - %d/%d tokens (%s)",
+					msg.resp.Dispensed, msg.resp.Quantity, elapsed.Truncate(10*time.Millisecond))
+			} else {
+				m.test.LastSuccess = false
+				errMsg := msg.resp.Error
+				if errMsg == "" {
+					errMsg = "unknown error"
+				}
+				m.test.LastResult = fmt.Sprintf("✗ Failed - %s (%d/%d tokens, %s)",
+					errMsg, msg.resp.Dispensed, msg.resp.Quantity, elapsed.Truncate(10*time.Millisecond))
+			}
+		}
+
+		// Refresh health and stop polling
 		return m, m.fetchHealth()
 
 	case testCycleMsg:
@@ -336,9 +358,57 @@ func (m *Model) handleDispenseKeys(key string) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) handleTestKeys(key string) (tea.Model, tea.Cmd) {
-	// TODO: Implement test cycle keyboard handling (Task 9)
-	// Will handle preset selection (1-4 keys), custom quantity adjustment,
-	// and test execution (Enter key)
+	if m.dispense != nil && m.dispense.State == "dispensing" {
+		// Test running, no input allowed
+		return m, nil
+	}
+
+	switch key {
+	case "1":
+		m.test.Preset = 1 // Single token
+	case "2":
+		m.test.Preset = 2 // Typical purchase
+	case "3":
+		m.test.Preset = 3 // Stress test
+	case "4":
+		m.test.Preset = 4 // Custom
+	case "up", "k":
+		if m.test.Preset == 4 && m.test.CustomQty < 20 {
+			m.test.CustomQty++
+		}
+	case "down", "j":
+		if m.test.Preset == 4 && m.test.CustomQty > 1 {
+			m.test.CustomQty--
+		}
+	case "enter":
+		// Start test with selected quantity
+		qty := 0
+		switch m.test.Preset {
+		case 1:
+			qty = 1
+		case 2:
+			qty = 3
+		case 3:
+			qty = 10
+		case 4:
+			qty = m.test.CustomQty
+		}
+
+		if qty > 0 {
+			m.dispQuantity = qty // Set quantity for dispense
+			m.dispense = nil     // Clear previous dispense state
+			m.test.Running = true
+			return m, m.startDispense()
+		}
+	case "c", "C":
+		// Clear last result
+		m.test.LastResult = ""
+		m.test.LastSuccess = false
+		m.test.LastTime = 0
+	case "h", "H":
+		// Force health refresh (useful after errors)
+		return m, m.fetchHealth()
+	}
 	return m, nil
 }
 

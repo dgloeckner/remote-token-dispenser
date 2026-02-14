@@ -84,7 +84,7 @@ func (m Model) renderTabBar(w int) string {
 	}{
 		{"1", "Dashboard", viewDashboard},
 		{"2", "Dispense", viewDispense},
-		{"3", "Test Cycle", viewTest},
+		{"3", "Test", viewTest},
 		{"4", "Log", viewLog},
 	}
 
@@ -416,22 +416,90 @@ func (m Model) renderDispenseProgress() []string {
 	return lines
 }
 
-// --- Burst Test View ---
+// --- Test View ---
 
 func (m Model) renderTestView(w, h int) string {
-	// TODO: Implement test cycle view (Task 8)
-	// Will show preset buttons, custom quantity selector, and last test result
-	var lines []string
+	var b strings.Builder
 
+	if m.dispense != nil && m.dispense.State == "dispensing" {
+		// Show running test with full progress (like dispense tab)
+		var lines []string
+		lines = append(lines, sectionHeader.Render("🧪 Test Running"))
+		lines = append(lines, "")
+		lines = append(lines, m.renderDispenseProgress()...)
+
+		content := strings.Join(lines, "\n")
+		panel := activePanelStyle.Width(w - 4).Render(content)
+		b.WriteString(panel)
+		b.WriteString("\n\n")
+		b.WriteString(m.renderRecentLog(w-4, h-18))
+		return b.String()
+	}
+
+	// Idle state - show test configuration
+	var lines []string
 	lines = append(lines, sectionHeader.Render("🧪 Test Cycle"))
 	lines = append(lines, "")
-	lines = append(lines, statusMuted.Render("  Test view will be implemented in Task 8"))
+	lines = append(lines, statusMuted.Render("  Quick Tests:"))
 	lines = append(lines, "")
+
+	// Preset options
+	presets := []struct {
+		key  string
+		name string
+		qty  int
+	}{
+		{"1", "Single token", 1},
+		{"2", "Typical purchase", 3},
+		{"3", "Stress test", 10},
+		{"4", "Custom", m.test.CustomQty},
+	}
+
+	for i, preset := range presets {
+		selected := (m.test.Preset == i+1)
+		bullet := "  "
+		if selected {
+			bullet = "▶ "
+		}
+
+		line := fmt.Sprintf("%s[%s] %-17s (%d token", bullet, preset.key, preset.name, preset.qty)
+		if preset.qty != 1 {
+			line += "s"
+		}
+		line += ")"
+
+		if selected {
+			if i == 3 { // Custom
+				line += "  " + statusMuted.Render("↑↓ to adjust")
+			}
+			lines = append(lines, valueBold.Render(line))
+		} else {
+			lines = append(lines, line)
+		}
+	}
+
+	lines = append(lines, "")
+	lines = append(lines, fmt.Sprintf("  Press %s to run selected test", keyStyle.Render("ENTER")))
+	lines = append(lines, "")
+
+	// Show last test result if available
+	if m.test.LastResult != "" {
+		lines = append(lines, statusMuted.Render("  ─────────────────────────────────────"))
+		lines = append(lines, "  Last Test Result:")
+		resultStyle := statusOK
+		if !m.test.LastSuccess {
+			resultStyle = statusError
+		}
+		lines = append(lines, "  "+resultStyle.Render(m.test.LastResult))
+	}
 
 	content := strings.Join(lines, "\n")
 	panel := activePanelStyle.Width(w - 4).Render(content)
+	b.WriteString(panel)
+	b.WriteString("\n\n")
+	b.WriteString(m.renderRecentLog(w-4, h-18))
 
-	return panel + "\n\n" + m.renderRecentLog(w-4, h-18)
+	return b.String()
 }
 
 // --- Log View ---
@@ -512,8 +580,11 @@ func (m Model) renderFooter(w int) string {
 		}, pairs...)
 	case viewTest:
 		pairs = append([]struct{ key, desc string }{
-			{"1-4", "preset"},
-			{"⏎", "test"},
+			{"1-4", "select"},
+			{"↑↓", "qty"},
+			{"⏎", "run"},
+			{"C", "clear"},
+			{"H", "health"},
 		}, pairs...)
 	case viewLog:
 		pairs = append([]struct{ key, desc string }{
@@ -526,6 +597,12 @@ func (m Model) renderFooter(w int) string {
 	var parts []string
 	for _, p := range pairs {
 		parts = append(parts, keyStyle.Render(p.key)+" "+descStyle.Render(p.desc))
+	}
+
+	// Add debug mode indicator
+	if m.debugMode {
+		parts = append(parts, statusMuted.Render("│"),
+			statusSecondary.Render("DEBUG ON"))
 	}
 
 	help := strings.Join(parts, statusMuted.Render(" │ "))
