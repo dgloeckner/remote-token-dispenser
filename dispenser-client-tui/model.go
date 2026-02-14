@@ -14,8 +14,8 @@ type viewMode int
 const (
 	viewDashboard viewMode = iota
 	viewDispense
+	viewTest // Renamed from viewBurst
 	viewLog
-	viewBurst
 )
 
 const (
@@ -46,14 +46,14 @@ type DispenseState struct {
 	StartTime time.Time
 }
 
-// BurstState tracks a burst test
-type BurstState struct {
-	Total     int
-	Completed int
-	Succeeded int
-	Failed    int
-	Running   bool
-	Quantity  int // tokens per request
+// TestState tracks a test cycle
+type TestState struct {
+	Preset      int           // 0=custom, 1=single, 2=typical, 3=stress
+	CustomQty   int           // Custom quantity (1-20)
+	Running     bool          // Test in progress
+	LastResult  string        // Last test result message
+	LastSuccess bool          // Last test succeeded
+	LastTime    time.Duration // Last test duration
 }
 
 // Model is the main Bubble Tea model
@@ -77,15 +77,18 @@ type Model struct {
 	dispense     *DispenseState
 	dispQuantity int // quantity selector (1-20)
 
-	// Burst test
-	burst BurstState
+	// Test cycle (replaces burst)
+	test TestState
 
 	// Request log
 	log       []LogEntry
 	logScroll int
 
+	// Debug mode
+	debugMode bool
+
 	// UI state
-	ticker   int // animation frame counter
+	ticker int // animation frame counter
 }
 
 func NewModel(client *DispenserClient) Model {
@@ -95,9 +98,9 @@ func NewModel(client *DispenserClient) Model {
 		dispQuantity:   3,
 		latencySamples: make([]float64, 0, maxLatencySamples),
 		log:            make([]LogEntry, 0, maxLogEntries),
-		burst: BurstState{
-			Total:    10,
-			Quantity: 1,
+		test: TestState{
+			Preset:    2, // Default to "typical purchase"
+			CustomQty: 5,
 		},
 	}
 }
@@ -117,10 +120,10 @@ type dispensePollMsg struct {
 	resp   *DispenseResponse
 	result APIResult
 }
-type burstStepMsg struct {
-	resp   *DispenseResponse
-	result APIResult
-	index  int
+type testCycleMsg struct {
+	success bool
+	message string
+	elapsed time.Duration
 }
 
 // --- Commands ---
@@ -160,26 +163,11 @@ func (m Model) pollDispense() tea.Cmd {
 	})
 }
 
-func (m Model) burstStep(index int) tea.Cmd {
-	qty := m.burst.Quantity
-	return func() tea.Msg {
-		txID := uuid.New().String()[:8]
-		resp, result := m.client.Dispense(txID, qty)
-
-		// If started, poll until done
-		if resp != nil && resp.State == "dispensing" {
-			for i := 0; i < 120; i++ { // max 30s
-				time.Sleep(pollInterval)
-				status, _ := m.client.Status(resp.TxID)
-				if status != nil && status.State != "dispensing" {
-					resp = status
-					break
-				}
-			}
-		}
-
-		return burstStepMsg{resp: resp, result: result, index: index}
-	}
+func (m Model) runTestCycle() tea.Cmd {
+	// TODO: Implement test cycle execution (Task 8)
+	// Will run dispense based on selected preset or custom quantity
+	// and return testCycleMsg with results
+	return nil
 }
 
 // --- Init ---
@@ -271,28 +259,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Done or error - stop polling, refresh health
 		return m, m.fetchHealth()
 
-	case burstStepMsg:
-		m.burst.Completed++
-		if msg.result.Error != nil {
-			m.burst.Failed++
-			m.addLog("POST", "/dispense", msg.result.StatusCode, msg.result.Latency, msg.result.Error.Error(), true)
-		} else {
-			if msg.resp != nil && msg.resp.State == "done" {
-				m.burst.Succeeded++
-			} else {
-				m.burst.Failed++
-			}
-			if msg.resp != nil {
-				m.addLog("POST", "/dispense", 200, msg.result.Latency,
-					fmt.Sprintf("burst[%d] tx=%s state=%s", msg.index+1, msg.resp.TxID, msg.resp.State), false)
-			}
-		}
-
-		// Launch next burst step if more remain
-		if m.burst.Completed < m.burst.Total {
-			return m, m.burstStep(m.burst.Completed)
-		}
-		m.burst.Running = false
+	case testCycleMsg:
+		// TODO: Implement test cycle result handling (Task 10)
+		// Will update m.test.LastResult, LastSuccess, LastTime
+		m.test.Running = false
+		m.test.LastResult = msg.message
+		m.test.LastSuccess = msg.success
+		m.test.LastTime = msg.elapsed
 		return m, m.fetchHealth()
 
 	}
@@ -316,10 +289,10 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.mode = viewDispense
 		return m, nil
 	case "3":
-		m.mode = viewLog
+		m.mode = viewTest
 		return m, nil
 	case "4":
-		m.mode = viewBurst
+		m.mode = viewLog
 		return m, nil
 
 	case "r", "R":
@@ -330,8 +303,8 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch m.mode {
 	case viewDispense:
 		return m.handleDispenseKeys(key)
-	case viewBurst:
-		return m.handleBurstKeys(key)
+	case viewTest:
+		return m.handleTestKeys(key)
 	case viewLog:
 		return m.handleLogKeys(key)
 	}
@@ -358,34 +331,10 @@ func (m *Model) handleDispenseKeys(key string) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m *Model) handleBurstKeys(key string) (tea.Model, tea.Cmd) {
-	if m.burst.Running {
-		return m, nil
-	}
-	switch key {
-	case "up", "k":
-		if m.burst.Total < 50 {
-			m.burst.Total++
-		}
-	case "down", "j":
-		if m.burst.Total > 1 {
-			m.burst.Total--
-		}
-	case "left", "h":
-		if m.burst.Quantity > 1 {
-			m.burst.Quantity--
-		}
-	case "right", "l":
-		if m.burst.Quantity < 10 {
-			m.burst.Quantity++
-		}
-	case "enter":
-		m.burst.Running = true
-		m.burst.Completed = 0
-		m.burst.Succeeded = 0
-		m.burst.Failed = 0
-		return m, m.burstStep(0)
-	}
+func (m *Model) handleTestKeys(key string) (tea.Model, tea.Cmd) {
+	// TODO: Implement test cycle keyboard handling (Task 9)
+	// Will handle preset selection (1-4 keys), custom quantity adjustment,
+	// and test execution (Enter key)
 	return m, nil
 }
 

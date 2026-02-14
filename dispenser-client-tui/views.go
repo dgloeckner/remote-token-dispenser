@@ -41,8 +41,8 @@ func (m Model) View() string {
 		b.WriteString(m.renderDispenseView(w, h-5))
 	case viewLog:
 		b.WriteString(m.renderLogView(w, h-5))
-	case viewBurst:
-		b.WriteString(m.renderBurstView(w, h-5))
+	case viewTest:
+		b.WriteString(m.renderTestView(w, h-5))
 	}
 
 	// Footer help
@@ -84,8 +84,8 @@ func (m Model) renderTabBar(w int) string {
 	}{
 		{"1", "Dashboard", viewDashboard},
 		{"2", "Dispense", viewDispense},
-		{"3", "Log", viewLog},
-		{"4", "Burst Test", viewBurst},
+		{"3", "Test Cycle", viewTest},
+		{"4", "Log", viewLog},
 	}
 
 	var parts []string
@@ -364,57 +364,15 @@ func (m Model) renderDispenseProgress() []string {
 
 // --- Burst Test View ---
 
-func (m Model) renderBurstView(w, h int) string {
+func (m Model) renderTestView(w, h int) string {
+	// TODO: Implement test cycle view (Task 8)
+	// Will show preset buttons, custom quantity selector, and last test result
 	var lines []string
 
-	lines = append(lines, sectionHeader.Render("🔥 Burst Test"))
+	lines = append(lines, sectionHeader.Render("🧪 Test Cycle"))
 	lines = append(lines, "")
-	lines = append(lines, statusMuted.Render("  Sequential dispense requests to stress-test the dispenser"))
+	lines = append(lines, statusMuted.Render("  Test view will be implemented in Task 8"))
 	lines = append(lines, "")
-
-	if m.burst.Running {
-		// Progress
-		pct := 0
-		if m.burst.Total > 0 {
-			pct = m.burst.Completed * 100 / m.burst.Total
-		}
-		barWidth := 40
-		filled := pct * barWidth / 100
-		empty := barWidth - filled
-		bar := progressFilled.Render(strings.Repeat("█", filled)) +
-			progressEmpty.Render(strings.Repeat("░", empty))
-
-		lines = append(lines, fmt.Sprintf("  [%s] %d%%", bar, pct))
-		lines = append(lines, "")
-		lines = append(lines, fmt.Sprintf("  Completed: %s / %d",
-			valueBold.Render(fmt.Sprintf("%d", m.burst.Completed)), m.burst.Total))
-		lines = append(lines, fmt.Sprintf("  Succeeded: %s", statusOK.Render(fmt.Sprintf("%d", m.burst.Succeeded))))
-		lines = append(lines, fmt.Sprintf("  Failed:    %s", statusError.Render(fmt.Sprintf("%d", m.burst.Failed))))
-
-	} else {
-		// Config
-		lines = append(lines, fmt.Sprintf("  Requests:       %s  %s",
-			valueBold.Render(fmt.Sprintf("%-3d", m.burst.Total)),
-			statusMuted.Render("(↑/↓ to adjust)")))
-		lines = append(lines, fmt.Sprintf("  Tokens/request: %s  %s",
-			valueBold.Render(fmt.Sprintf("%-3d", m.burst.Quantity)),
-			statusMuted.Render("(←/→ to adjust)")))
-		lines = append(lines, fmt.Sprintf("  Total tokens:   %s",
-			coinStyle.Render(fmt.Sprintf("%d", m.burst.Total*m.burst.Quantity))))
-		lines = append(lines, "")
-
-		if m.burst.Completed > 0 {
-			// Show last run results
-			lines = append(lines, sectionHeader.Render("  Last Run:"))
-			lines = append(lines, fmt.Sprintf("    Succeeded: %s", statusOK.Render(fmt.Sprintf("%d", m.burst.Succeeded))))
-			lines = append(lines, fmt.Sprintf("    Failed:    %s", statusError.Render(fmt.Sprintf("%d", m.burst.Failed))))
-			successRate := float64(m.burst.Succeeded) / float64(m.burst.Total) * 100
-			lines = append(lines, fmt.Sprintf("    Rate:      %s", valueBold.Render(fmt.Sprintf("%.1f%%", successRate))))
-			lines = append(lines, "")
-		}
-
-		lines = append(lines, fmt.Sprintf("  Press %s to start burst test", keyStyle.Render("ENTER")))
-	}
 
 	content := strings.Join(lines, "\n")
 	panel := activePanelStyle.Width(w - 4).Render(content)
@@ -498,11 +456,10 @@ func (m Model) renderFooter(w int) string {
 			{"↑↓", "qty"},
 			{"⏎", "dispense"},
 		}, pairs...)
-	case viewBurst:
+	case viewTest:
 		pairs = append([]struct{ key, desc string }{
-			{"↑↓", "count"},
-			{"←→", "qty/req"},
-			{"⏎", "start"},
+			{"1-4", "preset"},
+			{"⏎", "test"},
 		}, pairs...)
 	case viewLog:
 		pairs = append([]struct{ key, desc string }{
