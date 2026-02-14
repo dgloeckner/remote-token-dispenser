@@ -8,15 +8,20 @@ This document provides a detailed architectural overview of the remote token/coi
 1. [System Overview](#system-overview)
 2. [Dispense-First, Pay-After Model](#dispense-first-pay-after-model)
 3. [Component Architecture](#component-architecture)
-   - [Hopper Signal Modes](#hopper-signal-modes)
+   - [Hopper Signal Configuration](#hopper-signal-configuration)
 4. [API Endpoints](#api-endpoints)
 5. [Transaction Flows](#transaction-flows)
 6. [State Machines](#state-machines)
-7. [Error Recovery](#error-recovery)
-8. [Maintenance & Monitoring](#maintenance--monitoring)
+7. [Hardware Error Decoding](#hardware-error-decoding)
+   - [Error Signal Protocol](#error-signal-protocol)
+   - [Azkoyen Error Codes](#azkoyen-error-codes)
+   - [Error History Tracking](#error-history-tracking)
+   - [Self-Healing Behavior](#self-healing-behavior)
+8. [Error Recovery](#error-recovery)
+9. [Maintenance & Monitoring](#maintenance--monitoring)
    - [System Monitor Role & Responsibilities](#system-monitor-role--responsibilities)
    - [Recovery Protocols](#recovery-protocols)
-9. [Example Usage: Point-of-Sale Terminal](#example-usage-point-of-sale-terminal)
+10. [Example Usage: Point-of-Sale Terminal](#example-usage-point-of-sale-terminal)
 
 ---
 
@@ -228,13 +233,13 @@ graph TB
         subgraph "Transaction Manager"
             ActiveTx[Active Transaction<br/>In-Memory State]
             History[Ring Buffer<br/>Last 8 Transactions]
-            Timers[Timeout Manager<br/>Reservation TTL]
+            JamWatchdog[Jam Watchdog<br/>5s Timeout Detection]
         end
 
         subgraph "Hardware Controller"
             MotorCtrl[Motor Controller<br/>GPIO Output]
             TokenCounter[Token Counter<br/>GPIO Interrupt]
-            HopperSensor[Hopper Sensor<br/>Low/Empty Detection]
+            ErrorDecoder[Error Decoder<br/>Azkoyen Error Signals]
         end
 
         FlashMgr[Flash Manager<br/>EEPROM/LittleFS]
@@ -247,9 +252,9 @@ graph TB
     ActiveTx --> FlashMgr
     ActiveTx --> MotorCtrl
     TokenCounter --> ActiveTx
-    HopperSensor --> HealthEndpoint
+    ErrorDecoder --> ActiveTx
 
-    Timers -.->|Auto-cancel| ActiveTx
+    JamWatchdog -.->|Timeout error| ActiveTx
 
     style HealthEndpoint fill:#f3e5f5
     style DispenseEndpoint fill:#f3e5f5
@@ -259,108 +264,112 @@ graph TB
     style TokenCounter fill:#e8f5e9
 ```
 
-### Hopper Signal Modes
+### Hopper Signal Configuration
 
-The Azkoyen Hopper U-II supports three signal modes for coin detection, configured via hardware jumpers. This architecture uses **PULSES mode** for optimal ESP8266 integration.
+The Azkoyen Hopper U-II uses two separate signal types that must be configured correctly:
 
-#### Mode Comparison
+#### 1. Motor Control Signal (Pin 7)
 
-**NEGATIVE Mode (Active-LOW Continuous)**
+**Mode:** NEGATIVE (active-LOW)
+**Purpose:** Control when motor runs to dispense tokens
+**Configured via:** DIP switch inside hopper (⚠️ CRITICAL - must be set to NEGATIVE mode)
+
+```mermaid
+sequenceDiagram
+    participant ESP8266
+    participant Optocoupler as PC817 Optocoupler
+    participant Motor as Hopper Motor
+
+    Note over ESP8266: GPIO HIGH (3.3V)
+    ESP8266->>Optocoupler: LED ON (13.3mA)
+    Optocoupler->>Motor: OUT LOW (~0.1V)
+    Note over Motor: Motor ON (dispensing)
+
+    Note over ESP8266: GPIO LOW (0V)
+    ESP8266->>Optocoupler: LED OFF
+    Optocoupler->>Motor: OUT HIGH (~6V)
+    Note over Motor: Motor OFF (stopped)
+```
+
+**Why NEGATIVE Mode:**
+- Matches our optocoupler circuit design (GPIO HIGH → Motor ON)
+- POSITIVE mode would cause inverted behavior (motor runs when it shouldn't)
+- See `docs/azkoyen-hopper-protocol.md` for complete protocol specification
+
+#### 2. Coin Detection Signal (Pin 9)
+
+**Mode:** PULSES
+**Purpose:** Count dispensed tokens
+**Configured via:** Hardware jumpers (set to PULSES mode)
 
 ```mermaid
 sequenceDiagram
     participant Coin
-    participant Signal as Signal Output
+    participant Sensor as Optical Sensor
+    participant ESP8266
 
-    Note over Signal: HIGH (idle state)
-    Coin->>Signal: Coin enters sensor
-    Note over Signal: LOW (active)<br/>Stays LOW while<br/>coin in sensor
-    Coin->>Signal: Coin exits sensor
-    Note over Signal: HIGH (idle state)
+    Note over Sensor: HIGH (idle state)
+    Coin->>Sensor: Token passes through
+    Note over Sensor: LOW pulse<br/>EXACTLY 30-65ms
+    Sensor->>ESP8266: Interrupt triggered
+    ESP8266->>ESP8266: dispensed++
+    Note over Sensor: HIGH (idle state)
 
-    Note right of Signal: Duration varies<br/>by coin speed
+    Note right of ESP8266: One discrete pulse<br/>per token<br/>Independent of<br/>token speed
 ```
 
-Signal goes LOW when coin enters sensor, stays LOW while coin is present, returns HIGH when coin exits.
-
-**POSITIVE Mode (Active-HIGH Continuous)**
-
-```mermaid
-sequenceDiagram
-    participant Coin
-    participant Signal as Signal Output
-
-    Note over Signal: LOW (idle state)
-    Coin->>Signal: Coin enters sensor
-    Note over Signal: HIGH (active)<br/>Stays HIGH while<br/>coin in sensor
-    Coin->>Signal: Coin exits sensor
-    Note over Signal: LOW (idle state)
-
-    Note right of Signal: Duration varies<br/>by coin speed
-```
-
-Signal goes HIGH when coin enters sensor, stays HIGH while coin is present, returns LOW when coin exits.
-
-**PULSES Mode (Fixed 30ms Pulse)**
-
-```mermaid
-sequenceDiagram
-    participant Coin
-    participant Signal as Signal Output
-
-    Note over Signal: HIGH (idle state)
-    Coin->>Signal: Coin detected!
-    Note over Signal: LOW (active)<br/>EXACTLY 30ms
-    Note over Signal: HIGH (idle state)
-
-    Note right of Signal: One discrete pulse<br/>per coin<br/>Independent of<br/>coin speed
-```
-
-Signal generates exactly one 30ms pulse per coin, independent of coin speed or sensor timing.
-
-#### Why PULSES Mode?
-
-This architecture uses PULSES mode because:
+**Why PULSES Mode for Coin Counting:**
 
 **1. Trivial Interrupt Counting**
 ```cpp
 volatile int dispensed = 0;
 
 void IRAM_ATTR onCoinPulse() {
-    dispensed++;  // One pulse = one coin
+    dispensed++;  // One pulse = one token
 }
 ```
 No debouncing, no edge detection complexity, no state tracking.
 
 **2. Unambiguous Counting**
-- 1 pulse = 1 coin. Always. Guaranteed by hopper hardware.
-- No risk of double-counting during coin passage
-- No timing dependencies or coin speed variations
+- 1 pulse = 1 token. Always. Guaranteed by hopper hardware.
+- No risk of double-counting during token passage
+- No timing dependencies or token speed variations
 
 **3. Hardware-Generated Clean Signals**
-- 30ms pulse duration is fixed and validated by hopper
+- 30-65ms pulse duration is fixed and validated by hopper
 - No noise or bouncing issues
 - No debounce logic required in firmware
 
 **4. Minimal CPU Overhead**
-- One interrupt per coin
+- One interrupt per token
 - Simple increment operation
 - No continuous signal monitoring needed
 
 **5. Predictable Timing**
-- Known 30ms pulse duration for validation/debugging
+- Known pulse duration for validation/debugging
 - Easy to detect jam conditions (no pulse within 5s timeout)
 
-**Alternative Modes Trade-offs:**
+#### Alternative Coin Detection Modes
 
-POSITIVE/NEGATIVE modes exist for:
+**NEGATIVE Mode (Active-LOW Continuous):** Signal goes LOW when token enters sensor, stays LOW while token is present, returns HIGH when token exits. Duration varies by token speed.
+
+**POSITIVE Mode (Active-HIGH Continuous):** Signal goes HIGH when token enters sensor, stays HIGH while token is present, returns LOW when token exits. Duration varies by token speed.
+
+**Why we don't use continuous modes for counting:**
+- Require debouncing logic
+- Token speed affects signal timing
+- Risk of double-counting if token moves slowly
+- More complex interrupt handling
+
+These modes exist for:
 - PLC integration preferring level-based signals
-- Systems requiring continuous feedback during coin passage
+- Systems requiring continuous feedback during token passage
 - Legacy systems with specific signal requirements
 
-For microcontroller-based systems (ESP8266, Arduino, etc.), PULSES mode is the superior choice due to its simplicity and reliability.
-
-**Configuration:** Set hopper jumpers to **STANDARD + PULSES** mode for this architecture.
+**Configuration Summary:**
+- **Motor Control (Pin 7):** DIP switch set to **NEGATIVE mode** (⚠️ CRITICAL)
+- **Coin Counting (Pin 9):** Jumpers set to **PULSES mode**
+- See `docs/azkoyen-hopper-protocol.md` for detailed specifications
 
 ---
 
@@ -393,49 +402,57 @@ Returns ESP8266 health status and accumulated error metrics for monitoring.
 
 **No authentication required** - open for monitoring systems.
 
+> **📘 Complete API Reference:** For full response format including all fields (`wifi`, `gpio`, `error`, `error_history`), see **[dispenser-protocol.md](dispenser-protocol.md#get-health)**.
+
 **Request:**
 ```http
 GET /health HTTP/1.1
 Host: 192.168.x.20
 ```
 
-**Response (200 OK):**
+**Response Overview:**
 ```json
 {
-  "status": "ok",              // "ok", "degraded", "error"
-  "uptime": 84230,             // Seconds since boot
-  "firmware": "1.2.0",         // Firmware version
-  "dispenser": "idle",         // Current state: "idle", "dispensing", "error"
-  "hopper_low": false,         // Low token warning
-
+  "status": "ok",
+  "uptime": 84230,
+  "firmware": "<version>",
+  "dispenser": "idle",
+  "wifi": { ... },
+  "gpio": { ... },
   "metrics": {
-    "total_dispenses": 1247,   // Total dispense attempts since boot
-    "successful": 1189,        // Completed successfully (count matched)
-    "jams": 3,                 // Jam errors (timeout during dispense)
-    "partial": 2,              // Partial dispenses (some tokens, then error)
-    "failures": 53,            // Other failures (e.g., busy conflicts)
-    "last_error": "2025-02-07T14:23:00Z",  // ISO timestamp of last error
-    "last_error_type": "jam"   // Type of last error
+    "total_dispenses": 1247,
+    "successful": 1189,
+    "jams": 3,
+    "partial": 2,
+    "failures": 53
   },
-
-  "active_tx": {               // Only present if dispenser not idle
-    "tx_id": "abc123",
-    "quantity": 3,
-    "dispensed": 1
-  }
+  "error": {
+    "active": false
+  },
+  "error_history": [ ... ]
 }
 ```
+
+**Key Response Fields:**
+- `dispenser`: Current state (`"idle"`, `"dispensing"`, `"error"`)
+- `metrics`: Cumulative statistics since boot
+- `error`: Active hardware error information (if any)
+- `error_history`: Last 5 error events with timestamps
+- `gpio`: Real-time GPIO pin states for diagnostics
+- `wifi`: Network connection information
 
 **Purpose:**
 - System Monitor polls this every 60s
 - Tracks reliability over time (success rate = successful / total_dispenses)
 - Detects increasing jam rates requiring maintenance
 - Reports comprehensive health to external monitoring (healthchecks.io)
+- Provides hardware error diagnostics via error decoding
 
 **Example Derived Metrics:**
-- **Success rate**: `successful / total_dispenses` (95.4% in example above)
-- **Jam rate**: `jams / total_dispenses` (0.24%)
+- **Success rate**: `successful / total_dispenses`
+- **Jam rate**: `jams / total_dispenses`
 - **Recent reliability**: Track deltas between polls to detect degradation
+- **Active errors**: Check `error.active` for current faults
 
 **Status Levels:**
 - `"ok"`: Operating normally, no active errors
@@ -632,6 +649,188 @@ stateDiagram-v2
 
 ---
 
+## Hardware Error Decoding
+
+The system includes real-time decoding of Azkoyen Hopper error signals transmitted via Pin 8 (error signal). The hopper uses pulse-encoded error codes to communicate hardware faults.
+
+### Error Signal Protocol
+
+The Azkoyen Hopper reports errors using a pulse-encoded protocol:
+
+```mermaid
+sequenceDiagram
+    participant Hopper
+    participant ESP8266 as ESP8266 Error Decoder
+
+    Note over Hopper: Error condition detected<br/>(e.g., coin stuck)
+
+    Hopper->>ESP8266: Start pulse (100ms LOW)
+    Note over ESP8266: Decoder enters START_PULSE state
+
+    Hopper->>ESP8266: Code pulse 1 (10ms LOW)
+    Note over ESP8266: pulseCount = 1
+
+    Hopper->>ESP8266: Code pulse 2 (10ms LOW)
+    Note over ESP8266: pulseCount = 2
+
+    Hopper->>ESP8266: Code pulse 3 (10ms LOW)
+    Note over ESP8266: pulseCount = 3
+
+    Note over Hopper: End of sequence (200ms timeout)
+
+    Note over ESP8266: Decode: 3 pulses = JAM_PERMANENT<br/>Record in error history
+```
+
+**Pulse Timing:**
+- **Start pulse:** 100ms ±10% (90-110ms) LOW signal
+- **Code pulses:** 10ms ±20% (8-12ms) LOW signals
+- **Sequence timeout:** 200ms after last pulse
+- **Error code:** Number of code pulses (1-7)
+
+### Azkoyen Error Codes
+
+| Code | Type | Description | Typical Cause | Resolution |
+|------|------|-------------|---------------|------------|
+| 1 | `COIN_STUCK` | Token stuck in exit sensor (>65ms) | Token jammed at exit path | Clear exit, power cycle |
+| 2 | `SENSOR_OFF` | Exit sensor stuck OFF | Sensor blocked or misaligned | Clean/adjust sensor |
+| 3 | `JAM_PERMANENT` | Permanent jam detected | Hopper mechanism jammed | Clear jam, power cycle |
+| 4 | `MAX_SPAN` | Multiple spans exceeded max time | Motor running too long | Check hopper load |
+| 5 | `MOTOR_FAULT` | Motor doesn't start | Motor or driver failure | Check 12V power |
+| 6 | `SENSOR_FAULT` | Exit sensor disconnected/faulty | Sensor wiring issue | Check connections |
+| 7 | `POWER_FAULT` | Power supply out of range | 12V supply voltage abnormal | Check power supply |
+
+### Error History Tracking
+
+The ESP8266 maintains a circular buffer of the last 5 error events:
+
+```cpp
+struct ErrorRecord {
+  ErrorCode code;        // 1-7 (error type)
+  uint32_t timestamp;    // Uptime when detected
+  bool cleared;          // Whether error was resolved
+};
+```
+
+**Error Lifecycle:**
+
+```mermaid
+stateDiagram-v2
+    [*] --> Detected: Error signal decoded
+
+    Detected --> Active: Recorded in history<br/>cleared=false
+
+    Active --> Cleared: Successful dispense<br/>OR power cycle
+
+    Cleared --> [*]: Updated in history<br/>cleared=true
+
+    note right of Active
+        Visible in GET /health
+        error.active = true
+        Prevents new dispenses
+    end note
+
+    note right of Cleared
+        Kept in error_history
+        error.active = false
+        System operational
+    end note
+```
+
+### Self-Healing Behavior
+
+**Transient errors** (temporary hardware issues) can self-heal without manual intervention:
+
+**Mechanism:**
+1. Hopper reports error (e.g., `COIN_STUCK`)
+2. Error recorded in history with `cleared: false`
+3. Customer initiates new dispense transaction
+4. If dispense completes successfully:
+   - ESP8266 automatically clears active error
+   - Error marked as `cleared: true` in history
+   - Dispenser continues normal operation
+
+**Benefits:**
+- Reduces maintenance interventions for transient issues
+- System automatically recovers from temporary faults
+- Complete audit trail maintained in error history
+- No downtime for self-clearing errors
+
+**Example Flow:**
+
+```mermaid
+sequenceDiagram
+    participant Hopper
+    participant ESP8266
+    participant Client
+
+    Hopper->>ESP8266: Error signal (code 1: COIN_STUCK)
+    ESP8266->>ESP8266: Record error<br/>active=true, cleared=false
+
+    Client->>ESP8266: GET /health
+    ESP8266-->>Client: {error: {active: true, code: 1}}
+
+    Note over Client: Customer attempts dispense
+
+    Client->>ESP8266: POST /dispense {tx_id, quantity: 3}
+    ESP8266->>Hopper: Start motor
+    Hopper->>ESP8266: 3 token pulses
+    ESP8266->>ESP8266: Dispense complete!<br/>Clear active error
+
+    Note over ESP8266: error.active = false<br/>error.cleared = true
+
+    Client->>ESP8266: GET /health
+    ESP8266-->>Client: {error: {active: false}, error_history: [{code: 1, cleared: true}]}
+
+    Note over Client,ESP8266: System self-healed
+```
+
+**Non-Self-Healing Errors:**
+
+Some errors require manual intervention:
+- **Timeout jams** (detected via watchdog, not hardware signal)
+- **Persistent hardware faults** that don't clear after successful dispense
+- **Critical errors** that prevent motor operation
+
+These require power cycle to reset.
+
+### Error Monitoring
+
+The `/health` endpoint provides comprehensive error diagnostics:
+
+```json
+{
+  "error": {
+    "active": true,
+    "code": 3,
+    "type": "JAM_PERMANENT",
+    "timestamp": 82150,
+    "description": "Permanent jam detected"
+  },
+  "error_history": [
+    {
+      "code": 3,
+      "type": "JAM_PERMANENT",
+      "timestamp": 82150,
+      "cleared": false
+    },
+    {
+      "code": 1,
+      "type": "COIN_STUCK",
+      "timestamp": 75400,
+      "cleared": true
+    }
+  ]
+}
+```
+
+**Use Cases:**
+- **Diagnostics:** Identify specific hardware issues via error codes
+- **Trend analysis:** Track error frequency and types over time
+- **Maintenance planning:** High error rates indicate need for service
+- **Root cause analysis:** Error history provides failure patterns
+
+---
+
 ## Error Recovery
 
 ### Scenario 1: ESP8266 Crashes Mid-Dispense
@@ -686,7 +885,7 @@ sequenceDiagram
     Note over ESP8266: Still dispensing<br/>or completed
 
     Client->>Client: Boot sequence
-    Client->>DB: READ transactions<br/>WHERE state IN ('pending', 'reserved', 'dispensing')
+    Client->>DB: READ transactions<br/>WHERE state IN ('pending', 'dispensing')
 
     DB-->>Client: [{tx_id: "xyz", state: "dispensing", qty: 3}]
 
@@ -883,9 +1082,9 @@ sequenceDiagram
 
     loop Health Check Cycle
         Monitor->>ESP8266: GET /health
-        ESP8266-->>Monitor: 200 {<br/>status: "ok",<br/>uptime: 84230,<br/>firmware: "1.2.0",<br/>dispenser: "idle",<br/>hopper_low: false,<br/>metrics: {<br/>  total_dispenses: 1247,<br/>  successful: 1189,<br/>  jams: 3,<br/>  partial: 2,<br/>  last_error: "2025-02-07T14:23:00Z"<br/>}<br/>}
+        ESP8266-->>Monitor: 200 {<br/>status: "ok",<br/>dispenser: "idle",<br/>metrics: {<br/>  total_dispenses: 1247,<br/>  successful: 1189,<br/>  jams: 3,<br/>  partial: 2<br/>},<br/>error: { active: false },<br/>...<br/>}
 
-        Monitor->>Monitor: Check system metrics<br/>- Disk space<br/>- CPU temp<br/>- Memory<br/>- Incomplete transactions<br/>- Analyze error rates
+        Monitor->>Monitor: Check system metrics<br/>- Disk space<br/>- CPU temp<br/>- Memory<br/>- Incomplete transactions<br/>- Analyze error rates<br/>- Check for active errors
 
         alt All OK
             Monitor->>External: POST /{uuid}<br/>Body: "esp32:ok hopper:ok disk:2GB temp:45C"
@@ -1479,8 +1678,8 @@ This architecture provides:
 - ✅ **Reliability** through crash recovery and persistence
 - ✅ **Idempotency** through transaction ID-based deduplication
 - ✅ **Observability** through health monitoring and logging
-- ✅ **Simplicity** through stateless HTTP protocol
-- ✅ **Safety** through two-phase commit and exact token counting
+- ✅ **Simplicity** through stateless HTTP protocol and single-phase dispense-first model
+- ✅ **Safety** through exact token counting and flash persistence
 - ✅ **Maintainability** through clear component separation
 
 The system is designed to handle real-world conditions including power loss, network failures, and hardware faults while maintaining an accurate audit trail of all dispensing activity.
