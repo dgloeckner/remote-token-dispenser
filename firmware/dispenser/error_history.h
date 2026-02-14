@@ -16,7 +16,8 @@ struct ErrorRecord {
 // Ring buffer for last 5 errors
 class ErrorHistory {
 private:
-  ErrorRecord buffer[5];
+  static const uint8_t BUFFER_SIZE = 5;
+  ErrorRecord buffer[BUFFER_SIZE];
   uint8_t writeIndex;
 
 public:
@@ -24,7 +25,7 @@ public:
   void addError(ErrorCode code);
   ErrorRecord* getActive();  // Returns first non-cleared error (newest first), or nullptr
   void clearActive();        // Marks active error as cleared
-  void getAll(ErrorRecord* output, int& count);  // Returns all non-NONE errors (newest first)
+  void getAll(ErrorRecord* output, int& count);  // output must have space for BUFFER_SIZE entries
 };
 
 #endif

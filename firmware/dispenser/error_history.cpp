@@ -4,14 +4,14 @@
 
 ErrorHistory::ErrorHistory() : writeIndex(0) {
   // Initialize buffer with ERROR_NONE
-  for (int i = 0; i < 5; i++) {
+  for (uint8_t i = 0; i < BUFFER_SIZE; i++) {
     buffer[i] = {ERROR_NONE, 0, true};
   }
 }
 
 void ErrorHistory::addError(ErrorCode code) {
   buffer[writeIndex] = {code, millis(), false};
-  writeIndex = (writeIndex + 1) % 5;
+  writeIndex = (writeIndex + 1) % BUFFER_SIZE;
 
   Serial.print("[ErrorHistory] Added error: ");
   Serial.print(errorCodeToString(code));
@@ -21,8 +21,8 @@ void ErrorHistory::addError(ErrorCode code) {
 
 ErrorRecord* ErrorHistory::getActive() {
   // Search newest to oldest for first non-cleared error
-  for (int i = 0; i < 5; i++) {
-    int idx = (writeIndex - 1 - i + 5) % 5;
+  for (uint8_t i = 0; i < BUFFER_SIZE; i++) {
+    int idx = (writeIndex + BUFFER_SIZE - 1 - i) % BUFFER_SIZE;
     if (buffer[idx].code != ERROR_NONE && !buffer[idx].cleared) {
       return &buffer[idx];
     }
@@ -42,8 +42,8 @@ void ErrorHistory::clearActive() {
 void ErrorHistory::getAll(ErrorRecord* output, int& count) {
   // Return all non-NONE errors, newest first
   count = 0;
-  for (int i = 0; i < 5; i++) {
-    int idx = (writeIndex - 1 - i + 5) % 5;
+  for (uint8_t i = 0; i < BUFFER_SIZE; i++) {
+    int idx = (writeIndex + BUFFER_SIZE - 1 - i) % BUFFER_SIZE;
     if (buffer[idx].code != ERROR_NONE) {
       output[count++] = buffer[idx];
     }
