@@ -92,6 +92,9 @@ void setup() {
 void loop() {
   dispenseManager.loop();  // Monitor watchdog and completion
 
+  // Update error decoder (check timeouts, process new errors)
+  hopperControl.updateErrorDecoder();
+
   // 10ms delay is safe: coin pulses (30ms) are counted via hardware interrupt
   // (asynchronous, not blocked by delay), and tokens arrive ~2.5s apart.
   // This delay just prevents spinning at 100% CPU while waiting for events.
