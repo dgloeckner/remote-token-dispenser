@@ -58,7 +58,7 @@
 
 // Hardware Specs (Azkoyen Hopper U-II PULSES mode)
 #define PULSE_DURATION_MS  30     // Expected pulse duration
-#define FIRMWARE_VERSION   "1.0.0-DEBUG"
+#define FIRMWARE_VERSION   "1.1.0-DEBUG-error-decoding"
 
 // Include local configuration (not tracked in git)
 // Copy config.local.h.example to config.local.h and customize
