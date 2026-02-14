@@ -100,6 +100,34 @@ void HttpServer::handleHealth(AsyncWebServerRequest *request) {
                     - dispenseManager.getJams();
   metrics["failures"] = failures;
 
+  // Add error information
+  ErrorRecord* activeError = hopperControl.errorHistory.getActive();
+  if (activeError) {
+    JsonObject err = doc.createNestedObject("error");
+    err["active"] = true;
+    err["code"] = (int)activeError->code;
+    err["type"] = errorCodeToString(activeError->code);
+    err["timestamp"] = activeError->timestamp;
+    err["description"] = errorCodeToDescription(activeError->code);
+  } else {
+    JsonObject err = doc.createNestedObject("error");
+    err["active"] = false;
+  }
+
+  // Add error history (last 5 errors)
+  JsonArray history = doc.createNestedArray("error_history");
+  ErrorRecord records[5];
+  int count;
+  hopperControl.errorHistory.getAll(records, count);
+
+  for (int i = 0; i < count; i++) {
+    JsonObject e = history.createNestedObject();
+    e["code"] = (int)records[i].code;
+    e["type"] = errorCodeToString(records[i].code);
+    e["timestamp"] = records[i].timestamp;
+    e["cleared"] = records[i].cleared;
+  }
+
   String response;
   serializeJson(doc, response);
   request->send(200, "application/json", response);

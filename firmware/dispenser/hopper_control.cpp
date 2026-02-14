@@ -75,6 +75,17 @@ void HopperControl::begin() {
                   handleCoinPulse, FALLING);
   Serial.println("[HopperControl] Interrupt attached to COIN_PULSE_PIN (FALLING edge)");
 
+  // Initialize error decoder
+  errorDecoder.begin();
+
+  // Set global instance for ISR
+  hopperControlInstance = this;
+
+  // Attach interrupt for error signal (CHANGE edge - both FALLING and RISING)
+  attachInterrupt(digitalPinToInterrupt(ERROR_SIGNAL_PIN),
+                  handleErrorPinChange, CHANGE);
+  Serial.println("[HopperControl] Interrupt attached to ERROR_SIGNAL_PIN (CHANGE edge)");
+
   // Initialize pulse tracking
   pulse_count = 0;
   last_pulse_time = millis();

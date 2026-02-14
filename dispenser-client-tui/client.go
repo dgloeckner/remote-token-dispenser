@@ -11,14 +11,16 @@ import (
 
 // HealthResponse matches GET /health from the dispenser protocol
 type HealthResponse struct {
-	Status    string        `json:"status"`
-	Uptime    int           `json:"uptime"`
-	Firmware  string        `json:"firmware"`
-	WiFi      *WiFiInfo     `json:"wifi,omitempty"`
-	Dispenser string        `json:"dispenser"`
-	GPIO      *GPIOInfo     `json:"gpio,omitempty"`
-	Metrics   Metrics       `json:"metrics"`
-	ActiveTx  *ActiveTxInfo `json:"active_tx,omitempty"`
+	Status       string        `json:"status"`
+	Uptime       int           `json:"uptime"`
+	Firmware     string        `json:"firmware"`
+	WiFi         *WiFiInfo     `json:"wifi,omitempty"`
+	Dispenser    string        `json:"dispenser"`
+	GPIO         *GPIOInfo     `json:"gpio,omitempty"`
+	Metrics      Metrics       `json:"metrics"`
+	ActiveTx     *ActiveTxInfo `json:"active_tx,omitempty"`
+	Error        *ErrorInfo    `json:"error,omitempty"`
+	ErrorHistory []ErrorRecord `json:"error_history,omitempty"`
 }
 
 type Metrics struct {
@@ -56,6 +58,21 @@ type GPIOInfo struct {
 		Raw    int  `json:"raw"`
 		Active bool `json:"active"`
 	} `json:"hopper_low"`
+}
+
+type ErrorInfo struct {
+	Active      bool   `json:"active"`
+	Code        int    `json:"code,omitempty"`
+	Type        string `json:"type,omitempty"`
+	Timestamp   int64  `json:"timestamp,omitempty"`
+	Description string `json:"description,omitempty"`
+}
+
+type ErrorRecord struct {
+	Code      int    `json:"code"`
+	Type      string `json:"type"`
+	Timestamp int64  `json:"timestamp"`
+	Cleared   bool   `json:"cleared"`
 }
 
 // DispenseRequest matches POST /dispense
