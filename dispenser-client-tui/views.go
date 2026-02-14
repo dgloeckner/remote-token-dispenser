@@ -175,12 +175,20 @@ func (m Model) renderHealthPanel(w int) string {
 			lines = append(lines, labelStyle.Render("WiFi:")+" "+statusMuted.Render("─ unavailable"))
 		}
 
-		// Hopper (empty sensor: active=true means NOT empty)
-		hopperStr := statusWarning.Render("⚠ EMPTY")
-		if hl.GPIO != nil && hl.GPIO.HopperLow.Active {
-			hopperStr = statusOK.Render("● OK")
+		// Hopper status with decoded error
+		if hl.Error != nil && hl.Error.Active {
+			// Active error - show type and severity
+			errStyle := statusError
+			if hl.Error.Code <= 2 {
+				errStyle = statusWarning // Sensor issues = yellow
+			}
+			lines = append(lines, labelStyle.Render("Hopper:")+
+				" "+errStyle.Render(fmt.Sprintf("⚠ %s", hl.Error.Type)))
+		} else if hl.GPIO != nil && hl.GPIO.HopperLow.Active {
+			lines = append(lines, labelStyle.Render("Hopper:")+" "+statusOK.Render("● OK"))
+		} else {
+			lines = append(lines, labelStyle.Render("Hopper:")+" "+statusWarning.Render("⚠ EMPTY"))
 		}
-		lines = append(lines, labelStyle.Render("Hopper:")+" "+hopperStr)
 
 		// Active TX
 		if hl.ActiveTx != nil {
