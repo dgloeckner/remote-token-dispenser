@@ -3,7 +3,7 @@
 #include "error_decoder.h"
 
 ErrorDecoder::ErrorDecoder()
-  : state(STATE_IDLE),
+  : state(DECODER_IDLE),
     lastFallTime(0),
     lastPulseTime(0),
     pulseCount(0),
@@ -12,7 +12,7 @@ ErrorDecoder::ErrorDecoder()
 }
 
 void ErrorDecoder::begin() {
-  state = STATE_IDLE;
+  state = DECODER_IDLE;
   pulseCount = 0;
   lastFallTime = 0;
   lastPulseTime = micros();
@@ -30,12 +30,12 @@ void IRAM_ATTR ErrorDecoder::handlePinChange(bool pinState, unsigned long now) {
     // RISING edge - pulse end, measure width
     unsigned long width = (now - lastFallTime) / 1000; // convert to ms
 
-    if (state == STATE_IDLE && width >= 90 && width <= 110) {
+    if (state == DECODER_IDLE && width >= 90 && width <= 110) {
       // Valid start pulse (100ms ±10%)
-      state = STATE_START_PULSE;
+      state = DECODER_START_PULSE;
       pulseCount = 0;
       lastPulseTime = now;
-    } else if (state == STATE_START_PULSE && width >= 8 && width <= 12) {
+    } else if (state == DECODER_START_PULSE && width >= 8 && width <= 12) {
       // Valid code pulse (10ms ±20%)
       pulseCount++;
       lastPulseTime = now;
@@ -44,7 +44,7 @@ void IRAM_ATTR ErrorDecoder::handlePinChange(bool pinState, unsigned long now) {
 }
 
 void ErrorDecoder::update() {
-  if (state == STATE_IDLE) return;
+  if (state == DECODER_IDLE) return;
 
   // Read lastPulseTime atomically (multi-byte read from ISR context)
   noInterrupts();
@@ -53,7 +53,7 @@ void ErrorDecoder::update() {
 
   if (elapsed > 200) {
     // Timeout - sequence complete or malformed
-    if (state == STATE_START_PULSE && pulseCount >= 1 && pulseCount <= 7) {
+    if (state == DECODER_START_PULSE && pulseCount >= 1 && pulseCount <= 7) {
       // Valid error code
       detectedCode = (ErrorCode)pulseCount;
     } else {
@@ -61,7 +61,7 @@ void ErrorDecoder::update() {
       detectedCode = ERROR_NONE; // ERROR_UNKNOWN
     }
     newErrorReady = true;
-    state = STATE_IDLE;
+    state = DECODER_IDLE;
   }
 }
 

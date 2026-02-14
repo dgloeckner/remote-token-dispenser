@@ -101,14 +101,14 @@ void HttpServer::handleHealth(AsyncWebServerRequest *request) {
   metrics["failures"] = failures;
 
   // Add error information
-  ErrorRecord* active = hopperControl.errorHistory.getActive();
-  if (active) {
+  ErrorRecord* activeError = hopperControl.errorHistory.getActive();
+  if (activeError) {
     JsonObject err = doc.createNestedObject("error");
     err["active"] = true;
-    err["code"] = (int)active->code;
-    err["type"] = errorCodeToString(active->code);
-    err["timestamp"] = active->timestamp;
-    err["description"] = errorCodeToDescription(active->code);
+    err["code"] = (int)activeError->code;
+    err["type"] = errorCodeToString(activeError->code);
+    err["timestamp"] = activeError->timestamp;
+    err["description"] = errorCodeToDescription(activeError->code);
   } else {
     JsonObject err = doc.createNestedObject("error");
     err["active"] = false;

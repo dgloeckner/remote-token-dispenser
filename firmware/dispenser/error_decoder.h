@@ -21,8 +21,8 @@ enum ErrorCode {
 
 // State machine states for pulse decoding
 enum DecoderState {
-  STATE_IDLE,        // Waiting for error signal (pin HIGH)
-  STATE_START_PULSE  // First LOW detected, counting code pulses
+  DECODER_IDLE,        // Waiting for error signal (pin HIGH)
+  DECODER_START_PULSE  // First LOW detected, counting code pulses
 };
 
 class ErrorDecoder {
