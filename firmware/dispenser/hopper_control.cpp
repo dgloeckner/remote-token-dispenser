@@ -2,6 +2,18 @@
 
 #include "hopper_control.h"
 
+// Global instance pointer for ISR
+static HopperControl* hopperControlInstance = nullptr;
+
+// ISR for error pin change detection
+void IRAM_ATTR handleErrorPinChange() {
+  if (hopperControlInstance) {
+    bool pinState = digitalRead(ERROR_SIGNAL_PIN);
+    unsigned long now = micros();
+    hopperControlInstance->errorDecoder.handlePinChange(pinState, now);
+  }
+}
+
 // Motor Control Signal Chain (with NEGATIVE mode hopper and modified optocoupler):
 //
 //   startMotor() → digitalWrite(MOTOR_PIN, HIGH)
@@ -62,6 +74,17 @@ void HopperControl::begin() {
   attachInterrupt(digitalPinToInterrupt(COIN_PULSE_PIN),
                   handleCoinPulse, FALLING);
   Serial.println("[HopperControl] Interrupt attached to COIN_PULSE_PIN (FALLING edge)");
+
+  // Initialize error decoder
+  errorDecoder.begin();
+
+  // Set global instance for ISR
+  hopperControlInstance = this;
+
+  // Attach interrupt for error signal (CHANGE edge - both FALLING and RISING)
+  attachInterrupt(digitalPinToInterrupt(ERROR_SIGNAL_PIN),
+                  handleErrorPinChange, CHANGE);
+  Serial.println("[HopperControl] Interrupt attached to ERROR_SIGNAL_PIN (CHANGE edge)");
 
   // Initialize pulse tracking
   pulse_count = 0;
@@ -135,4 +158,19 @@ bool HopperControl::isErrorSignalActive() {
 
 uint8_t HopperControl::getHopperLowRaw() {
   return digitalRead(HOPPER_LOW_PIN) == LOW ? 0 : 1;
+}
+
+void HopperControl::updateErrorDecoder() {
+  errorDecoder.update();
+
+  if (errorDecoder.hasNewError()) {
+    ErrorCode code = errorDecoder.getErrorCode();
+    errorHistory.addError(code);
+    errorDecoder.reset();
+
+    Serial.print("[HopperControl] Error detected: ");
+    Serial.print(errorCodeToString(code));
+    Serial.print(" - ");
+    Serial.println(errorCodeToDescription(code));
+  }
 }
