@@ -22,9 +22,7 @@ enum ErrorCode {
 // State machine states for pulse decoding
 enum DecoderState {
   STATE_IDLE,        // Waiting for error signal (pin HIGH)
-  STATE_START_PULSE, // First LOW detected, measuring duration
-  STATE_COUNTING,    // Start pulse validated, counting 10ms pulses
-  STATE_COMPLETE     // Sequence finished, error code ready
+  STATE_START_PULSE  // First LOW detected, counting code pulses
 };
 
 class ErrorDecoder {
@@ -40,7 +38,7 @@ public:
   ErrorDecoder();
   void begin();
   void update();  // Call in main loop - checks timeout, finalizes error code
-  void handlePinChange(bool pinState, unsigned long now);  // Called from ISR
+  void IRAM_ATTR handlePinChange(bool pinState, unsigned long now);  // Called from ISR
   bool hasNewError();
   ErrorCode getErrorCode();
   void reset();

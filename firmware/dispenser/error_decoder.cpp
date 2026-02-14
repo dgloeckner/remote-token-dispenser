@@ -22,7 +22,7 @@ void ErrorDecoder::begin() {
   Serial.println("[ErrorDecoder] Initialized - ready to decode error pulses");
 }
 
-void ErrorDecoder::handlePinChange(bool pinState, unsigned long now) {
+void IRAM_ATTR ErrorDecoder::handlePinChange(bool pinState, unsigned long now) {
   if (pinState == LOW) {
     // FALLING edge - pulse start
     lastFallTime = now;
@@ -46,7 +46,10 @@ void ErrorDecoder::handlePinChange(bool pinState, unsigned long now) {
 void ErrorDecoder::update() {
   if (state == STATE_IDLE) return;
 
+  // Read lastPulseTime atomically (multi-byte read from ISR context)
+  noInterrupts();
   unsigned long elapsed = (micros() - lastPulseTime) / 1000; // ms
+  interrupts();
 
   if (elapsed > 200) {
     // Timeout - sequence complete or malformed
