@@ -1,5 +1,6 @@
 # Local configuration with credentials
 firmware/dispenser/config.local.h
+**/config.local.h
 
 # Arduino build artifacts
 *.hex
@@ -13,3 +14,4 @@ firmware/dispenser/config.local.h
 
 # Python virtual environment
 .venv/
+dispenser-client-tui/token-*
