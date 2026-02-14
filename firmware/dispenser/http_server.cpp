@@ -5,6 +5,7 @@
 
 #include "http_server.h"
 #include <ArduinoJson.h>
+#include <ESP8266WiFi.h>
 
 HttpServer::HttpServer(DispenseManager& manager, HopperControl& hopper)
   : dispenseManager(manager), hopperControl(hopper), server(80) {
@@ -63,6 +64,12 @@ void HttpServer::handleHealth(AsyncWebServerRequest *request) {
   doc["uptime"] = millis() / 1000;
   doc["firmware"] = FIRMWARE_VERSION;
 
+  // WiFi information
+  JsonObject wifi = doc.createNestedObject("wifi");
+  wifi["rssi"] = WiFi.RSSI();
+  wifi["ip"] = WiFi.localIP().toString();
+  wifi["ssid"] = WiFi.SSID();
+
   Transaction active = dispenseManager.getActiveTransaction();
   doc["dispenser"] = stateToString(active.state);
 
@@ -101,11 +108,17 @@ void HttpServer::handleHealth(AsyncWebServerRequest *request) {
 void HttpServer::handleDispensePost(AsyncWebServerRequest *request,
                                     uint8_t *data, size_t len,
                                     size_t index, size_t total) {
+  Serial.println("[HttpServer] POST /dispense received");
+  Serial.print("  Body length: ");
+  Serial.println(len);
+
   // Check authentication
   if (!checkAuth(request)) {
+    Serial.println("  ERROR: Authentication failed");
     request->send(401, "application/json", "{\"error\":\"unauthorized\"}");
     return;
   }
+  Serial.println("  Authentication OK");
 
   // Validate Content-Type
   if (!request->hasHeader("Content-Type") ||
@@ -119,19 +132,27 @@ void HttpServer::handleDispensePost(AsyncWebServerRequest *request,
   DeserializationError error = deserializeJson(doc, data, len);
 
   if (error) {
+    Serial.print("  ERROR: JSON parse failed: ");
+    Serial.println(error.c_str());
     request->send(400, "application/json", "{\"error\":\"invalid json\"}");
     return;
   }
+  Serial.println("  JSON parsed successfully");
 
   // Add type validation
   if (!doc.containsKey("tx_id") || !doc["tx_id"].is<const char*>() ||
       !doc.containsKey("quantity") || !doc["quantity"].is<uint8_t>()) {
+    Serial.println("  ERROR: Invalid request format");
     request->send(400, "application/json", "{\"error\":\"invalid request format\"}");
     return;
   }
 
   const char* tx_id = doc["tx_id"];
   uint8_t quantity = doc["quantity"];
+  Serial.print("  Parsed tx_id: ");
+  Serial.println(tx_id);
+  Serial.print("  Parsed quantity: ");
+  Serial.println(quantity);
 
   // Add tx_id length validation
   size_t tx_id_len = strlen(tx_id);
@@ -142,10 +163,14 @@ void HttpServer::handleDispensePost(AsyncWebServerRequest *request,
   }
 
   // Try to start dispense
+  Serial.println("  Calling dispenseManager.startDispense()...");
   bool started = dispenseManager.startDispense(tx_id, quantity);
+  Serial.print("  startDispense returned: ");
+  Serial.println(started ? "true" : "false");
 
   if (!started && !dispenseManager.isIdle()) {
     // Busy - return 409
+    Serial.println("  System is busy, returning 409");
     Transaction active = dispenseManager.getActiveTransaction();
 
     JsonDocument response;

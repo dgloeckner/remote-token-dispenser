@@ -50,20 +50,29 @@ void DispenseManager::begin() {
 }
 
 bool DispenseManager::startDispense(const char* tx_id, uint8_t quantity) {
+  Serial.println("[DispenseManager] startDispense() called");
+  Serial.print("  tx_id: ");
+  Serial.println(tx_id);
+  Serial.print("  quantity: ");
+  Serial.println(quantity);
+
   // Check if already in history (idempotency)
   Transaction cached_tx;
   if (findInHistory(tx_id, cached_tx)) {
     // Return cached result
+    Serial.println("  Transaction found in history (idempotent request)");
     active_tx = cached_tx;
     return true;  // Not an error, just idempotent
   }
 
   // Check if busy
   if (active_tx.state == STATE_DISPENSING) {
+    Serial.println("  ERROR: Already dispensing, rejecting request");
     return false;  // 409 Conflict
   }
 
   // Start new transaction
+  Serial.println("  Starting new dispense transaction");
   strncpy(active_tx.tx_id, tx_id, 16);
   active_tx.tx_id[16] = '\0';
   active_tx.quantity = quantity;
@@ -72,15 +81,18 @@ bool DispenseManager::startDispense(const char* tx_id, uint8_t quantity) {
   active_tx.started_ms = millis();
 
   // Persist to flash
+  Serial.println("  Persisting transaction to flash...");
   persistActiveTransaction();
 
   // Start motor
+  Serial.println("  Resetting pulse count and starting motor...");
   hopperControl.resetPulseCount();
   hopperControl.startMotor();
 
   // Update metrics
   total_dispenses++;
 
+  Serial.println("[DispenseManager] Dispense started successfully");
   return true;
 }
 
@@ -90,10 +102,20 @@ void DispenseManager::loop() {
   }
 
   // Update dispensed count from pulse counter
+  uint8_t previous_count = active_tx.dispensed;
   active_tx.dispensed = hopperControl.getPulseCount();
+
+  // Log pulse count changes
+  if (active_tx.dispensed != previous_count) {
+    Serial.print("[DispenseManager] Pulse count: ");
+    Serial.print(active_tx.dispensed);
+    Serial.print(" / ");
+    Serial.println(active_tx.quantity);
+  }
 
   // Check for completion
   if (active_tx.dispensed >= active_tx.quantity) {
+    Serial.println("[DispenseManager] Dispense COMPLETE!");
     hopperControl.stopMotor();
     active_tx.state = STATE_DONE;
     persistActiveTransaction();
@@ -107,6 +129,11 @@ void DispenseManager::loop() {
 
   // Check for jam
   if (hopperControl.checkJam()) {
+    Serial.println("[DispenseManager] JAM DETECTED!");
+    Serial.print("  Dispensed: ");
+    Serial.print(active_tx.dispensed);
+    Serial.print(" / ");
+    Serial.println(active_tx.quantity);
     hopperControl.stopMotor();
     active_tx.state = STATE_ERROR;
     persistActiveTransaction();

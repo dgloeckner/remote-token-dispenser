@@ -13,7 +13,7 @@ DispenseManager dispenseManager(flashStorage, hopperControl);
 HttpServer httpServer(dispenseManager, hopperControl);
 
 void setup() {
-  Serial.begin(115200);
+  Serial.begin(9600);  // Lower baud rate for reliable debug output
   delay(1000);
 
   Serial.println("\n\n=== Token Dispenser Starting ===");
@@ -39,12 +39,19 @@ void setup() {
     Serial.println("\nWiFi connected!");
     Serial.print("IP address: ");
     Serial.println(WiFi.localIP());
+    Serial.flush();  // Ensure output is sent
+    delay(100);
+    Serial.println(">>> DEBUG: Continuing setup...");
+    Serial.flush();
   } else {
     Serial.println("\nWiFi connection failed!");
   }
 
+  Serial.println(">>> DEBUG: Initializing flash storage...");
+  Serial.flush();
   // Initialize flash storage
   flashStorage.begin();
+  Serial.println(">>> DEBUG: Flash storage initialized");
 
   if (flashStorage.hasPersistedTransaction()) {
     PersistedTransaction tx = flashStorage.load();
@@ -62,7 +69,10 @@ void setup() {
   }
 
   // Initialize hopper control
+  Serial.println(">>> DEBUG: About to call hopperControl.begin()...");
+  Serial.flush();
   hopperControl.begin();
+  Serial.println(">>> DEBUG: hopperControl.begin() completed");
   Serial.println("Hopper control initialized");
   Serial.print("Hopper low: ");
   Serial.println(hopperControl.isHopperLow() ? "YES" : "NO");
