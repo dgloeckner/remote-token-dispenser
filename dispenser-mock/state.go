@@ -61,23 +61,34 @@ func (m *MockDispenser) GetState() string {
 }
 
 // FindTransaction finds a transaction by ID in history
+// Returns a copy to prevent data races
 func (m *MockDispenser) FindTransaction(txID string) *Transaction {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
+	var source *Transaction
+
 	// Check active transaction first
 	if m.activeTx != nil && m.activeTx.TxID == txID {
-		return m.activeTx
+		source = m.activeTx
 	}
 
-	// Check history
-	for _, tx := range m.history {
-		if tx.TxID == txID {
-			return tx
+	// Check history if not found in active
+	if source == nil {
+		for _, tx := range m.history {
+			if tx.TxID == txID {
+				source = tx
+				break
+			}
 		}
 	}
 
-	return nil
+	// Return a defensive copy to prevent data races
+	if source == nil {
+		return nil
+	}
+	txCopy := *source
+	return &txCopy
 }
 
 // AddToHistory adds a transaction to the ring buffer
@@ -95,4 +106,54 @@ func (m *MockDispenser) AddToHistory(tx *Transaction) {
 // ValidateAPIKey checks if provided key matches
 func (m *MockDispenser) ValidateAPIKey(key string) bool {
 	return key == m.apiKey
+}
+
+// GetMetrics returns a copy of the metrics for safe concurrent access
+func (m *MockDispenser) GetMetrics() Metrics {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.metrics
+}
+
+// GetActiveTxInfo returns a copy of active transaction info if exists
+func (m *MockDispenser) GetActiveTxInfo() *ActiveTxInfo {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	if m.activeTx == nil {
+		return nil
+	}
+
+	return &ActiveTxInfo{
+		TxID:      m.activeTx.TxID,
+		Quantity:  m.activeTx.Quantity,
+		Dispensed: m.activeTx.Dispensed,
+	}
+}
+
+// GetHardwareError returns a copy of the hardware error if exists
+func (m *MockDispenser) GetHardwareError() *ErrorInfo {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	if m.hardwareError == nil {
+		return nil
+	}
+
+	errorCopy := *m.hardwareError
+	return &errorCopy
+}
+
+// GetErrorHistory returns a copy of the error history slice
+func (m *MockDispenser) GetErrorHistory() []ErrorRecord {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	if len(m.errorHistory) == 0 {
+		return nil
+	}
+
+	historyCopy := make([]ErrorRecord, len(m.errorHistory))
+	copy(historyCopy, m.errorHistory)
+	return historyCopy
 }
