@@ -11,7 +11,6 @@ type HealthResponse struct {
 	Dispenser    string        `json:"dispenser"`
 	GPIO         *GPIOInfo     `json:"gpio,omitempty"`
 	Metrics      Metrics       `json:"metrics"`
-	ActiveTx     *ActiveTxInfo `json:"active_tx,omitempty"`
 	Error        *ErrorInfo    `json:"error,omitempty"`
 	ErrorHistory []ErrorRecord `json:"error_history,omitempty"`
 }
@@ -38,13 +37,11 @@ type GPIOInfo struct {
 }
 
 type Metrics struct {
-	TotalDispenses int    `json:"total_dispenses"`
-	Successful     int    `json:"successful"`
-	Jams           int    `json:"jams"`
-	Partial        int    `json:"partial"`
-	Failures       int    `json:"failures"`
-	LastError      string `json:"last_error"`
-	LastErrorType  string `json:"last_error_type"`
+	TotalDispenses int `json:"total_dispenses"`
+	Successful     int `json:"successful"`
+	Jams           int `json:"jams"`
+	Partial        int `json:"partial"`
+	Failures       int `json:"failures"`
 }
 
 type ActiveTxInfo struct {
@@ -57,14 +54,14 @@ type ErrorInfo struct {
 	Active      bool   `json:"active"`
 	Code        int    `json:"code,omitempty"`
 	Type        string `json:"type,omitempty"`
-	Timestamp   int64  `json:"timestamp,omitempty"`
+	Timestamp   int    `json:"timestamp,omitempty"`
 	Description string `json:"description,omitempty"`
 }
 
 type ErrorRecord struct {
 	Code      int    `json:"code"`
 	Type      string `json:"type"`
-	Timestamp int64  `json:"timestamp"`
+	Timestamp int    `json:"timestamp"`
 	Cleared   bool   `json:"cleared"`
 }
 
@@ -85,8 +82,9 @@ type DispenseResponse struct {
 
 // ErrorResponse for 4xx/5xx
 type ErrorResponse struct {
-	Error      string `json:"error"`
-	ActiveTxID string `json:"active_tx_id,omitempty"`
+	Error       string `json:"error"`
+	ActiveTxID  string `json:"active_tx_id,omitempty"`
+	ActiveState string `json:"active_state,omitempty"`
 }
 
 // Transaction represents a dispense transaction
