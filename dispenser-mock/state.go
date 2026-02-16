@@ -88,6 +88,7 @@ func (m *MockDispenser) FindTransaction(txID string) *Transaction {
 		return nil
 	}
 	txCopy := *source
+	txCopy.StopChan = nil // Don't expose internal control channel
 	return &txCopy
 }
 
