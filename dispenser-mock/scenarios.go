@@ -216,8 +216,6 @@ func (m *MockDispenser) executeHardwareError(tx *Transaction, code int, errType,
 	// Mark transaction as error
 	tx.State = StateError
 	m.metrics.Failures++
-	m.metrics.LastError = description
-	m.metrics.LastErrorType = errType
 	m.activeTx = nil
 	m.AddToHistory(tx)
 }

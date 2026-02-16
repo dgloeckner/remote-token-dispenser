@@ -37,13 +37,11 @@ type GPIOInfo struct {
 }
 
 type Metrics struct {
-	TotalDispenses  int    `json:"total_dispenses"`
-	Successful      int    `json:"successful"`
-	Jams            int    `json:"jams"`
-	Partial         int    `json:"partial"`
-	Failures        int    `json:"failures"`
-	LastError       string `json:"last_error,omitempty"`
-	LastErrorType   string `json:"last_error_type,omitempty"`
+	TotalDispenses int `json:"total_dispenses"`
+	Successful     int `json:"successful"`
+	Jams           int `json:"jams"`
+	Partial        int `json:"partial"`
+	Failures       int `json:"failures"`
 }
 
 type ActiveTxInfo struct {
