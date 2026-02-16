@@ -11,6 +11,7 @@ dispenser-mock
 
 # Output of the go coverage tool
 *.out
+coverage.*
 
 # IDE
 .idea/
