@@ -87,7 +87,7 @@ func (m *MockDispenser) handleDispense(w http.ResponseWriter, r *http.Request) {
 
 	contentType := r.Header.Get("Content-Type")
 	if !strings.HasPrefix(contentType, "application/json") {
-		writeJSON(w, http.StatusUnsupportedMediaType, ErrorResponse{Error: "Content-Type must be application/json"})
+		writeJSON(w, http.StatusUnsupportedMediaType, ErrorResponse{Error: "content-type must be application/json"})
 		return
 	}
 
