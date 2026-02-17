@@ -75,6 +75,10 @@ func (m *MockDispenser) ExecuteScenario(tx *Transaction, scenario string) {
 
 // executeSuccess simulates successful dispense
 func (m *MockDispenser) executeSuccess(tx *Transaction, delay time.Duration) {
+	m.mu.Lock()
+	m.metrics.TotalDispenses++
+	m.mu.Unlock()
+
 	ticker := time.NewTicker(delay)
 	defer ticker.Stop()
 
@@ -89,7 +93,7 @@ func (m *MockDispenser) executeSuccess(tx *Transaction, delay time.Duration) {
 				tx.State = StateDone
 				m.metrics.Successful++
 				m.activeTx = nil
-				m.AddToHistory(tx)
+				m.addToHistoryLocked(tx)
 				m.mu.Unlock()
 				return
 			}
@@ -100,49 +104,88 @@ func (m *MockDispenser) executeSuccess(tx *Transaction, delay time.Duration) {
 
 // executeTimeoutPartial simulates timeout after 2 tokens
 func (m *MockDispenser) executeTimeoutPartial(tx *Transaction) {
+	m.mu.Lock()
+	m.metrics.TotalDispenses++
+	m.mu.Unlock()
+
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
 	// Dispense 2 tokens
 	for i := 0; i < 2; i++ {
-		time.Sleep(100 * time.Millisecond)
-		m.mu.Lock()
-		tx.Dispensed++
-		m.mu.Unlock()
+		select {
+		case <-tx.StopChan:
+			return
+		case <-ticker.C:
+			m.mu.Lock()
+			tx.Dispensed++
+			m.mu.Unlock()
+		}
 	}
 
 	// Wait 5 seconds (jam timeout)
-	time.Sleep(5 * time.Second)
+	timeout := time.NewTimer(5 * time.Second)
+	defer timeout.Stop()
 
-	// Enter error state
-	m.mu.Lock()
-	tx.State = StateError
-	m.metrics.Jams++
-	m.metrics.Partial++
-	m.metrics.Failures++
-	m.activeTx = nil
-	m.AddToHistory(tx)
-	m.mu.Unlock()
+	select {
+	case <-tx.StopChan:
+		return
+	case <-timeout.C:
+		// Enter error state
+		m.mu.Lock()
+		tx.State = StateError
+		m.metrics.Jams++
+		m.metrics.Partial++
+		m.metrics.Failures++
+		m.activeTx = nil
+		m.addToHistoryLocked(tx)
+		m.mu.Unlock()
+	}
 }
 
 // executeCrashAfterFirst simulates crash (closes connection)
 func (m *MockDispenser) executeCrashAfterFirst(tx *Transaction) {
-	// Dispense 1 token
-	time.Sleep(100 * time.Millisecond)
 	m.mu.Lock()
-	tx.Dispensed++
-	// Don't update state - simulate crash
-	// activeTx stays set to simulate crash state
+	m.metrics.TotalDispenses++
 	m.mu.Unlock()
+
+	// Dispense 1 token
+	timer := time.NewTimer(100 * time.Millisecond)
+	defer timer.Stop()
+
+	select {
+	case <-tx.StopChan:
+		return
+	case <-timer.C:
+		m.mu.Lock()
+		tx.Dispensed++
+		// Don't update state - simulate crash
+		// activeTx stays set to simulate crash state
+		m.mu.Unlock()
+	}
 
 	// Note: Connection will be closed by handler
 }
 
 // executePartialDispense dispenses 4 of 6, then jam
 func (m *MockDispenser) executePartialDispense(tx *Transaction) {
+	m.mu.Lock()
+	m.metrics.TotalDispenses++
+	m.mu.Unlock()
+
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
 	// Dispense 4 tokens
 	for i := 0; i < 4; i++ {
-		time.Sleep(100 * time.Millisecond)
-		m.mu.Lock()
-		tx.Dispensed++
-		m.mu.Unlock()
+		select {
+		case <-tx.StopChan:
+			return
+		case <-ticker.C:
+			m.mu.Lock()
+			tx.Dispensed++
+			m.mu.Unlock()
+		}
 	}
 
 	// Enter error state
@@ -152,12 +195,16 @@ func (m *MockDispenser) executePartialDispense(tx *Transaction) {
 	m.metrics.Partial++
 	m.metrics.Failures++
 	m.activeTx = nil
-	m.AddToHistory(tx)
+	m.addToHistoryLocked(tx)
 	m.mu.Unlock()
 }
 
 // executeLoadDelay simulates empty hopper load time
 func (m *MockDispenser) executeLoadDelay(tx *Transaction) {
+	m.mu.Lock()
+	m.metrics.TotalDispenses++
+	m.mu.Unlock()
+
 	// First token: 2.5s delay
 	time.Sleep(2500 * time.Millisecond)
 	m.mu.Lock()
@@ -179,7 +226,7 @@ func (m *MockDispenser) executeLoadDelay(tx *Transaction) {
 				tx.State = StateDone
 				m.metrics.Successful++
 				m.activeTx = nil
-				m.AddToHistory(tx)
+				m.addToHistoryLocked(tx)
 				m.mu.Unlock()
 				return
 			}
@@ -217,5 +264,5 @@ func (m *MockDispenser) executeHardwareError(tx *Transaction, code int, errType,
 	tx.State = StateError
 	m.metrics.Failures++
 	m.activeTx = nil
-	m.AddToHistory(tx)
+	m.addToHistoryLocked(tx)
 }

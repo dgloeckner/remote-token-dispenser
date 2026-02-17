@@ -96,7 +96,12 @@ func (m *MockDispenser) FindTransaction(txID string) *Transaction {
 func (m *MockDispenser) AddToHistory(tx *Transaction) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.addToHistoryLocked(tx)
+}
 
+// addToHistoryLocked adds a transaction to the ring buffer.
+// INTERNAL USE ONLY - caller must hold m.mu.Lock()
+func (m *MockDispenser) addToHistoryLocked(tx *Transaction) {
 	// Ring buffer: keep last 8
 	if len(m.history) >= 8 {
 		m.history = m.history[1:]
