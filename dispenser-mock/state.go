@@ -156,7 +156,7 @@ func (m *MockDispenser) GetErrorHistory() []ErrorRecord {
 	defer m.mu.RUnlock()
 
 	if len(m.errorHistory) == 0 {
-		return nil
+		return []ErrorRecord{}
 	}
 
 	historyCopy := make([]ErrorRecord, len(m.errorHistory))

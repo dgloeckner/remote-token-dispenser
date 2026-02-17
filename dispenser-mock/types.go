@@ -11,8 +11,8 @@ type HealthResponse struct {
 	Dispenser    string        `json:"dispenser"`
 	GPIO         *GPIOInfo     `json:"gpio,omitempty"`
 	Metrics      Metrics       `json:"metrics"`
-	Error        *ErrorInfo    `json:"error,omitempty"`
-	ErrorHistory []ErrorRecord `json:"error_history,omitempty"`
+	Error        *ErrorInfo    `json:"error"`
+	ErrorHistory []ErrorRecord `json:"error_history"`
 }
 
 type WiFiInfo struct {

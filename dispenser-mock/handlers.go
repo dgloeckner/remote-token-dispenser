@@ -23,7 +23,7 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 func (m *MockDispenser) requireAPIKey(w http.ResponseWriter, r *http.Request) bool {
 	key := r.Header.Get("X-API-Key")
 	if !m.ValidateAPIKey(key) {
-		writeJSON(w, http.StatusUnauthorized, ErrorResponse{Error: "unauthorized: invalid or missing API key"})
+		writeJSON(w, http.StatusUnauthorized, ErrorResponse{Error: "unauthorized"})
 		return false
 	}
 	return true
@@ -45,14 +45,9 @@ func (m *MockDispenser) handleHealth(w http.ResponseWriter, r *http.Request) {
 		activeTx = m.GetActiveTxInfo()
 	}
 
-	var errorInfo *ErrorInfo
-	if dispenserState == StateError {
-		errorInfo = m.GetHardwareError()
-		// If there is no hardware error but state is error (shouldn't happen),
-		// fall back to a generic error info.
-		if errorInfo == nil {
-			errorInfo = &ErrorInfo{Active: true}
-		}
+	errorInfo := m.GetHardwareError()
+	if errorInfo == nil {
+		errorInfo = &ErrorInfo{Active: false}
 	}
 
 	resp := HealthResponse{
@@ -136,7 +131,7 @@ func (m *MockDispenser) handleDispense(w http.ResponseWriter, r *http.Request) {
 		m.mu.Unlock()
 		log.Printf("POST /dispense tx_id=%q rejected: busy with %s", req.TxID, busy.TxID)
 		writeJSON(w, http.StatusConflict, ErrorResponse{
-			Error:       "dispenser busy",
+			Error:       "busy",
 			ActiveTxID:  busy.TxID,
 			ActiveState: busy.State,
 		})
@@ -147,7 +142,7 @@ func (m *MockDispenser) handleDispense(w http.ResponseWriter, r *http.Request) {
 		m.mu.Unlock()
 		log.Printf("POST /dispense tx_id=%q rejected: hardware error active", req.TxID)
 		writeJSON(w, http.StatusConflict, ErrorResponse{
-			Error: "hardware error active: clear error before dispensing",
+			Error: "error",
 		})
 		return
 	}
@@ -227,7 +222,7 @@ func (m *MockDispenser) handleDispenseStatus(w http.ResponseWriter, r *http.Requ
 
 	tx := m.FindTransaction(txID)
 	if tx == nil {
-		writeJSON(w, http.StatusNotFound, ErrorResponse{Error: fmt.Sprintf("transaction %q not found", txID)})
+		writeJSON(w, http.StatusNotFound, ErrorResponse{Error: "not found"})
 		return
 	}
 
