@@ -40,11 +40,6 @@ func (m *MockDispenser) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 	dispenserState := m.GetState()
 
-	var activeTx *ActiveTxInfo
-	if dispenserState == StateDispensing {
-		activeTx = m.GetActiveTxInfo()
-	}
-
 	errorInfo := m.GetHardwareError()
 	if errorInfo == nil {
 		errorInfo = &ErrorInfo{Active: false}
@@ -64,11 +59,6 @@ func (m *MockDispenser) handleHealth(w http.ResponseWriter, r *http.Request) {
 		Metrics:      m.GetMetrics(),
 		Error:        errorInfo,
 		ErrorHistory: m.GetErrorHistory(),
-	}
-
-	// Populate active tx into metrics display if dispensing
-	if activeTx != nil {
-		_ = activeTx // already embedded via Metrics; made available for future use
 	}
 
 	writeJSON(w, http.StatusOK, resp)
@@ -188,14 +178,17 @@ func (m *MockDispenser) handleDispense(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Capture response values before starting goroutine to avoid data race
+	txID, state, quantity, dispensed := tx.TxID, tx.State, tx.Quantity, tx.Dispensed
+
 	// Start scenario in a goroutine
 	go m.ExecuteScenario(tx, scenario)
 
 	writeJSON(w, http.StatusOK, DispenseResponse{
-		TxID:      tx.TxID,
-		State:     tx.State,
-		Quantity:  tx.Quantity,
-		Dispensed: tx.Dispensed,
+		TxID:      txID,
+		State:     state,
+		Quantity:  quantity,
+		Dispensed: dispensed,
 	})
 }
 
