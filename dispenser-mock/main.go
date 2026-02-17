@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"os"
 )
 
 var (
@@ -72,6 +71,4 @@ func printScenarios() {
 	fmt.Println("  -H \"Content-Type: application/json\" \\")
 	fmt.Println("  -d '{\"tx_id\":\"test1\",\"quantity\":4}'")
 	fmt.Println()
-
-	os.Exit(0)
 }
