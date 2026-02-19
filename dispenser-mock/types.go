@@ -37,11 +37,17 @@ type GPIOInfo struct {
 }
 
 type Metrics struct {
+	// Transaction-level metrics
 	TotalDispenses int `json:"total_dispenses"`
 	Successful     int `json:"successful"`
 	Jams           int `json:"jams"`
 	Partial        int `json:"partial"`
+	Crashes        int `json:"crashes"`
 	Failures       int `json:"failures"`
+
+	// Token-level metrics
+	RequestedTokens int `json:"requested_tokens"`
+	DispensedTokens int `json:"dispensed_tokens"`
 }
 
 type ActiveTxInfo struct {

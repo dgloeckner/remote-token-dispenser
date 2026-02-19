@@ -77,6 +77,7 @@ func (m *MockDispenser) ExecuteScenario(tx *Transaction, scenario string) {
 func (m *MockDispenser) executeSuccess(tx *Transaction, delay time.Duration) {
 	m.mu.Lock()
 	m.metrics.TotalDispenses++
+	m.metrics.RequestedTokens += tx.Quantity
 	m.mu.Unlock()
 
 	ticker := time.NewTicker(delay)
@@ -92,6 +93,7 @@ func (m *MockDispenser) executeSuccess(tx *Transaction, delay time.Duration) {
 			if tx.Dispensed >= tx.Quantity {
 				tx.State = StateDone
 				m.metrics.Successful++
+				m.metrics.DispensedTokens += tx.Dispensed
 				m.activeTx = nil
 				m.addToHistoryLocked(tx)
 				m.mu.Unlock()
@@ -106,6 +108,7 @@ func (m *MockDispenser) executeSuccess(tx *Transaction, delay time.Duration) {
 func (m *MockDispenser) executeTimeoutPartial(tx *Transaction) {
 	m.mu.Lock()
 	m.metrics.TotalDispenses++
+	m.metrics.RequestedTokens += tx.Quantity
 	m.mu.Unlock()
 
 	ticker := time.NewTicker(100 * time.Millisecond)
@@ -137,6 +140,7 @@ func (m *MockDispenser) executeTimeoutPartial(tx *Transaction) {
 		m.metrics.Jams++
 		m.metrics.Partial++
 		m.metrics.Failures++
+		m.metrics.DispensedTokens += tx.Dispensed
 		m.activeTx = nil
 		m.addToHistoryLocked(tx)
 		m.mu.Unlock()
@@ -147,6 +151,8 @@ func (m *MockDispenser) executeTimeoutPartial(tx *Transaction) {
 func (m *MockDispenser) executeCrashAfterFirst(tx *Transaction) {
 	m.mu.Lock()
 	m.metrics.TotalDispenses++
+	m.metrics.RequestedTokens += tx.Quantity
+	m.metrics.Crashes++
 	m.mu.Unlock()
 
 	// Dispense 1 token
@@ -159,6 +165,7 @@ func (m *MockDispenser) executeCrashAfterFirst(tx *Transaction) {
 	case <-timer.C:
 		m.mu.Lock()
 		tx.Dispensed++
+		m.metrics.DispensedTokens += tx.Dispensed
 		// Don't update state - simulate crash
 		// activeTx stays set to simulate crash state
 		m.mu.Unlock()
@@ -171,6 +178,7 @@ func (m *MockDispenser) executeCrashAfterFirst(tx *Transaction) {
 func (m *MockDispenser) executePartialDispense(tx *Transaction) {
 	m.mu.Lock()
 	m.metrics.TotalDispenses++
+	m.metrics.RequestedTokens += tx.Quantity
 	m.mu.Unlock()
 
 	ticker := time.NewTicker(100 * time.Millisecond)
@@ -194,6 +202,7 @@ func (m *MockDispenser) executePartialDispense(tx *Transaction) {
 	m.metrics.Jams++
 	m.metrics.Partial++
 	m.metrics.Failures++
+	m.metrics.DispensedTokens += tx.Dispensed
 	m.activeTx = nil
 	m.addToHistoryLocked(tx)
 	m.mu.Unlock()
@@ -203,6 +212,7 @@ func (m *MockDispenser) executePartialDispense(tx *Transaction) {
 func (m *MockDispenser) executeLoadDelay(tx *Transaction) {
 	m.mu.Lock()
 	m.metrics.TotalDispenses++
+	m.metrics.RequestedTokens += tx.Quantity
 	m.mu.Unlock()
 
 	// First token: 2.5s delay
@@ -225,6 +235,7 @@ func (m *MockDispenser) executeLoadDelay(tx *Transaction) {
 			if tx.Dispensed >= tx.Quantity {
 				tx.State = StateDone
 				m.metrics.Successful++
+				m.metrics.DispensedTokens += tx.Dispensed
 				m.activeTx = nil
 				m.addToHistoryLocked(tx)
 				m.mu.Unlock()
@@ -262,7 +273,10 @@ func (m *MockDispenser) executeHardwareError(tx *Transaction, code int, errType,
 
 	// Mark transaction as error
 	tx.State = StateError
+	m.metrics.TotalDispenses++
+	m.metrics.RequestedTokens += tx.Quantity
 	m.metrics.Failures++
+	// No dispensed tokens - error occurred immediately
 	m.activeTx = nil
 	m.addToHistoryLocked(tx)
 }

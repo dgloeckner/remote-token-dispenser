@@ -32,11 +32,14 @@ func NewMockDispenser(apiKey string) *MockDispenser {
 		history:      make([]*Transaction, 0, 8),
 		errorHistory: make([]ErrorRecord, 0, 5),
 		metrics: Metrics{
-			TotalDispenses: 0,
-			Successful:     0,
-			Jams:           0,
-			Partial:        0,
-			Failures:       0,
+			TotalDispenses:  0,
+			Successful:      0,
+			Jams:            0,
+			Partial:         0,
+			Crashes:         0,
+			Failures:        0,
+			RequestedTokens: 0,
+			DispensedTokens: 0,
 		},
 	}
 }
