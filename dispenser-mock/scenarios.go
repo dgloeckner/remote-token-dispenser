@@ -166,12 +166,17 @@ func (m *MockDispenser) executeCrashAfterFirst(tx *Transaction) {
 		m.mu.Lock()
 		tx.Dispensed++
 		m.metrics.DispensedTokens += tx.Dispensed
-		// Don't update state - simulate crash
-		// activeTx stays set to simulate crash state
 		m.mu.Unlock()
 	}
 
-	// Note: Connection will be closed by handler
+	// Simulate ESP8266 restart after crash: brief delay, then lose all state.
+	// Real hardware: MCU resets, all RAM is lost. The terminal will receive 404
+	// on subsequent GET /dispense/{txId} calls, triggering manual reconciliation.
+	// Note: Connection is closed by the handler (hijack) before we reach here.
+	time.Sleep(2 * time.Second)
+	m.mu.Lock()
+	m.activeTx = nil // Clear without adding to history — restart loses all state
+	m.mu.Unlock()
 }
 
 // executePartialDispense dispenses 4 of 6, then jam
