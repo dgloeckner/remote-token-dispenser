@@ -15,6 +15,9 @@ DispenseManager::DispenseManager(FlashStorage& storage, HopperControl& hopper)
   successful_count = 0;
   jam_count = 0;
   partial_count = 0;
+  crash_count = 0;
+  requested_tokens = 0;
+  dispensed_tokens = 0;
 }
 
 void DispenseManager::begin() {
@@ -34,6 +37,13 @@ void DispenseManager::begin() {
       // Crashed during dispense - mark as error
       active_tx.state = STATE_ERROR;
       persistActiveTransaction();
+
+      // Count the crashed transaction
+      total_dispenses++;                   // Transaction was started before crash
+      crash_count++;                       // Track crash specifically
+      requested_tokens += active_tx.quantity;   // Add requested tokens
+      dispensed_tokens += active_tx.dispensed;  // Add partial dispense
+
       Serial.print("Recovered from crash during dispense. Partial count: ");
       Serial.println(active_tx.dispensed);
     } else if (active_tx.state == STATE_ERROR) {
@@ -91,6 +101,7 @@ bool DispenseManager::startDispense(const char* tx_id, uint8_t quantity) {
 
   // Update metrics
   total_dispenses++;
+  requested_tokens += quantity;
 
   Serial.println("[DispenseManager] Dispense started successfully");
   return true;
@@ -124,6 +135,10 @@ void DispenseManager::loop() {
 
     persistActiveTransaction();
     addToHistory(active_tx.tx_id, STATE_DONE, active_tx.quantity, active_tx.dispensed);
+
+    // Track dispensed tokens
+    dispensed_tokens += active_tx.dispensed;
+
     flashStorage.clear();
     memset(&active_tx, 0, sizeof(active_tx));
     active_tx.state = STATE_IDLE;
@@ -144,6 +159,9 @@ void DispenseManager::loop() {
     persistActiveTransaction();
     addToHistory(active_tx.tx_id, STATE_ERROR, active_tx.quantity, active_tx.dispensed);
     jam_count++;
+
+    // Track dispensed tokens even on jam (partial dispense)
+    dispensed_tokens += active_tx.dispensed;
 
     if (active_tx.dispensed > 0) {
       partial_count++;
@@ -185,6 +203,9 @@ uint16_t DispenseManager::getTotalDispenses() { return total_dispenses; }
 uint16_t DispenseManager::getSuccessful() { return successful_count; }
 uint16_t DispenseManager::getJams() { return jam_count; }
 uint16_t DispenseManager::getPartial() { return partial_count; }
+uint16_t DispenseManager::getCrashes() { return crash_count; }
+uint32_t DispenseManager::getRequestedTokens() { return requested_tokens; }
+uint32_t DispenseManager::getDispensedTokens() { return dispensed_tokens; }
 
 // Private methods
 bool DispenseManager::findInHistory(const char* tx_id, Transaction& out_tx) {

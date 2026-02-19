@@ -90,15 +90,22 @@ void HttpServer::handleHealth(AsyncWebServerRequest *request) {
 
   // Metrics
   JsonObject metrics = doc.createNestedObject("metrics");
+
+  // Transaction-level metrics
   metrics["total_dispenses"] = dispenseManager.getTotalDispenses();
   metrics["successful"] = dispenseManager.getSuccessful();
   metrics["jams"] = dispenseManager.getJams();
   metrics["partial"] = dispenseManager.getPartial();
+  metrics["crashes"] = dispenseManager.getCrashes();
 
   uint16_t failures = dispenseManager.getTotalDispenses()
                     - dispenseManager.getSuccessful()
                     - dispenseManager.getJams();
   metrics["failures"] = failures;
+
+  // Token-level metrics
+  metrics["requested_tokens"] = dispenseManager.getRequestedTokens();
+  metrics["dispensed_tokens"] = dispenseManager.getDispensedTokens();
 
   // Add error information
   ErrorRecord* activeError = hopperControl.errorHistory.getActive();

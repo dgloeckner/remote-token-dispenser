@@ -30,11 +30,16 @@ public:
   Transaction getActiveTransaction();
   bool isIdle();
 
-  // Metrics
+  // Transaction-level metrics
   uint16_t getTotalDispenses();
   uint16_t getSuccessful();
   uint16_t getJams();
   uint16_t getPartial();
+  uint16_t getCrashes();
+
+  // Token-level metrics
+  uint32_t getRequestedTokens();
+  uint32_t getDispensedTokens();
 
 private:
   FlashStorage& flashStorage;
@@ -52,11 +57,16 @@ private:
   HistoryEntry history[RING_BUFFER_SIZE];
   uint8_t history_index;
 
-  // Metrics
+  // Transaction-level metrics
   uint16_t total_dispenses;
   uint16_t successful_count;
   uint16_t jam_count;
   uint16_t partial_count;
+  uint16_t crash_count;
+
+  // Token-level metrics
+  uint32_t requested_tokens;
+  uint32_t dispensed_tokens;
 
   bool findInHistory(const char* tx_id, Transaction& out_tx);
   void addToHistory(const char* tx_id, TransactionState state, uint8_t quantity, uint8_t dispensed);
