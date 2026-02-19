@@ -40,6 +40,21 @@ Instead of replacing all your legacy coin-operated equipment (expensive and wast
 
 ---
 
+## Development Tools
+
+### Mock Dispenser
+
+Local development server that simulates the ESP8266 dispenser without hardware:
+
+```bash
+cd dispenser-mock
+go run .
+```
+
+See [dispenser-mock/README.md](dispenser-mock/README.md) for details.
+
+---
+
 ## 🏗️ System Architecture
 
 ```
