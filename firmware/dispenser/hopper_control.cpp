@@ -40,11 +40,23 @@ void IRAM_ATTR handleErrorPinChange() {
 // Static variables for ISR
 static volatile uint8_t pulse_count = 0;
 static volatile unsigned long last_pulse_time = 0;
+// Target count at which the ISR stops the motor immediately.
+// Armed by setMotorStopAt() before startMotor(); cleared by stopMotor() or
+// the ISR itself once triggered.  0 = disabled (don't stop in ISR).
+static volatile uint8_t isr_stop_at = 0;
 
 void IRAM_ATTR HopperControl::handleCoinPulse() {
   pulse_count++;
   last_pulse_time = millis();
-  // Note: Serial.print in ISR can cause crashes, so we just count
+  // Stop motor immediately if target count reached, eliminating the up-to-10ms
+  // delay between the pulse firing and the main loop() reacting.  This is the
+  // primary mitigation for the double-dispense bug: a 2nd coin cannot exit if
+  // the motor is stopped at ISR time rather than on the next loop iteration.
+  // digitalWrite() is ISR-safe on ESP8266/Arduino.
+  if (isr_stop_at > 0 && pulse_count >= isr_stop_at) {
+    digitalWrite(MOTOR_PIN, LOW);
+    isr_stop_at = 0;  // Clear so subsequent coast-pulses don't re-trigger
+  }
 }
 
 void HopperControl::begin() {
@@ -88,18 +100,8 @@ void HopperControl::begin() {
 
   // Initialize pulse tracking
   pulse_count = 0;
+  isr_stop_at = 0;
   last_pulse_time = millis();
-
-  // Initialize error decoder
-  errorDecoder.begin();
-
-  // Set global instance for ISR
-  hopperControlInstance = this;
-
-  // Attach interrupt for error signal (CHANGE edge - both FALLING and RISING)
-  attachInterrupt(digitalPinToInterrupt(ERROR_SIGNAL_PIN),
-                  handleErrorPinChange, CHANGE);
-  Serial.println("[HopperControl] Interrupt attached to ERROR_SIGNAL_PIN (CHANGE edge)");
 
   Serial.println("[HopperControl] Initialization complete");
 }
@@ -116,7 +118,17 @@ void HopperControl::startMotor() {
   Serial.println("[HopperControl] Motor started, watchdog reset");
 }
 
+void HopperControl::setMotorStopAt(uint8_t count) {
+  noInterrupts();
+  isr_stop_at = count;
+  interrupts();
+}
+
 void HopperControl::stopMotor() {
+  // Clear ISR stop target first so a racing ISR doesn't re-fire after we stop.
+  noInterrupts();
+  isr_stop_at = 0;
+  interrupts();
   Serial.println("[HopperControl] *** STOPPING MOTOR ***");
   Serial.print("  Setting MOTOR_PIN (D1) to LOW (motor OFF)...");
   // GPIO LOW → optocoupler LED OFF → OUT HIGH (~6V) → motor OFF (NEGATIVE mode)

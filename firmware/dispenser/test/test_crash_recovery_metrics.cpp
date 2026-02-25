@@ -186,6 +186,92 @@ void test_crash_recovery_preserves_token_counts(void) {
     );
 }
 
+// =============================================================================
+// Immediate motor stop (double-dispense regression) tests
+// =============================================================================
+//
+// Root cause: motor was stopped only on the next loop() iteration (up to 10ms
+// later). During that window the disc kept spinning and could push a 2nd coin
+// through the exit chute.
+//
+// Fix: arm the ISR with the target count so it writes MOTOR_PIN LOW the
+// instant pulse_count reaches the target, before the main loop even runs.
+
+// RED: startDispense must arm the ISR with the target count
+void test_startDispense_arms_isr_stop_target(void) {
+    manager->begin();
+    manager->startDispense("tx_isr001", 1);
+
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(
+        1,
+        hopper->getMotorStopAt(),
+        "startDispense must set ISR stop target to the requested quantity"
+    );
+}
+
+// RED: Motor must stop at ISR level when pulse count hits target,
+// BEFORE loop() is called — this is the core fix for the double-dispense bug.
+void test_motor_stops_immediately_on_isr_pulse_without_loop(void) {
+    manager->begin();
+    manager->startDispense("tx_isr002", 1);
+
+    TEST_ASSERT_TRUE_MESSAGE(
+        hopper->isMotorRunning(),
+        "Motor should be running after startDispense"
+    );
+
+    // Simulate the coin-pulse ISR firing — motor must stop NOW,
+    // without needing a loop() call
+    hopper->simulatePulseISR();
+
+    TEST_ASSERT_FALSE_MESSAGE(
+        hopper->isMotorRunning(),
+        "Motor must stop at ISR level, not wait for the next loop() iteration"
+    );
+}
+
+// ISR stop target is cleared when the ISR stops the motor,
+// preventing redundant stops on subsequent pulses from motor coasting
+void test_isr_stop_target_cleared_after_isr_stop(void) {
+    manager->begin();
+    manager->startDispense("tx_isr003", 1);
+    // Explicitly arm so the test is non-trivial even before startDispense()
+    // is wired up to call setMotorStopAt()
+    hopper->setMotorStopAt(1);
+
+    hopper->simulatePulseISR();
+
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(
+        0,
+        hopper->getMotorStopAt(),
+        "ISR stop target must be cleared once the motor is stopped"
+    );
+}
+
+// Sanity: loop() still transitions state to DONE after ISR stops motor
+void test_loop_completes_transaction_after_isr_stop(void) {
+    manager->begin();
+    manager->startDispense("tx_isr004", 1);
+
+    // ISR fires: motor stops immediately
+    hopper->simulatePulseISR();
+
+    // Main loop runs: should see count >= quantity and finish the transaction
+    manager->loop();
+
+    Transaction tx = manager->getTransaction("tx_isr004");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        STATE_DONE,
+        tx.state,
+        "Transaction should be STATE_DONE after ISR stop + loop()"
+    );
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(
+        1,
+        tx.dispensed,
+        "Dispensed count should be 1"
+    );
+}
+
 int main(int argc, char **argv) {
     UNITY_BEGIN();
 
@@ -198,6 +284,12 @@ int main(int argc, char **argv) {
     RUN_TEST(test_requested_tokens_accumulates_across_transactions);
     RUN_TEST(test_dispensed_tokens_tracks_actual_dispensed);
     RUN_TEST(test_crash_recovery_preserves_token_counts);
+
+    // Immediate motor stop (double-dispense regression) tests
+    RUN_TEST(test_startDispense_arms_isr_stop_target);
+    RUN_TEST(test_motor_stops_immediately_on_isr_pulse_without_loop);
+    RUN_TEST(test_isr_stop_target_cleared_after_isr_stop);
+    RUN_TEST(test_loop_completes_transaction_after_isr_stop);
 
     return UNITY_END();
 }

@@ -15,6 +15,11 @@ public:
   void stopMotor();
   uint8_t getPulseCount();
   void resetPulseCount();
+  // Arm ISR-level stop: the coin-pulse ISR will write MOTOR_PIN LOW the
+  // instant pulse_count reaches `count`, eliminating the up-to-10ms delay
+  // between a pulse firing and the main loop() reacting.  Call this with the
+  // desired quantity BEFORE startMotor().  stopMotor() clears it automatically.
+  void setMotorStopAt(uint8_t count);
   bool checkJam();
   bool isHopperLow();
 

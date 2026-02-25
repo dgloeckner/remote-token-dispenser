@@ -103,8 +103,9 @@ public:
     // Persist to flash
     persistActiveTransaction();
 
-    // Start motor
+    // Arm ISR-level stop BEFORE starting motor
     hopperControl.resetPulseCount();
+    hopperControl.setMotorStopAt(quantity);
     hopperControl.startMotor();
 
     // Update metrics

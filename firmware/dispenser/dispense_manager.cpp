@@ -94,9 +94,12 @@ bool DispenseManager::startDispense(const char* tx_id, uint8_t quantity) {
   Serial.println("  Persisting transaction to flash...");
   persistActiveTransaction();
 
-  // Start motor
+  // Arm ISR-level stop BEFORE starting motor so the very first pulse that
+  // reaches the target immediately cuts motor power, eliminating the ~10ms
+  // main-loop latency that was causing occasional double-dispenses.
   Serial.println("  Resetting pulse count and starting motor...");
   hopperControl.resetPulseCount();
+  hopperControl.setMotorStopAt(quantity);
   hopperControl.startMotor();
 
   // Update metrics

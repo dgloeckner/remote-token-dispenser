@@ -23,12 +23,13 @@ private:
     uint8_t pulse_count;
     bool jam_detected;
     bool motor_running;
+    uint8_t isr_stop_at;  // Target count at which ISR should stop motor
 
 public:
     ErrorDecoder errorDecoder;
     ErrorHistory errorHistory;
 
-    HopperControlMock() : pulse_count(0), jam_detected(false), motor_running(false) {}
+    HopperControlMock() : pulse_count(0), jam_detected(false), motor_running(false), isr_stop_at(0) {}
 
     void begin() {}
 
@@ -38,6 +39,28 @@ public:
 
     void stopMotor() {
         motor_running = false;
+        isr_stop_at = 0;
+    }
+
+    // Arm ISR-level stop: motor GPIO is written LOW the moment pulse_count
+    // reaches this target, without waiting for the main loop()
+    void setMotorStopAt(uint8_t count) {
+        isr_stop_at = count;
+    }
+
+    uint8_t getMotorStopAt() const {
+        return isr_stop_at;
+    }
+
+    // Simulate a coin-pulse ISR firing (FALLING edge on COIN_PULSE_PIN).
+    // Increments pulse_count and, if the count reaches isr_stop_at, stops
+    // the motor immediately — exactly what the real ISR will do after the fix.
+    void simulatePulseISR() {
+        pulse_count++;
+        if (isr_stop_at > 0 && pulse_count >= isr_stop_at) {
+            motor_running = false;
+            isr_stop_at = 0;
+        }
     }
 
     uint8_t getPulseCount() {
