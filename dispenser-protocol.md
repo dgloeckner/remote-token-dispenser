@@ -38,7 +38,9 @@ anyone noticing. Two rules keep them honest:
 ## Design Principles
 
 ### 1. Idempotency by Transaction ID
-Every dispense request includes a client-generated `tx_id` (8-16 character hex string). Repeating the same `tx_id` returns the cached result without re-dispensing tokens.
+Every dispense request includes a client-generated `tx_id` (8-16 character hex string). Repeating the same `tx_id` returns the current state of that transaction without re-dispensing tokens — **including while it is still running**. That is the normal case, not an exotic one: the terminal retries a POST whose answer it did not see, and the transaction it is asking about is the one dispensing at that moment.
+
+Repeating a `tx_id` with a **different quantity** is not a retry; it is a client contradicting itself, and it is refused with `409 tx_id reused`.
 
 **Example:**
 ```bash
@@ -66,7 +68,7 @@ Protocol 1 was the shape before the conformance suite existed; nothing speaks
 it any more.
 
 ### 3. Single-Resource Locking
-The dispenser is a single physical device. Only one transaction can be active at a time. Concurrent requests receive `409 Conflict`.
+The dispenser is a single physical device. Only one transaction can be active at a time. A request for **another** transaction receives `409 Conflict`; a request for the active one is the idempotent retry of principle 1 and receives `200`.
 
 ### 4. Crash-Safe State Persistence
 The ESP8266 persists transaction state to flash memory on every state transition:
@@ -348,8 +350,19 @@ Causes:
 ```
 
 Returned when:
-- Another transaction is currently `dispensing`
+- **Another** transaction is currently `dispensing` — `active_tx_id` names it,
+  and it is never the `tx_id` of the request itself
 - Dispenser is in `error` state (jam, requires reset)
+
+**Response (409 Conflict) - Reused transaction ID:**
+```json
+{
+  "error": "tx_id reused"
+}
+```
+
+Returned when `tx_id` is already known (active or in the history ring) but
+`quantity` differs from the one it was started with.
 
 **Response (415 Unsupported Media Type) - Wrong Content-Type:**
 ```json
@@ -366,12 +379,19 @@ Returned when:
    - Start motor
    - Return `200` with `state: "dispensing"`
 
-2. **Idempotent retry:** If `tx_id` already exists in history:
-   - Return cached state (`dispensing`, `done`, or `error`)
-   - No additional tokens dispensed
+2. **Idempotent retry:** If `tx_id` is the transaction currently running, or
+   one in the history ring, and `quantity` is the one it was started with:
+   - Return its state (`dispensing`, `done`, or `error`)
+   - No additional tokens dispensed, and the active transaction is untouched
    - Safe to retry on network failures
 
-3. **Busy/Error:** If dispenser not idle:
+3. **Reused `tx_id`:** If `tx_id` is known but `quantity` differs:
+   - Return `409 Conflict` with `{"error": "tx_id reused"}`
+   - Answering with the stored quantity would look like the confirmation of a
+     request that was never made
+
+4. **Busy/Error:** If **another** transaction is dispensing, or the dispenser is
+   in `error`:
    - Return `409 Conflict`
    - Client should retry after delay or check status
 
@@ -546,10 +566,8 @@ The table lives in `dispenser-client-tui/conformance_cases.go`. Adding to it:
   pass.
 - A case that is known to fail against one target carries a `Note` naming the
   issue that will fix it, so a red line reads as *known* or *new* at a glance.
-- Known-red today: `post_retry_while_dispensing_is_200` (firmware answers 409
-  to a retry of the active transaction — issue #2) and `post_while_error_is_409`
-  (firmware accepts a dispense while a hardware error is active — issue #6).
-  Both are green against the mock.
+- Known-red today: `post_while_error_is_409` (firmware accepts a dispense while
+  a hardware error is active — issue #6). It is green against the mock.
 
 Native unit tests cover the firmware logic that needs no network
 (`firmware/dispenser/test/`); the conformance suite covers everything that only
@@ -569,6 +587,7 @@ exists once the HTTP layer and the hardware are in play.
 | `401` | `unauthorized` | Missing or invalid API key | Add/fix `X-API-Key` header |
 | `404` | `not found` | Unknown `tx_id` | Check tx_id, may have expired |
 | `409` | `busy` | Another transaction active | Wait and retry |
+| `409` | `tx_id reused` | Known `tx_id`, different `quantity` | Use a fresh `tx_id` |
 | `409` | `error` (dispenser in error state) | Jam or hardware fault | Clear jam, power cycle |
 | `415` | `content-type must be application/json` | Wrong/missing Content-Type | Set `Content-Type: application/json` |
 
@@ -843,6 +862,24 @@ $ curl -X POST http://192.168.4.20/dispense \
 
 {"tx_id":"abc123","state":"done","quantity":3,"dispensed":3}
 # ↑ Returns cached result, no additional tokens dispensed
+
+# 4. Retry while the transaction is still running
+$ curl -X POST http://192.168.4.20/dispense \
+  -H "X-API-Key: secret" \
+  -H "Content-Type: application/json" \
+  -d '{"tx_id":"abc123","quantity":3}'
+
+{"tx_id":"abc123","state":"dispensing","quantity":3,"dispensed":1}
+# ↑ The caller's own transaction — 200 with its progress, never 409 busy
+
+# 5. Same tx_id, different quantity
+$ curl -X POST http://192.168.4.20/dispense \
+  -H "X-API-Key: secret" \
+  -H "Content-Type: application/json" \
+  -d '{"tx_id":"abc123","quantity":5}'
+
+409 Conflict
+{"error":"tx_id reused"}
 ```
 
 ### Concurrent Conflict
@@ -974,9 +1011,13 @@ All inputs validated:
 - **This document is the contract:** behaviour changes update it in the same PR
 - **Conformance suite:** `token-tui conformance` runs the cases below against
   the mock (in CI) and against a real device
-- Known deviations of the firmware from this document are tracked as issues #2
-  (retry of the active transaction) and #6 (dispense while a hardware error is
-  active); the suite reports them per case rather than hiding them
+- **Idempotency of the active transaction (#2):** a POST for the transaction
+  that is dispensing returns its state (`200`) instead of `409 busy`, an
+  idempotent hit no longer replaces the active transaction, and a known `tx_id`
+  with a different `quantity` is refused with `409 tx_id reused`
+- Known deviation of the firmware from this document: issue #6 (dispense while
+  a hardware error is active); the suite reports it per case rather than
+  hiding it
 
 ### Version 1.1.0 (2026-02-14)
 - **Error decoding:** Added Azkoyen hardware error code detection (7 error types)
