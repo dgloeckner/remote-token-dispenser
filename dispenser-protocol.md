@@ -1,10 +1,20 @@
 # Token Dispenser HTTP API Reference
 
-**Version:** 1.1.0
+**Protocol version:** 2 (reported as `protocol` by `GET /health`)
+**Version:** 2.0.0
 **Base URL:** `http://<ESP8266_IP>` (default: `http://192.168.4.20`)
 **Authentication:** API Key via `X-API-Key` header
 
 Complete HTTP API specification for the ESP8266 token dispenser firmware.
+
+**This document is the contract.** The firmware, the Go mock and the terminal
+are three implementations of it, and they have drifted apart before without
+anyone noticing. Two rules keep them honest:
+
+- A change in behaviour updates this document **in the same pull request**.
+- `token-tui conformance` (see [Conformance](#conformance)) turns the document
+  into assertions and runs them against the mock in CI and against a real
+  device on the bench.
 
 ---
 
@@ -18,6 +28,7 @@ Complete HTTP API specification for the ESP8266 token dispenser firmware.
   - [POST /dispense](#post-dispense)
   - [GET /dispense/{tx_id}](#get-dispensetx_id)
 - [State Machine](#state-machine)
+- [Conformance](#conformance)
 - [Error Codes](#error-codes)
 - [Timing & Timeouts](#timing--timeouts)
 - [Recovery Scenarios](#recovery-scenarios)
@@ -40,10 +51,24 @@ POST /dispense {"tx_id": "abc123", "quantity": 3}
 → Returns cached result: "done", dispensed: 3 (NO additional tokens)
 ```
 
-### 2. Single-Resource Locking
+### 2. Protocol Version Handshake
+
+`GET /health` reports `"protocol": 2`. A client checks it and **refuses any
+other value** rather than adapting to it: there are no devices in the field, so
+protocol 2 replaced protocol 1 outright and a mismatch means something was not
+deployed, never something to work around at runtime.
+
+```json
+{"protocol": 2, "status": "ok", "...": "..."}
+```
+
+Protocol 1 was the shape before the conformance suite existed; nothing speaks
+it any more.
+
+### 3. Single-Resource Locking
 The dispenser is a single physical device. Only one transaction can be active at a time. Concurrent requests receive `409 Conflict`.
 
-### 3. Crash-Safe State Persistence
+### 4. Crash-Safe State Persistence
 The ESP8266 persists transaction state to flash memory on every state transition:
 ```cpp
 {tx_id: "abc123", quantity: 3, dispensed: 2, state: "dispensing"}
@@ -54,13 +79,13 @@ On reboot, the firmware:
 - If crashed during `dispensing` → marks as `error` with exact partial count
 - Clients can query final state via `GET /dispense/{tx_id}`
 
-### 4. Dispense-First, Pay-After
+### 5. Dispense-First, Pay-After
 Tokens are **physically dispensed before payment processing**. This ensures:
 - Exact token count tracking (even during failures)
 - No payment refunds for dispense failures
 - Simple reconciliation (what was dispensed = what is charged)
 
-### 5. Self-Healing Error Recovery
+### 6. Self-Healing Error Recovery
 Hardware errors (from Azkoyen error signal) persist until either:
 - **Manual reset:** Power cycle clears error state
 - **Self-healing:** Successful token dispense automatically clears active error
@@ -122,6 +147,7 @@ Host: 192.168.4.20
 **Response (200 OK):**
 ```json
 {
+  "protocol": 2,
   "status": "ok",
   "uptime": 84230,
   "firmware": "1.1.0",
@@ -153,6 +179,7 @@ Host: 192.168.4.20
 **Response (200 OK) - With Active Error:**
 ```json
 {
+  "protocol": 2,
   "status": "ok",
   "uptime": 84230,
   "firmware": "1.1.0",
@@ -202,6 +229,7 @@ Host: 192.168.4.20
 
 | Field | Type | Description |
 |-------|------|-------------|
+| `protocol` | integer | Protocol version; always `2`. A client that reads anything else refuses the device. |
 | `status` | string | Overall health: `"ok"`, `"degraded"`, `"error"` |
 | `uptime` | integer | Seconds since boot |
 | `firmware` | string | Firmware version |
@@ -489,6 +517,43 @@ Errors can be cleared in two ways:
    - Power cycle (reboot) ESP8266
    - On boot, ESP8266 clears `error` state → returns to `idle`
    - Required for jam timeouts and persistent hardware faults
+
+---
+
+## Conformance
+
+The suite that decides whether an implementation speaks this protocol:
+
+```sh
+# the Go mock (runs in CI)
+token-tui conformance --endpoint http://127.0.0.1:8080 --api-key dev --target mock
+
+# a real ESP8266 with the hopper simulator (docs/hopper-simulator.md)
+token-tui conformance --endpoint http://192.168.4.20 --api-key … --target simulator \
+  --interactive --json report.json
+```
+
+Same binary, same table of cases, both targets. The exit code is the verdict;
+`--json` writes a per-case report. Cases that need a physical act (press RST,
+cut power, flip a simulator switch) are skipped unless `--interactive` is
+given, and a case that leaves the device in a state only a power cycle clears
+runs last.
+
+The table lives in `dispenser-client-tui/conformance_cases.go`. Adding to it:
+
+- **Assert the protocol, not an implementation.** If the firmware and the mock
+  disagree, that is the finding — the case does not get weakened until both
+  pass.
+- A case that is known to fail against one target carries a `Note` naming the
+  issue that will fix it, so a red line reads as *known* or *new* at a glance.
+- Known-red today: `post_retry_while_dispensing_is_200` (firmware answers 409
+  to a retry of the active transaction — issue #2) and `post_while_error_is_409`
+  (firmware accepts a dispense while a hardware error is active — issue #6).
+  Both are green against the mock.
+
+Native unit tests cover the firmware logic that needs no network
+(`firmware/dispenser/test/`); the conformance suite covers everything that only
+exists once the HTTP layer and the hardware are in play.
 
 ---
 
@@ -902,6 +967,16 @@ All inputs validated:
 ---
 
 ## Changelog
+
+### Version 2.0.0 (2026-09-20) — protocol 2
+- **Version handshake:** `GET /health` reports `"protocol": 2`; clients refuse
+  any other value instead of adapting to it (no devices are in the field)
+- **This document is the contract:** behaviour changes update it in the same PR
+- **Conformance suite:** `token-tui conformance` runs the cases below against
+  the mock (in CI) and against a real device
+- Known deviations of the firmware from this document are tracked as issues #2
+  (retry of the active transaction) and #6 (dispense while a hardware error is
+  active); the suite reports them per case rather than hiding them
 
 ### Version 1.1.0 (2026-02-14)
 - **Error decoding:** Added Azkoyen hardware error code detection (7 error types)
