@@ -37,6 +37,13 @@ pio test -e native
   is what a reset looks like from the manager's side. Which reset it was is one
   call: `counts->loseRtcMemory()` is a power loss, doing nothing is a watchdog
   reset. Both cases matter (issue #3), so both are tested.
+- **A POST is two steps, not one.** Since #4 `requestDispense()` only decides
+  and fills the request slot; the flash commit and the motor start happen in
+  the next `loop()` pass. The `startAndRun()` helper in
+  `test_dispense_manager.cpp` is both halves, and a test that wants a *running*
+  transaction uses it. The tests that assert the split itself (the four under
+  "The request slot") deliberately call `requestDispense()` and `loop()`
+  separately — that is the whole point of them.
 - Tests whose name ends in `KNOWN_DEVIATION_issue_N` pin behaviour that the
   protocol says is wrong and that issue N will change. They assert what the
   firmware does *today* so CI stays honest; the issue that fixes the bug

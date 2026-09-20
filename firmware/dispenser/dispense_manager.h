@@ -26,11 +26,18 @@ public:
   DispenseManager(IStorage& storage, IHopper& hopper, ICountMemory& countMemory);
 
   void begin();
-  void loop();  // Called from main loop for watchdog
+  // Called from the main loop: starts a request the HTTP layer accepted, then
+  // watches the motor.  Everything with a side effect happens here — see
+  // `pending_start` below.
+  void loop();
 
   // Transaction operations.
-  // requestDispense() is the full answer (see DispenseOutcome);
-  // startDispense() is the same call reduced to "accepted or not".
+  //
+  // requestDispense() is the full answer (see DispenseOutcome).  It is safe to
+  // call from the async TCP callback: it decides in memory and touches neither
+  // flash, nor RTC memory, nor the motor (issue #4).  The next loop() pass
+  // does that work.  startDispense() is the same call reduced to
+  // "accepted or not".
   DispenseOutcome requestDispense(const char* tx_id, uint8_t quantity);
   bool startDispense(const char* tx_id, uint8_t quantity);
   Transaction getTransaction(const char* tx_id);
@@ -55,6 +62,12 @@ private:
 
   Transaction active_tx;
 
+  // The request slot: set by requestDispense() when a new transaction is
+  // accepted, cleared by the loop() pass that commits it and starts the motor.
+  // One slot, not a queue — the device runs exactly one transaction at a time,
+  // so a second request while this is set is the same 409 busy it always was.
+  bool pending_start;
+
   // Ring buffer for idempotency (last 8 transactions with full data).  It is
   // the same struct that goes to flash, so the ring is saved with the active
   // transaction in one commit and comes back on the next boot.
@@ -76,6 +89,8 @@ private:
   void addToHistory(const Transaction& tx);
   // Writes the active transaction AND the ring in one commit.
   void persistState();
+  // Consumes the request slot: commit, seed the live count, start the motor.
+  void startPending();
 };
 
 #endif

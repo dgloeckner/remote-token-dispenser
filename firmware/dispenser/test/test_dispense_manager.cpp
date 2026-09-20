@@ -48,6 +48,16 @@ static void reboot(void) {
 }
 
 
+// A POST and the loop() pass that follows it.  Since #4 the request handler
+// only fills the slot; the flash commit and the motor start happen in loop(),
+// at most 10 ms later.  Every test that wants a RUNNING transaction therefore
+// needs both halves, and says so by calling this.
+static bool startAndRun(const char* tx_id, uint8_t quantity) {
+    bool accepted = manager->startDispense(tx_id, quantity);
+    manager->loop();
+    return accepted;
+}
+
 // tx_id for the ring tests: "ring1" … "ring9", without pulling in <stdio.h>.
 static void snprintfTxId(char* out, int n) {
     out[0] = 'r'; out[1] = 'i'; out[2] = 'n'; out[3] = 'g';
@@ -130,13 +140,13 @@ void test_persisted_error_state_is_cleared_on_boot(void) {
 
 void test_requested_tokens_accumulates_across_transactions(void) {
     manager->begin();
-    manager->startDispense("tx001", 5);
-    manager->startDispense("tx002", 3);  // busy → rejected
+    startAndRun("tx001", 5);
+    startAndRun("tx002", 3);  // busy → rejected
 
     hopper->setPulseCount(5);
     manager->loop();                     // completes tx001
 
-    manager->startDispense("tx002", 3);  // now accepted
+    startAndRun("tx002", 3);  // now accepted
 
     TEST_ASSERT_EQUAL_UINT32_MESSAGE(
         8, manager->getRequestedTokens(),
@@ -146,11 +156,11 @@ void test_requested_tokens_accumulates_across_transactions(void) {
 void test_dispensed_tokens_tracks_actual_dispensed(void) {
     manager->begin();
 
-    manager->startDispense("tx001", 5);
+    startAndRun("tx001", 5);
     hopper->setPulseCount(5);
     manager->loop();                     // full success
 
-    manager->startDispense("tx002", 3);
+    startAndRun("tx002", 3);
     hopper->setPulseCount(2);
     hopper->setJamDetected(true);
     manager->loop();                     // jam after 2 of 3
@@ -167,12 +177,12 @@ void test_dispensed_tokens_tracks_actual_dispensed(void) {
 void test_start_dispense_persists_and_starts_motor(void) {
     manager->begin();
 
-    TEST_ASSERT_TRUE(manager->startDispense("tx_start", 3));
+    TEST_ASSERT_TRUE(startAndRun("tx_start", 3));
 
     TEST_ASSERT_TRUE_MESSAGE(hopper->isMotorRunning(), "Motor must be running");
     TEST_ASSERT_EQUAL_UINT8_MESSAGE(
         3, hopper->getMotorStopAt(),
-        "startDispense must arm the ISR stop with the requested quantity");
+        "The loop() pass must arm the ISR stop with the requested quantity");
     TEST_ASSERT_EQUAL_INT_MESSAGE(
         1, storage->getSaveCalls(),
         "The started transaction must be persisted exactly once");
@@ -181,10 +191,10 @@ void test_start_dispense_persists_and_starts_motor(void) {
 
 void test_busy_with_other_tx_is_rejected(void) {
     manager->begin();
-    manager->startDispense("tx_a", 3);
+    startAndRun("tx_a", 3);
 
     TEST_ASSERT_FALSE_MESSAGE(
-        manager->startDispense("tx_b", 2),
+        startAndRun("tx_b", 2),
         "A different tx_id while dispensing must be rejected (409 busy)");
     TEST_ASSERT_EQUAL_INT_MESSAGE(
         1, hopper->getStartMotorCalls(),
@@ -193,7 +203,7 @@ void test_busy_with_other_tx_is_rejected(void) {
 
 void test_jam_stops_motor_and_records_partial(void) {
     manager->begin();
-    manager->startDispense("tx_jam", 4);
+    startAndRun("tx_jam", 4);
 
     hopper->setPulseCount(1);
     hopper->setJamDetected(true);
@@ -211,7 +221,7 @@ void test_jam_stops_motor_and_records_partial(void) {
 void test_completed_dispense_clears_active_hopper_error(void) {
     // Self-healing per dispenser-protocol.md § Design Principles 5.
     manager->begin();
-    manager->startDispense("tx_heal", 1);
+    startAndRun("tx_heal", 1);
 
     hopper->simulatePulseISR();
     manager->loop();
@@ -237,12 +247,12 @@ void test_unknown_tx_is_reported_as_empty(void) {
 
 void test_replay_of_finished_tx_returns_cached_result(void) {
     manager->begin();
-    manager->startDispense("tx_done", 2);
+    startAndRun("tx_done", 2);
     hopper->setPulseCount(2);
     manager->loop();                     // tx_done is DONE and in the ring
 
     TEST_ASSERT_TRUE_MESSAGE(
-        manager->startDispense("tx_done", 2),
+        startAndRun("tx_done", 2),
         "Replaying a finished tx_id is not an error");
     TEST_ASSERT_EQUAL_INT_MESSAGE(
         1, hopper->getStartMotorCalls(),
@@ -264,9 +274,9 @@ void test_replay_of_finished_tx_returns_cached_result(void) {
 // ---------------------------------------------------------------------------
 void test_retry_of_active_tx_returns_true_and_does_not_restart(void) {
     manager->begin();
-    manager->startDispense("tx_active", 5);
+    startAndRun("tx_active", 5);
 
-    bool retry = manager->startDispense("tx_active", 5);
+    bool retry = startAndRun("tx_active", 5);
 
     TEST_ASSERT_TRUE_MESSAGE(
         retry,
@@ -291,12 +301,12 @@ void test_retry_of_active_tx_returns_true_and_does_not_restart(void) {
 void test_idempotent_hit_does_not_touch_active_tx(void) {
     manager->begin();
 
-    manager->startDispense("tx_old", 1);
+    startAndRun("tx_old", 1);
     hopper->simulatePulseISR();
     manager->loop();                      // tx_old DONE, lands in the ring
 
-    manager->startDispense("tx_new", 5);  // now dispensing
-    manager->startDispense("tx_old", 1);  // idempotent hit for the finished one
+    startAndRun("tx_new", 5);  // now dispensing
+    startAndRun("tx_old", 1);  // idempotent hit for the finished one
 
     Transaction active = manager->getActiveTransaction();
     TEST_ASSERT_EQUAL_STRING_MESSAGE(
@@ -324,11 +334,11 @@ void test_idempotent_hit_while_idle_leaves_active_idle(void) {
     // reports getActiveTransaction().state.  A replay of a finished tx_id
     // must not make an idle device claim it is doing something.
     manager->begin();
-    manager->startDispense("tx_done", 1);
+    startAndRun("tx_done", 1);
     hopper->simulatePulseISR();
     manager->loop();                      // idle again, tx_done in the ring
 
-    manager->startDispense("tx_done", 1);
+    startAndRun("tx_done", 1);
 
     TEST_ASSERT_EQUAL_INT_MESSAGE(
         STATE_IDLE, manager->getActiveTransaction().state,
@@ -343,7 +353,7 @@ void test_outcome_distinguishes_busy_from_a_reused_tx_id(void) {
     // The HTTP layer needs the reason, not just "no": 409 busy means ANOTHER
     // transaction, 409 tx_id reused means the caller contradicted itself.
     manager->begin();
-    manager->startDispense("tx_run", 3);
+    startAndRun("tx_run", 3);
 
     TEST_ASSERT_EQUAL_INT_MESSAGE(
         DISPENSE_BUSY, manager->requestDispense("tx_other", 1),
@@ -361,13 +371,13 @@ void test_outcome_distinguishes_busy_from_a_reused_tx_id(void) {
 
 void test_same_tx_id_different_quantity_is_rejected(void) {
     manager->begin();
-    manager->startDispense("tx_qty", 2);
+    startAndRun("tx_qty", 2);
     hopper->simulatePulseISR();
     hopper->simulatePulseISR();
     manager->loop();                      // tx_qty DONE with quantity 2
 
     TEST_ASSERT_FALSE_MESSAGE(
-        manager->startDispense("tx_qty", 5),
+        startAndRun("tx_qty", 5),
         "The same tx_id with another quantity is a client bug, not a retry");
     TEST_ASSERT_EQUAL_INT_MESSAGE(
         1, hopper->getStartMotorCalls(),
@@ -491,8 +501,8 @@ void test_retry_before_loop_does_not_queue_a_second_start(void) {
 
 void test_motor_stops_immediately_on_isr_pulse_without_loop(void) {
     manager->begin();
-    manager->startDispense("tx_isr002", 1);
-    TEST_ASSERT_TRUE_MESSAGE(hopper->isMotorRunning(), "Motor runs after startDispense");
+    startAndRun("tx_isr002", 1);
+    TEST_ASSERT_TRUE_MESSAGE(hopper->isMotorRunning(), "Motor runs after the accepting loop() pass");
 
     hopper->simulatePulseISR();   // no loop() call in between
 
@@ -506,7 +516,7 @@ void test_motor_stops_immediately_on_isr_pulse_without_loop(void) {
 
 void test_loop_completes_transaction_after_isr_stop(void) {
     manager->begin();
-    manager->startDispense("tx_isr004", 1);
+    startAndRun("tx_isr004", 1);
 
     hopper->simulatePulseISR();
     manager->loop();
@@ -530,7 +540,7 @@ void test_loop_completes_transaction_after_isr_stop(void) {
 
 void test_reset_mid_dispense_recovers_rtc_count(void) {
     manager->begin();
-    manager->startDispense("tx_rst", 5);
+    startAndRun("tx_rst", 5);
 
     // Three tokens are in the tray when the watchdog fires.
     hopper->setPulseCount(3);
@@ -555,7 +565,7 @@ void test_reset_mid_dispense_recovers_rtc_count(void) {
 
 void test_power_loss_mid_dispense_reports_count_unreliable(void) {
     manager->begin();
-    manager->startDispense("tx_pwr", 5);
+    startAndRun("tx_pwr", 5);
 
     hopper->setPulseCount(3);
     manager->loop();
@@ -579,7 +589,7 @@ void test_live_count_goes_to_rtc_and_not_to_flash(void) {
     manager->begin();
     storage->resetCallCounts();
 
-    manager->startDispense("tx_live", 3);
+    startAndRun("tx_live", 3);
     hopper->setPulseCount(1);
     manager->loop();
     hopper->setPulseCount(2);
@@ -595,7 +605,7 @@ void test_live_count_goes_to_rtc_and_not_to_flash(void) {
 
 void test_done_tx_is_found_after_reboot(void) {
     manager->begin();
-    manager->startDispense("tx_keep", 2);
+    startAndRun("tx_keep", 2);
     hopper->setPulseCount(2);
     manager->loop();                     // DONE
 
@@ -616,7 +626,7 @@ void test_ring_survives_reboot_and_wraps_at_8(void) {
     char id[8];
     for (int i = 1; i <= 9; i++) {
         snprintfTxId(id, i);
-        manager->startDispense(id, 1);
+        startAndRun(id, 1);
         hopper->setPulseCount(1);
         manager->loop();
     }
@@ -670,7 +680,7 @@ void test_successful_dispense_commits_twice(void) {
     manager->begin();
     storage->resetCallCounts();
 
-    manager->startDispense("tx_cost", 2);
+    startAndRun("tx_cost", 2);
     hopper->setPulseCount(2);
     manager->loop();
 
@@ -687,7 +697,7 @@ void test_successful_dispense_commits_twice(void) {
 
 void test_corrupt_record_is_ignored(void) {
     manager->begin();
-    manager->startDispense("tx_bad", 2);
+    startAndRun("tx_bad", 2);
     hopper->setPulseCount(2);
     manager->loop();
 
@@ -702,7 +712,7 @@ void test_corrupt_record_is_ignored(void) {
 
 void test_old_layout_version_is_ignored(void) {
     manager->begin();
-    manager->startDispense("tx_old_v", 2);
+    startAndRun("tx_old_v", 2);
     hopper->setPulseCount(2);
     manager->loop();
 

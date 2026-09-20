@@ -8,6 +8,7 @@ DispenseManager::DispenseManager(IStorage& storage, IHopper& hopper, ICountMemor
   memset(&active_tx, 0, sizeof(active_tx));
   active_tx.state = STATE_IDLE;
   active_tx.count_reliable = true;
+  pending_start = false;
 
   memset(history, 0, sizeof(history));
   history_index = 0;
@@ -129,8 +130,17 @@ DispenseOutcome DispenseManager::requestDispense(const char* tx_id, uint8_t quan
     return DISPENSE_BUSY;
   }
 
-  // Start new transaction
-  Serial.println("  Starting new dispense transaction");
+  // Accept the transaction — in memory only.  This call runs in the async TCP
+  // callback, where a flash sector erase and a blocking serial write starve the
+  // WiFi stack and make the POST take seconds (issue #4).  The state goes to
+  // DISPENSING right here, so the answer, the busy check and GET /dispense all
+  // see it; the work goes into the slot for the next loop() pass, at most 10 ms
+  // later.
+  //
+  // A reset in that window loses the transaction, because nothing was written
+  // yet — and that is the harmless direction: no token has dropped, so the
+  // terminal's retry starts it for real.
+  Serial.println("  Accepting new dispense transaction");
   strncpy(active_tx.tx_id, tx_id, 16);
   active_tx.tx_id[16] = '\0';
   active_tx.quantity = quantity;
@@ -138,9 +148,21 @@ DispenseOutcome DispenseManager::requestDispense(const char* tx_id, uint8_t quan
   active_tx.state = STATE_DISPENSING;
   active_tx.count_reliable = true;
   active_tx.started_ms = millis();
+  pending_start = true;
 
-  // Persist to flash
-  Serial.println("  Persisting transaction to flash...");
+  // Update metrics
+  total_dispenses++;
+  requested_tokens += quantity;
+
+  return DISPENSE_STARTED;
+}
+
+void DispenseManager::startPending() {
+  // The slot is cleared FIRST: whatever happens below, this transaction is
+  // never started twice.
+  pending_start = false;
+
+  Serial.println("[DispenseManager] Starting the accepted transaction");
   persistState();
 
   // Seed the live count, so a reset before the first token recovers a
@@ -150,17 +172,9 @@ DispenseOutcome DispenseManager::requestDispense(const char* tx_id, uint8_t quan
   // Arm ISR-level stop BEFORE starting motor so the very first pulse that
   // reaches the target immediately cuts motor power, eliminating the ~10ms
   // main-loop latency that was causing occasional double-dispenses.
-  Serial.println("  Resetting pulse count and starting motor...");
   hopperControl.resetPulseCount();
-  hopperControl.setMotorStopAt(quantity);
+  hopperControl.setMotorStopAt(active_tx.quantity);
   hopperControl.startMotor();
-
-  // Update metrics
-  total_dispenses++;
-  requested_tokens += quantity;
-
-  Serial.println("[DispenseManager] Dispense started successfully");
-  return DISPENSE_STARTED;
 }
 
 bool DispenseManager::startDispense(const char* tx_id, uint8_t quantity) {
@@ -169,6 +183,15 @@ bool DispenseManager::startDispense(const char* tx_id, uint8_t quantity) {
 }
 
 void DispenseManager::loop() {
+  if (pending_start) {
+    // A transaction the HTTP layer accepted in the TCP callback.  Commit it and
+    // start the motor here, in loop() context, then leave: a motor that has
+    // just started has dropped no token and cannot have jammed, so the
+    // monitoring below has nothing to do until the next pass.
+    startPending();
+    return;
+  }
+
   if (active_tx.state != STATE_DISPENSING) {
     return;  // Nothing to monitor
   }
