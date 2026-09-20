@@ -53,7 +53,7 @@ func TestSuiteIsGreenAgainstConformingDevice(t *testing.T) {
 // Note any more: #2 fixed the firmware, so it is no longer known-red anywhere.
 func TestSuiteCatchesActiveRetryRejection(t *testing.T) {
 	dev := newFakeDevice("k")
-	dev.rejectRetry = true // the #2 bug, as the firmware has it today
+	dev.rejectRetry = true // the #2 bug, as the firmware had it
 	srv := dev.server()
 	defer srv.Close()
 
