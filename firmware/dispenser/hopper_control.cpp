@@ -82,11 +82,12 @@ void HopperControl::begin() {
 
   pinMode(COIN_PULSE_PIN, INPUT_PULLUP);
   pinMode(ERROR_SIGNAL_PIN, INPUT_PULLUP);
-  pinMode(HOPPER_LOW_PIN, INPUT_PULLUP);
+  // D6 is deliberately not configured: the hopper's empty sensor is a factory
+  // option our unit does not have, so the pin sat on its pull-up and said
+  // "not empty" forever.  /health published that as data until issue #6.
 
-  LOG_DEBUG("hopper: inputs INPUT_PULLUP, coin=%d error=%d low=%d",
-            digitalRead(COIN_PULSE_PIN), digitalRead(ERROR_SIGNAL_PIN),
-            digitalRead(HOPPER_LOW_PIN));
+  LOG_DEBUG("hopper: inputs INPUT_PULLUP, coin=%d error=%d",
+            digitalRead(COIN_PULSE_PIN), digitalRead(ERROR_SIGNAL_PIN));
 
   // Attach interrupt for coin pulse (FALLING edge)
   attachInterrupt(digitalPinToInterrupt(COIN_PULSE_PIN),
@@ -108,6 +109,7 @@ void HopperControl::begin() {
   pulse_count = 0;
   coinPulseFilter.reset();
   isr_stop_at = 0;
+  decoded_error = 0;
   last_pulse_time = millis();
 
   LOG_INFO("hopper ready");
@@ -173,11 +175,6 @@ bool HopperControl::checkJam() {
   return (millis() - last_time > JAM_TIMEOUT_MS);
 }
 
-bool HopperControl::isHopperLow() {
-  // Hopper low sensor is active LOW
-  return digitalRead(HOPPER_LOW_PIN) == LOW;
-}
-
 uint8_t HopperControl::getCoinPulseRaw() {
   return digitalRead(COIN_PULSE_PIN) == LOW ? 0 : 1;
 }
@@ -194,10 +191,6 @@ bool HopperControl::isErrorSignalActive() {
   return digitalRead(ERROR_SIGNAL_PIN) == LOW;
 }
 
-uint8_t HopperControl::getHopperLowRaw() {
-  return digitalRead(HOPPER_LOW_PIN) == LOW ? 0 : 1;
-}
-
 void HopperControl::updateErrorDecoder() {
   errorDecoder.update();
 
@@ -205,13 +198,21 @@ void HopperControl::updateErrorDecoder() {
     ErrorCode code = errorDecoder.getErrorCode();
     errorHistory.addError(code);
     errorDecoder.reset();
+    // Hand it to the manager, which is the only place that may stop a motor
+    // (issue #6).  Before this the error went into the history list and
+    // nowhere else, so the hopper reported "motor fault" while the firmware
+    // kept driving it until the 5 s jam timeout.
+    decoded_error = (uint8_t)code;
 
     LOG_ERROR("hopper error %s - %s", errorCodeToString(code),
               errorCodeToDescription(code));
   }
 }
 
-// Self-healing (IHopper): a completed dispense clears the active hopper error.
-void HopperControl::clearActiveError() {
-  errorHistory.clearActive();
+uint8_t HopperControl::takeDecodedError() {
+  noInterrupts();
+  uint8_t code = decoded_error;
+  decoded_error = 0;
+  interrupts();
+  return code;
 }

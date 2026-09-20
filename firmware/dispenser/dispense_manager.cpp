@@ -2,8 +2,40 @@
 
 #include "dispense_manager.h"
 #include "config.h"
+#include "error_decoder.h"
 #include "log.h"
 #include <string.h>
+
+// The protocol vocabulary (dispenser-protocol.md).  It lives next to the
+// state it names, in a file the native tests compile — the HTTP layer needs
+// the ESP SDK and no unit test can reach it.
+const char* deviceStateToString(DeviceState state) {
+  switch (state) {
+    case DEVICE_IDLE: return "idle";
+    case DEVICE_DISPENSING: return "dispensing";
+    case DEVICE_FAULT: return "fault";
+    default: return "unknown";
+  }
+}
+
+const char* faultToString(DeviceFault fault) {
+  switch (fault) {
+    case FAULT_NONE: return "none";
+    case FAULT_JAM: return "jam";
+    case FAULT_HOPPER_ERROR: return "hopper_error";
+    default: return "unknown";
+  }
+}
+
+const char* txErrorTypeToString(uint8_t error_kind, uint8_t error_code) {
+  switch (error_kind) {
+    case TX_ERROR_NONE: return "NONE";
+    case TX_ERROR_JAM_TIMEOUT: return "JAM_TIMEOUT";
+    case TX_ERROR_RESET: return "RESET";
+    case TX_ERROR_HOPPER: return errorCodeToString((ErrorCode)error_code);
+    default: return "UNKNOWN";
+  }
+}
 
 DispenseManager::DispenseManager(IStorage& storage, IHopper& hopper, ICountMemory& counts)
   : flashStorage(storage), hopperControl(hopper), countMemory(counts) {
@@ -13,6 +45,8 @@ DispenseManager::DispenseManager(IStorage& storage, IHopper& hopper, ICountMemor
   pending_start = false;
   settling = false;
   settling_since_ms = 0;
+  fault = FAULT_NONE;
+  fault_code = 0;
 
   memset(history, 0, sizeof(history));
   history_index = 0;
@@ -49,6 +83,8 @@ void DispenseManager::begin() {
   active_tx.dispensed = persisted.dispensed;
   active_tx.state = (TransactionState)persisted.state;
   active_tx.count_reliable = persisted.count_reliable != 0;
+  active_tx.error_kind = persisted.error_kind;
+  active_tx.error_code = persisted.error_code;
 
   if (active_tx.state == STATE_DISPENSING) {
     // The device reset while tokens were dropping.  How many are in the tray
@@ -196,9 +232,6 @@ void DispenseManager::finishDispense() {
            (unsigned)active_tx.dispensed, (unsigned)active_tx.quantity);
   active_tx.state = STATE_DONE;
 
-  // Clear active error on successful completion (self-healing)
-  hopperControl.clearActiveError();
-
   // Track dispensed tokens
   dispensed_tokens += active_tx.dispensed;
 
@@ -316,6 +349,7 @@ Transaction DispenseManager::getTransaction(const char* tx_id) {
   memset(&empty_tx, 0, sizeof(empty_tx));
   empty_tx.state = STATE_IDLE;
   empty_tx.count_reliable = true;
+  empty_tx.error_kind = TX_ERROR_NONE;
   return empty_tx;
 }
 
@@ -326,6 +360,20 @@ Transaction DispenseManager::getActiveTransaction() {
 bool DispenseManager::isIdle() {
   return active_tx.state != STATE_DISPENSING;
 }
+
+// The device as GET /health reports it (issue #6).
+DeviceState DispenseManager::getDeviceState() {
+  if (fault != FAULT_NONE) {
+    return DEVICE_FAULT;
+  }
+  if (active_tx.state == STATE_DISPENSING) {
+    return DEVICE_DISPENSING;
+  }
+  return DEVICE_IDLE;
+}
+
+DeviceFault DispenseManager::getFault() { return fault; }
+uint8_t DispenseManager::getFaultCode() { return fault_code; }
 
 uint16_t DispenseManager::getTotalDispenses() { return total_dispenses; }
 uint16_t DispenseManager::getSuccessful() { return successful_count; }
@@ -351,6 +399,8 @@ bool DispenseManager::findInHistory(const char* tx_id, Transaction& out_tx) {
       out_tx.quantity = history[i].quantity;
       out_tx.dispensed = history[i].dispensed;
       out_tx.count_reliable = history[i].count_reliable != 0;
+      out_tx.error_kind = history[i].error_kind;
+      out_tx.error_code = history[i].error_code;
       return true;
     }
   }
@@ -364,6 +414,8 @@ void DispenseManager::addToHistory(const Transaction& tx) {
   history[history_index].quantity = tx.quantity;
   history[history_index].dispensed = tx.dispensed;
   history[history_index].count_reliable = tx.count_reliable ? 1 : 0;
+  history[history_index].error_kind = tx.error_kind;
+  history[history_index].error_code = tx.error_code;
   history_index = (history_index + 1) % RING_BUFFER_SIZE;
 }
 
@@ -377,6 +429,8 @@ void DispenseManager::persistState() {
   record.active.dispensed = active_tx.dispensed;
   record.active.state = (uint8_t)active_tx.state;
   record.active.count_reliable = active_tx.count_reliable ? 1 : 0;
+  record.active.error_kind = active_tx.error_kind;
+  record.active.error_code = active_tx.error_code;
 
   memcpy(record.ring, history, sizeof(record.ring));
   record.ring_index = history_index;

@@ -182,8 +182,8 @@ func TestDestructiveCasesRunLast(t *testing.T) {
 			lastRan = c.Name
 		}
 	}
-	if lastRan != "post_while_error_is_409" {
-		t.Errorf("last executed case is %q, want the destructive post_while_error_is_409", lastRan)
+	if lastRan != "post_while_fault_is_409" {
+		t.Errorf("last executed case is %q, want the destructive post_while_fault_is_409", lastRan)
 	}
 }
 
@@ -205,18 +205,18 @@ func TestTargetScoping(t *testing.T) {
 	cases := ConformanceCases()
 	var hardwareError Case
 	for _, c := range cases {
-		if c.Name == "post_while_error_is_409" {
+		if c.Name == "post_while_fault_is_409" {
 			hardwareError = c
 		}
 	}
 	if hardwareError.Name == "" {
-		t.Fatal("post_while_error_is_409 is missing from the table")
+		t.Fatal("post_while_fault_is_409 is missing from the table")
 	}
 	if hardwareError.appliesTo(TargetHopper) {
-		t.Error("the hardware-error case cannot be provoked on a real hopper; it must not claim that target")
+		t.Error("the fault case cannot be provoked on a real hopper; it must not claim that target")
 	}
 	if !hardwareError.appliesTo(TargetMock) || !hardwareError.appliesTo(TargetSimulator) {
-		t.Error("the hardware-error case must apply to mock and simulator")
+		t.Error("the fault case must apply to mock and simulator")
 	}
 }
 
@@ -338,5 +338,100 @@ func TestSuiteCatchesMissingBodyCap(t *testing.T) {
 	got := findCase(t, report, "post_with_oversized_body_is_413")
 	if got.Status != "fail" {
 		t.Errorf("post_with_oversized_body_is_413 = %s, want fail against a device without the cap", got.Status)
+	}
+}
+
+// --- issue #6: the fault model ----------------------------------------------
+//
+// One knob per case, and a test per knob: a case that cannot fail is not a
+// case.  The knobs describe the firmware as it was — a device that took a new
+// transaction while a jam was active, that had no fault at all, and that
+// published an empty sensor it does not have.
+
+func TestSuiteCatchesDispenseWhileFaulted(t *testing.T) {
+	dev := newFakeDevice("k")
+	dev.acceptWhileFaulted = true // the firmware before #6: only DISPENSING blocked
+	srv := dev.server()
+	defer srv.Close()
+
+	report := RunCases(newCtx(srv.URL, "k", TargetMock), ConformanceCases(), "post_while_fault")
+
+	got := findCase(t, report, "post_while_fault_is_409")
+	if got.Status != "fail" {
+		t.Errorf("post_while_fault_is_409 = %s, want fail against a device that dispenses anyway", got.Status)
+	}
+}
+
+func TestSuiteCatchesLegacyHealthShape(t *testing.T) {
+	dev := newFakeDevice("k")
+	dev.legacyHealthShape = true // status + dispenser, no fault
+	srv := dev.server()
+	defer srv.Close()
+
+	report := RunCases(newCtx(srv.URL, "k", TargetMock), ConformanceCases(), "health_schema")
+
+	got := findCase(t, report, "health_schema_has_required_fields")
+	if got.Status != "fail" {
+		t.Errorf("health_schema_has_required_fields = %s, want fail against the protocol-1 shape", got.Status)
+	}
+}
+
+func TestSuiteCatchesPublishedHopperLow(t *testing.T) {
+	dev := newFakeDevice("k")
+	dev.publishHopperLow = true // a sensor this hopper does not have
+	srv := dev.server()
+	defer srv.Close()
+
+	report := RunCases(newCtx(srv.URL, "k", TargetMock), ConformanceCases(), "hopper_low")
+
+	got := findCase(t, report, "health_has_no_hopper_low")
+	if got.Status != "fail" {
+		t.Errorf("health_has_no_hopper_low = %s, want fail against a device that still publishes it", got.Status)
+	}
+}
+
+func TestSuiteCatchesMissingErrorCode(t *testing.T) {
+	dev := newFakeDevice("k")
+	dev.omitErrorCode = true // one flat "error", as before #6
+	srv := dev.server()
+	defer srv.Close()
+
+	report := RunCases(newCtx(srv.URL, "k", TargetMock), ConformanceCases(), "carries_error")
+
+	for _, name := range []string{
+		"failed_tx_carries_error_code_and_type",
+		"successful_tx_carries_error_type_none",
+	} {
+		if got := findCase(t, report, name); got.Status != "fail" {
+			t.Errorf("%s = %s, want fail against a device without the field", name, got.Status)
+		}
+	}
+}
+
+func TestSuiteCatchesFaultAfterReset(t *testing.T) {
+	dev := newFakeDevice("k")
+	dev.faultAfterReset = true // one watchdog reset takes the machine out of service
+	srv := dev.server()
+	defer srv.Close()
+
+	report := RunCases(newCtx(srv.URL, "k", TargetMock), ConformanceCases(), "crashed_tx_is_found_after_reboot")
+
+	got := findCase(t, report, "crashed_tx_is_found_after_reboot")
+	if got.Status != "fail" {
+		t.Errorf("crashed_tx_is_found_after_reboot = %s, want fail against a device that faults on a recovered crash", got.Status)
+	}
+}
+
+func TestSuiteCatchesResetRoute(t *testing.T) {
+	dev := newFakeDevice("k")
+	dev.servesReset = true // a way out of a fault that is not a power cycle
+	srv := dev.server()
+	defer srv.Close()
+
+	report := RunCases(newCtx(srv.URL, "k", TargetMock), ConformanceCases(), "no_reset_route")
+
+	got := findCase(t, report, "no_reset_route_exists")
+	if got.Status != "fail" {
+		t.Errorf("no_reset_route_exists = %s, want fail against a device with a reset endpoint", got.Status)
 	}
 }

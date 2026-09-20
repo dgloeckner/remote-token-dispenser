@@ -40,10 +40,19 @@ type fakeDevice struct {
 	clampDispensed    bool // never report more than quantity, as the firmware did
 	omitOverrunMetric bool // leave metrics.overrun_tokens out of /health
 
-	active   *fakeTx
-	history  map[string]*fakeTx
-	errored  bool
-	overruns int
+	// Issue #6: the fault model.
+	acceptWhileFaulted bool // take a new transaction although a fault is up
+	legacyHealthShape  bool // send protocol 1's status/dispenser pair instead
+	publishHopperLow   bool // publish the empty sensor that never worked
+	omitErrorCode      bool // leave error_code/error_type off transactions
+	faultAfterReset    bool // report a recovered crash as a device fault
+	servesReset        bool // offer a way out of a fault that is not a power cycle
+
+	active    *fakeTx
+	history   map[string]*fakeTx
+	fault     string
+	faultCode int
+	overruns  int
 }
 
 type fakeTx struct {
@@ -52,13 +61,16 @@ type fakeTx struct {
 	Quantity  int
 	Dispensed int
 	Reliable  bool
+	ErrorCode int
+	ErrorType string
 }
 
 // fakeMaxBody mirrors REQUEST_BODY_CAPACITY in the firmware.
 const fakeMaxBody = 256
 
 func newFakeDevice(apiKey string) *fakeDevice {
-	return &fakeDevice{apiKey: apiKey, protocol: ProtocolVersion, history: map[string]*fakeTx{}}
+	return &fakeDevice{apiKey: apiKey, protocol: ProtocolVersion, fault: "none",
+		history: map[string]*fakeTx{}}
 }
 
 func (f *fakeDevice) server() *httptest.Server {
@@ -66,6 +78,15 @@ func (f *fakeDevice) server() *httptest.Server {
 	mux.HandleFunc("/health", f.health)
 	mux.HandleFunc("/dispense", f.dispense)
 	mux.HandleFunc("/dispense/", f.status)
+	mux.HandleFunc("/debug", f.debug)
+	if f.servesReset {
+		mux.HandleFunc("/reset", func(w http.ResponseWriter, r *http.Request) {
+			f.mu.Lock()
+			f.fault, f.faultCode = "none", 0
+			f.mu.Unlock()
+			f.writeJSON(w, 200, map[string]string{"state": "idle"})
+		})
+	}
 	return httptest.NewServer(mux)
 }
 
@@ -82,12 +103,12 @@ func (f *fakeDevice) authed(r *http.Request) bool {
 func (f *fakeDevice) health(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	state := "idle"
-	if f.active != nil {
-		state = f.active.State
-	} else if f.errored {
-		state = "error"
+	if f.fault != "none" {
+		state = "fault"
+	} else if f.active != nil {
+		state = "dispensing"
 	}
-	errActive := f.errored
+	fault, faultCode := f.fault, f.faultCode
 	proto := f.protocol
 	overruns := f.overruns
 	f.mu.Unlock()
@@ -97,14 +118,41 @@ func (f *fakeDevice) health(w http.ResponseWriter, r *http.Request) {
 		metrics["overrun_tokens"] = overruns
 	}
 
+	body := map[string]any{
+		"protocol":   proto,
+		"uptime":     42,
+		"firmware":   "fake-device",
+		"state":      state,
+		"fault":      fault,
+		"fault_code": faultCode,
+		"metrics":    metrics,
+	}
+	if f.legacyHealthShape {
+		// Protocol 1: two overlapping fields and no fault at all.
+		delete(body, "state")
+		delete(body, "fault")
+		delete(body, "fault_code")
+		body["status"] = "ok"
+		body["dispenser"] = state
+	}
+	if f.publishHopperLow {
+		body["gpio"] = map[string]any{
+			"hopper_low": map[string]any{"raw": 1, "active": false},
+		}
+	}
+	f.writeJSON(w, 200, body)
+}
+
+func (f *fakeDevice) debug(w http.ResponseWriter, r *http.Request) {
+	if !f.authed(r) {
+		f.writeJSON(w, 401, map[string]string{"error": "unauthorized"})
+		return
+	}
 	f.writeJSON(w, 200, map[string]any{
-		"protocol":  proto,
-		"status":    "ok",
-		"uptime":    42,
-		"firmware":  "fake-device",
-		"dispenser": state,
-		"metrics":   metrics,
-		"error":     map[string]any{"active": errActive},
+		"gpio": map[string]any{
+			"coin_pulse":   map[string]any{"raw": 1, "active": false},
+			"error_signal": map[string]any{"raw": 1, "active": false},
+		},
 	})
 }
 
@@ -180,8 +228,9 @@ func (f *fakeDevice) dispense(w http.ResponseWriter, r *http.Request) {
 		f.writeJSON(w, 409, map[string]string{"error": "busy", "active_tx_id": f.active.ID})
 		return
 	}
-	if f.errored {
-		f.writeJSON(w, 409, map[string]string{"error": "error"})
+	if f.fault != "none" && !f.acceptWhileFaulted {
+		f.writeJSON(w, 409, map[string]any{"error": "fault",
+			"fault": f.fault, "fault_code": f.faultCode})
 		return
 	}
 
@@ -189,13 +238,17 @@ func (f *fakeDevice) dispense(w http.ResponseWriter, r *http.Request) {
 	// got its answer: a flash sector erase plus ~500 bytes at 9600 baud.
 	time.Sleep(f.postDelay)
 
-	tx := &fakeTx{ID: req.TxID, State: "dispensing", Quantity: req.Quantity, Reliable: true}
+	tx := &fakeTx{ID: req.TxID, State: "dispensing", Quantity: req.Quantity, Reliable: true,
+		ErrorType: "NONE"}
 	f.active = tx
 
-	// Quantity 8 is the hardware-error scenario, mirroring the Go mock.
-	if req.Quantity == 8 {
+	// The hopper-error scenario, mirroring the Go mock: a decoded error faults
+	// the device, and only a power cycle ends that (issue #6).
+	if req.Quantity == hopperErrorQuantity {
 		tx.State = "error"
-		f.errored = true
+		tx.ErrorCode = 1
+		tx.ErrorType = "COIN_STUCK"
+		f.fault, f.faultCode = "hopper_error", 1
 		f.active = nil
 		f.history[tx.ID] = tx
 		f.writeJSON(w, 200, f.respond(tx))
@@ -235,6 +288,13 @@ func (f *fakeDevice) reboot(tx *fakeTx, countSurvives bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	tx.State = "error"
+	// A recovered crash is NOT a fault: nothing is wrong with the machine, and
+	// a device that faults here takes itself out of service over a watchdog
+	// reset (issue #6).
+	tx.ErrorType = "RESET"
+	if f.faultAfterReset {
+		f.fault, f.faultCode = "jam", 0
+	}
 	if countSurvives {
 		tx.Reliable = true
 	} else {
@@ -316,6 +376,10 @@ func (f *fakeDevice) respond(tx *fakeTx) map[string]any {
 	}
 	if !f.omitCountReliable {
 		body["count_reliable"] = tx.Reliable
+	}
+	if !f.omitErrorCode {
+		body["error_code"] = tx.ErrorCode
+		body["error_type"] = tx.ErrorType
 	}
 	return body
 }

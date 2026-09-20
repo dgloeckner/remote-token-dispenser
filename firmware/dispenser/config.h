@@ -50,7 +50,12 @@
 #define MOTOR_PIN          D1    // GPIO5  - Motor control output (via PC817 #1)
 #define COIN_PULSE_PIN     D7    // GPIO13 - Coin pulse input (via PC817 #2)
 #define ERROR_SIGNAL_PIN   D5    // GPIO14 - Hopper error input (via PC817 #3)
-#define HOPPER_LOW_PIN     D6    // GPIO12 - Empty sensor input (via PC817 #4)
+// D6 (GPIO12) is FREE.  It carried the hopper's empty sensor, which is a
+// factory option the Hopper U-II in the boathouse does not have
+// (docs/azkoyen-hopper-protocol.md section 1): the line never produced a
+// signal, the pin sat on its pull-up and /health published "not empty" as if
+// it were a measurement.  Removed with the protocol field in issue #6.  A unit
+// that does have the sensor brings the pin back as a deliberate change.
 
 // Timing Constants
 #define JAM_TIMEOUT_MS     5000   // 5 seconds per token

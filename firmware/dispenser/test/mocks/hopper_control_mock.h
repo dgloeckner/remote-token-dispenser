@@ -14,14 +14,14 @@ private:
     bool jam_detected;
     bool motor_running;
     uint8_t isr_stop_at;    // Target count at which the ISR stops the motor
+    uint8_t decoded_error;  // a hopper error waiting to be taken
     int start_motor_calls;
     int reset_pulse_calls;
-    int clear_error_calls;
 
 public:
     HopperControlMock()
       : pulse_count(0), jam_detected(false), motor_running(false), isr_stop_at(0),
-        start_motor_calls(0), reset_pulse_calls(0), clear_error_calls(0) {}
+        decoded_error(0), start_motor_calls(0), reset_pulse_calls(0) {}
 
     void begin() {}
 
@@ -69,12 +69,18 @@ public:
         return jam_detected;
     }
 
-    bool isHopperLow() override {
-        return false;
+    // The decoded hopper error the manager has not seen yet (issue #6).
+    // Consumed by the call, exactly like the production HopperControl.
+    uint8_t takeDecodedError() override {
+        uint8_t code = decoded_error;
+        decoded_error = 0;
+        return code;
     }
 
-    void clearActiveError() override {
-        clear_error_calls++;
+    // Test helper: the hopper reported error code `code` (1-7).  On the
+    // device this is the pulse-encoded error line, decoded in loop().
+    void reportError(uint8_t code) {
+        decoded_error = code;
     }
 
     // Test helpers
@@ -92,7 +98,6 @@ public:
 
     int getStartMotorCalls() const { return start_motor_calls; }
     int getResetPulseCalls() const { return reset_pulse_calls; }
-    int getClearErrorCalls() const { return clear_error_calls; }
 };
 
 #endif // HOPPER_CONTROL_MOCK_H

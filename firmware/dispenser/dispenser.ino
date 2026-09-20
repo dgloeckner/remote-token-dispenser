@@ -53,7 +53,6 @@ void setup() {
   }
 
   hopperControl.begin();
-  LOG_INFO("hopper low: %s", hopperControl.isHopperLow() ? "YES" : "NO");
 
   dispenseManager.begin();
 

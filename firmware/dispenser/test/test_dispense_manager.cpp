@@ -233,8 +233,11 @@ void test_jam_stops_motor_and_records_partial(void) {
     TEST_ASSERT_EQUAL_UINT8_MESSAGE(1, tx.dispensed, "Partial count is recorded exactly");
 }
 
-void test_completed_dispense_clears_active_hopper_error(void) {
-    // Self-healing per dispenser-protocol.md § Design Principles 5.
+void test_completed_dispense_leaves_the_device_idle_and_faultless(void) {
+    // The replacement for "self-healing" (issue #6).  A dispense can no longer
+    // clear anything: a decoded hopper error faults the device, and a fault is
+    // ended by a reboot and by nothing else (owner decision 3).  What a clean
+    // dispense must do is leave nothing behind.
     manager->begin();
     startAndRun("tx_heal", 1);
 
@@ -242,8 +245,284 @@ void test_completed_dispense_clears_active_hopper_error(void) {
     loopUntilDone();
 
     TEST_ASSERT_EQUAL_INT_MESSAGE(
-        1, hopper->getClearErrorCalls(),
-        "A completed dispense must clear the active hopper error");
+        FAULT_NONE, manager->getFault(),
+        "A dispense that went through leaves no fault");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        DEVICE_IDLE, manager->getDeviceState(),
+        "… and the device is idle, not 'done'");
+    Transaction tx = manager->getTransaction("tx_heal");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        TX_ERROR_NONE, tx.error_kind,
+        "… and the transaction carries no error kind");
+    TEST_ASSERT_EQUAL_STRING_MESSAGE(
+        "NONE", txErrorTypeToString(tx.error_kind, tx.error_code),
+        "… which is the string every transaction response carries");
+}
+
+
+// =============================================================================
+// The fault model (issue #6)
+//
+// Two things used to be conflated: "the last transaction failed" and "this
+// machine needs a human".  The device now carries a FAULT of its own, and the
+// rules around it are all owner decisions of 2026-09-20:
+//
+//   - a jam or a decoded hopper error raises it and ends the dispense at once
+//   - while it is up, a POST for a NEW transaction is refused (DISPENSE_FAULT
+//     → 409 fault); a retry of a known one is still answered
+//   - it is cleared by a reboot and by NOTHING else, and it is not persisted:
+//     a watchdog reset clears it too, and a jam that is still there simply
+//     faults the next dispense again, having dispensed and billed nothing
+//   - a transaction recovered after a reset sets NO fault; the device is
+//     sellable again without anyone touching it
+// =============================================================================
+
+void test_jam_sets_fault_and_blocks_new_dispense(void) {
+    manager->begin();
+    startAndRun("tx_jf", 4);
+
+    hopper->setPulseCount(1);
+    hopper->setJamDetected(true);
+    manager->loop();
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        FAULT_JAM, manager->getFault(), "A jam timeout raises the device fault");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        DEVICE_FAULT, manager->getDeviceState(),
+        "… and that is what /health reports as the device state");
+    TEST_ASSERT_FALSE_MESSAGE(
+        manager->isIdle(), "A faulted device is not idle, whatever the transaction says");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        DISPENSE_FAULT, manager->requestDispense("tx_after", 1),
+        "A new transaction while the device is faulted is refused (409 fault)");
+
+    manager->loop();
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        1, hopper->getStartMotorCalls(),
+        "… and above all it must not run the motor into the jam");
+}
+
+void test_idempotent_get_post_still_answer_while_faulted(void) {
+    manager->begin();
+    startAndRun("tx_idf", 4);
+
+    hopper->setPulseCount(2);
+    hopper->setJamDetected(true);
+    manager->loop();
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        DISPENSE_IDEMPOTENT, manager->requestDispense("tx_idf", 4),
+        "The retry of the transaction that jammed is still answered with its state: "
+        "the terminal is asking what happened, not asking for tokens");
+
+    Transaction tx = manager->getTransaction("tx_idf");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(STATE_ERROR, tx.state, "… which is error …");
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(2, tx.dispensed, "… with the exact partial count");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        TX_ERROR_JAM_TIMEOUT, tx.error_kind,
+        "… and the reason, so the terminal can tell a jam from a motor fault");
+    TEST_ASSERT_EQUAL_STRING("JAM_TIMEOUT",
+        txErrorTypeToString(tx.error_kind, tx.error_code));
+}
+
+void test_crash_recovery_leaves_device_idle(void) {
+    // The field failure this issue is named after: one watchdog reset took the
+    // machine out of service, because the recovered transaction left the
+    // device reporting "error" and the terminal greyed the tokens out — so
+    // nobody could start the dispense that would have cleared it.
+    storage->setPersistedTransaction("tx_boot", 5, 0, STATE_DISPENSING);
+    counts->survivesWith("tx_boot", 2);
+
+    manager->begin();
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        FAULT_NONE, manager->getFault(),
+        "A recovered crash is not a fault: nothing is wrong with the machine");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        DEVICE_IDLE, manager->getDeviceState(), "… so the device is idle");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        STATE_IDLE, manager->getActiveTransaction().state,
+        "… and the recovered transaction does not occupy the active slot");
+    TEST_ASSERT_TRUE_MESSAGE(
+        startAndRun("tx_sell", 1),
+        "The device is sellable again without anyone touching it");
+
+    Transaction recovered = manager->getTransaction("tx_boot");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        STATE_ERROR, recovered.state, "The transaction itself is still an error …");
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(
+        2, recovered.dispensed, "… with the count from RTC memory (issue #3) …");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        TX_ERROR_RESET, recovered.error_kind, "… and RESET as its reason");
+    TEST_ASSERT_EQUAL_STRING("RESET",
+        txErrorTypeToString(recovered.error_kind, recovered.error_code));
+}
+
+void test_hopper_error_during_dispense_aborts_before_jam_timeout(void) {
+    manager->begin();
+    startAndRun("tx_he", 5);
+
+    hopper->setPulseCount(1);
+    manager->loop();
+
+    hopper->reportError(5);   // MOTOR_FAULT on the hopper's error line
+    manager->loop();
+
+    TEST_ASSERT_FALSE_MESSAGE(
+        hopper->isMotorRunning(),
+        "The hopper says the motor is faulty; the firmware must stop driving it "
+        "now, not in five seconds when the jam watchdog notices");
+    TEST_ASSERT_EQUAL_UINT16_MESSAGE(
+        0, manager->getJams(),
+        "It is not a jam — the jam watchdog never fired, the hopper spoke");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        FAULT_HOPPER_ERROR, manager->getFault(), "The device is faulted …");
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(
+        5, manager->getFaultCode(), "… and the code says which error it was");
+
+    Transaction tx = manager->getTransaction("tx_he");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(STATE_ERROR, tx.state, "The transaction failed …");
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(1, tx.dispensed, "… with the token that did fall …");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(TX_ERROR_HOPPER, tx.error_kind, "… and the hopper's own reason");
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(5, tx.error_code, "… as a code the terminal can read");
+    TEST_ASSERT_EQUAL_STRING("MOTOR_FAULT",
+        txErrorTypeToString(tx.error_kind, tx.error_code));
+}
+
+void test_hopper_error_while_idle_faults_the_device(void) {
+    manager->begin();
+
+    hopper->reportError(3);   // JAM_PERMANENT, with nothing running
+    manager->loop();
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        FAULT_HOPPER_ERROR, manager->getFault(),
+        "An error the hopper reports while idle is still 'this machine needs a human'");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        DISPENSE_FAULT, manager->requestDispense("tx_nope", 1),
+        "… so the next request is refused instead of driving a jammed hopper");
+}
+
+void test_a_fault_in_the_settling_window_leaves_no_settling_behind(void) {
+    // The settling window (issue #5) is the one state where the motor is off
+    // and the transaction is still running.  A fault that ends it must clear
+    // the flag, or the next loop() pass finishes a transaction that failed.
+    manager->begin();
+    startAndRun("tx_stf", 2);
+
+    hopper->setPulseCount(2);
+    manager->loop();          // target reached: motor off, settling
+
+    hopper->reportError(3);
+    manager->loop();          // the fault ends it mid-window
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        STATE_ERROR, manager->getTransaction("tx_stf").state,
+        "The transaction the fault interrupted is an error");
+
+    _mock_millis += DISPENSE_SETTLING_MS;
+    manager->loop();
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        STATE_ERROR, manager->getTransaction("tx_stf").state,
+        "A settling flag left standing would report it done once the window is over");
+    TEST_ASSERT_EQUAL_UINT16_MESSAGE(
+        0, manager->getSuccessful(), "… and count it as a success");
+}
+
+void test_fault_is_not_persisted_and_boot_starts_idle(void) {
+    manager->begin();
+    startAndRun("tx_np", 3);
+    hopper->setJamDetected(true);
+    manager->loop();
+    TEST_ASSERT_EQUAL_INT(FAULT_JAM, manager->getFault());
+
+    hopper->setJamDetected(false);   // the jam was cleared by hand
+    reboot();
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        FAULT_NONE, manager->getFault(),
+        "A boot clears the fault — that is the whole of the reset story, and it "
+        "is why the fault is not in the persisted record");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        DEVICE_IDLE, manager->getDeviceState(), "… the device starts idle …");
+    TEST_ASSERT_TRUE_MESSAGE(
+        startAndRun("tx_np2", 1), "… and takes transactions again");
+}
+
+void test_jam_after_reboot_sets_fault_again_with_zero_dispensed(void) {
+    // The accepted consequence of owner decision 3: a watchdog reset clears a
+    // jam the operator has not cleared.  Nothing is lost by it — the next
+    // dispense runs into the same jam, and bills nothing.
+    manager->begin();
+    startAndRun("tx_j1", 3);
+    hopper->setJamDetected(true);
+    manager->loop();
+
+    reboot();                        // the jam is still in the hopper
+    TEST_ASSERT_EQUAL_INT(FAULT_NONE, manager->getFault());
+
+    TEST_ASSERT_TRUE_MESSAGE(startAndRun("tx_j2", 3),
+        "The device accepts the transaction: it cannot know the jam is still there");
+    manager->loop();                 // … and runs straight into it
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        FAULT_JAM, manager->getFault(), "The jam faults the device again");
+    Transaction tx = manager->getTransaction("tx_j2");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(STATE_ERROR, tx.state, "… the transaction fails …");
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(
+        0, tx.dispensed,
+        "… and nothing fell, so nothing is billed: the cost of the accepted "
+        "consequence is one failed transaction, not a token");
+}
+
+void test_device_state_matrix(void) {
+    // fault x active transaction, as GET /health reports the pair.
+    manager->begin();
+    TEST_ASSERT_EQUAL_INT_MESSAGE(DEVICE_IDLE, manager->getDeviceState(), "idle, no fault");
+    TEST_ASSERT_EQUAL_STRING("idle", deviceStateToString(manager->getDeviceState()));
+    TEST_ASSERT_EQUAL_STRING("none", faultToString(manager->getFault()));
+
+    startAndRun("tx_mx", 2);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        DEVICE_DISPENSING, manager->getDeviceState(), "a transaction is running");
+
+    hopper->setPulseCount(2);
+    manager->loop();          // target reached: settling, motor off
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        DEVICE_DISPENSING, manager->getDeviceState(),
+        "the settling window is still busy — there is no separate settling state");
+
+    _mock_millis += DISPENSE_SETTLING_MS;
+    manager->loop();
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        DEVICE_IDLE, manager->getDeviceState(), "and idle again when it is over");
+
+    startAndRun("tx_mx2", 2);
+    hopper->setJamDetected(true);
+    manager->loop();
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        DEVICE_FAULT, manager->getDeviceState(), "a fault outranks everything");
+    TEST_ASSERT_EQUAL_STRING("fault", deviceStateToString(manager->getDeviceState()));
+    TEST_ASSERT_EQUAL_STRING("jam", faultToString(manager->getFault()));
+}
+
+void test_error_kind_survives_a_reboot(void) {
+    manager->begin();
+    startAndRun("tx_persist", 3);
+    hopper->setPulseCount(1);
+    hopper->setJamDetected(true);
+    manager->loop();
+
+    hopper->setJamDetected(false);
+    reboot();
+
+    Transaction tx = manager->getTransaction("tx_persist");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        STATE_ERROR, tx.state, "The failed transaction is in the persisted ring …");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        TX_ERROR_JAM_TIMEOUT, tx.error_kind,
+        "… and so is its reason: the terminal may only ask after the reboot");
 }
 
 void test_unknown_tx_is_reported_as_empty(void) {
@@ -1141,8 +1420,19 @@ int main(int argc, char **argv) {
     RUN_TEST(test_start_dispense_persists_and_starts_motor);
     RUN_TEST(test_busy_with_other_tx_is_rejected);
     RUN_TEST(test_jam_stops_motor_and_records_partial);
-    RUN_TEST(test_completed_dispense_clears_active_hopper_error);
+    RUN_TEST(test_completed_dispense_leaves_the_device_idle_and_faultless);
     RUN_TEST(test_unknown_tx_is_reported_as_empty);
+
+    RUN_TEST(test_jam_sets_fault_and_blocks_new_dispense);
+    RUN_TEST(test_idempotent_get_post_still_answer_while_faulted);
+    RUN_TEST(test_crash_recovery_leaves_device_idle);
+    RUN_TEST(test_hopper_error_during_dispense_aborts_before_jam_timeout);
+    RUN_TEST(test_hopper_error_while_idle_faults_the_device);
+    RUN_TEST(test_a_fault_in_the_settling_window_leaves_no_settling_behind);
+    RUN_TEST(test_fault_is_not_persisted_and_boot_starts_idle);
+    RUN_TEST(test_jam_after_reboot_sets_fault_again_with_zero_dispensed);
+    RUN_TEST(test_device_state_matrix);
+    RUN_TEST(test_error_kind_survives_a_reboot);
 
     RUN_TEST(test_accepted_request_touches_neither_flash_nor_motor);
     RUN_TEST(test_pending_request_is_started_by_loop_exactly_once);

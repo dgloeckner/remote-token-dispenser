@@ -157,13 +157,11 @@ func (m Model) renderHealthPanel(w int) string {
 		}
 	} else {
 		hl := m.health
-		// Status
-		statusStr := renderStatusBadge(hl.Status)
-		lines = append(lines, labelStyle.Render("Status:")+" "+statusStr)
-
-		// Dispenser state
-		dispStr := renderDispenserState(hl.Dispenser)
-		lines = append(lines, labelStyle.Render("Dispenser:")+" "+dispStr)
+		// One state and one fault (issue #6).  The pair used to be `status`
+		// and `dispenser`, ORed together here — with nothing deciding which
+		// of the two won when they disagreed.
+		lines = append(lines, labelStyle.Render("State:")+" "+renderDeviceState(hl.State))
+		lines = append(lines, labelStyle.Render("Fault:")+" "+renderFault(hl.Fault, hl.FaultCode))
 
 		// Uptime
 		lines = append(lines, labelStyle.Render("Uptime:")+" "+valueBold.Render(formatDuration(hl.Uptime)))
@@ -179,19 +177,12 @@ func (m Model) renderHealthPanel(w int) string {
 			lines = append(lines, labelStyle.Render("WiFi:")+" "+statusMuted.Render("─ unavailable"))
 		}
 
-		// Hopper status with decoded error
-		if hl.Error != nil && hl.Error.Active {
-			// Active error - show type and severity
-			errStyle := statusError
-			if hl.Error.Code <= 2 {
-				errStyle = statusWarning // Sensor issues = yellow
-			}
-			lines = append(lines, labelStyle.Render("Hopper:")+
-				" "+errStyle.Render(fmt.Sprintf("⚠ %s", hl.Error.Type)))
-		} else if hl.GPIO != nil && hl.GPIO.HopperLow.Active {
-			lines = append(lines, labelStyle.Render("Hopper:")+" "+statusOK.Render("● OK"))
-		} else {
-			lines = append(lines, labelStyle.Render("Hopper:")+" "+statusWarning.Render("⚠ EMPTY"))
+		// A faulted device needs a human and says so.  There is no reset
+		// button here on purpose: the way out is a power cycle (owner
+		// decision, 2026-09-20).
+		if hl.Fault != "" && hl.Fault != "none" {
+			lines = append(lines, labelStyle.Render("Action:")+" "+
+				statusWarning.Render("clear the jam, refill if empty, pull the plug for 5 s"))
 		}
 
 		// Active TX
@@ -292,11 +283,11 @@ func (m Model) renderGPIODebugPanel(w int) string {
 	lines = append(lines, sectionHeader.Render("🔧 GPIO Debug")+" "+statusMuted.Render("[D] to hide"))
 	lines = append(lines, "")
 
-	if m.health == nil || m.health.GPIO == nil {
+	if m.debug == nil || m.debug.GPIO == nil {
 		lines = append(lines, statusMuted.Render("  GPIO data unavailable"))
-		lines = append(lines, statusMuted.Render("  (Firmware may not support)"))
+		lines = append(lines, statusMuted.Render("  (GET /debug, key required)"))
 	} else {
-		gpio := m.health.GPIO
+		gpio := m.debug.GPIO
 
 		// Coin pulse (active=true is idle/default for active-LOW signal)
 		coinStatus := statusError.Render("● COIN DETECTED")
@@ -314,15 +305,8 @@ func (m Model) renderGPIODebugPanel(w int) string {
 		lines = append(lines, fmt.Sprintf("  Error Signal:  raw=%d  %s",
 			gpio.ErrorSignal.Raw, errStatus))
 
-		// Hopper empty sensor (photocell at bottom of coin bay, OPTIONAL)
-		// Signal: LOW (raw=0, active=true) = NOT empty, HIGH = empty
-		// Note: Many hoppers don't have this sensor installed
-		hopperStatus := statusWarning.Render("⚠ EMPTY")
-		if gpio.HopperLow.Active {
-			hopperStatus = statusOK.Render("○ OK")
-		}
-		lines = append(lines, fmt.Sprintf("  Hopper Empty:  raw=%d  %s (sensor may not be installed)",
-			gpio.HopperLow.Raw, hopperStatus))
+		// There is no empty-sensor line: the hopper does not have the sensor
+		// fitted, so D6 read "not empty" forever (issue #6).
 	}
 
 	content := strings.Join(lines, "\n")
@@ -338,16 +322,12 @@ func (m Model) renderErrorHistoryPanel(w int) string {
 		lines = append(lines, statusOK.Render("  ✓ No errors recorded"))
 	} else {
 		for _, err := range m.health.ErrorHistory {
-			// Status indicator
-			status := "✓"
-			style := statusMuted
-			if !err.Cleared {
-				status = "⚠"
-				if err.Code >= 3 {
-					style = statusError // Critical errors = red
-				} else {
-					style = statusWarning // Sensor errors = yellow
-				}
+			// Every recorded error stands until a power cycle; there is
+			// nothing to mark as cleared any more (issue #6).
+			status := "⚠"
+			style := statusWarning // Sensor errors = yellow
+			if err.Code >= 3 {
+				style = statusError // Critical errors = red
 			}
 
 			// Format age
@@ -700,29 +680,40 @@ func renderWiFiSignal(rssi int) string {
 	return style.Render(bars) + " " + statusMuted.Render(fmt.Sprintf("%d dBm", rssi))
 }
 
-func renderStatusBadge(status string) string {
-	switch status {
-	case "ok":
-		return statusOK.Render("● OK")
-	case "degraded":
-		return statusDegraded.Render("◐ DEGRADED")
-	case "error":
-		return statusError.Render("● ERROR")
+// renderDeviceState renders GET /health's single `state` (issue #6).
+func renderDeviceState(state string) string {
+	switch state {
+	case "idle":
+		return statusOK.Render("● idle")
+	case "dispensing":
+		return dispensingStyle.Render("⟳ dispensing")
+	case "fault":
+		return statusError.Render("✗ fault")
+	case "":
+		return statusMuted.Render("? missing")
 	default:
-		return statusMuted.Render("? " + status)
+		return statusMuted.Render("? " + state)
 	}
 }
 
-func renderDispenserState(state string) string {
-	switch state {
-	case "idle":
-		return statusOK.Render("idle")
-	case "dispensing":
-		return dispensingStyle.Render("⟳ dispensing")
-	case "error":
-		return statusError.Render("✗ error")
+// renderFault renders the device-level fault and, for a hopper error, its
+// Azkoyen code.  A missing field is shown as missing: a device that does not
+// send `fault` is not a device without a fault.
+func renderFault(fault string, code *int) string {
+	switch fault {
+	case "none":
+		return statusOK.Render("none")
+	case "jam":
+		return statusError.Render("⚠ jam")
+	case "hopper_error":
+		if code != nil && *code > 0 {
+			return statusError.Render(fmt.Sprintf("⚠ hopper_error (code %d)", *code))
+		}
+		return statusError.Render("⚠ hopper_error")
+	case "":
+		return statusMuted.Render("? missing")
 	default:
-		return statusMuted.Render(state)
+		return statusMuted.Render("? " + fault)
 	}
 }
 

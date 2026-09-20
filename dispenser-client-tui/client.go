@@ -14,19 +14,36 @@ import (
 // a mismatch is a bug to fix, never something to adapt to at runtime.
 const ProtocolVersion = 2
 
-// HealthResponse matches GET /health from the dispenser protocol
+// HealthResponse matches GET /health from the dispenser protocol.
+//
+// Since issue #6 there is ONE state and ONE fault.  The old document carried
+// `status` (ok|degraded|error) next to `dispenser` (idle|dispensing|error),
+// and this client ORed the two together — which meant nothing decided what
+// the terminal showed when they disagreed.
 type HealthResponse struct {
-	Protocol     int           `json:"protocol"`
-	Status       string        `json:"status"`
+	Protocol int    `json:"protocol"`
+	State    string `json:"state"`
+	// Fault is the device-level condition: none | jam | hopper_error.  Only a
+	// power cycle clears it (owner decision, 2026-09-20).
+	Fault string `json:"fault"`
+	// FaultCode is the Azkoyen code behind a hopper_error, 0 otherwise.  A
+	// POINTER, like CountReliable and OverrunTokens: a device that does not
+	// send the field must stay distinguishable from one that sends 0.
+	FaultCode    *int          `json:"fault_code"`
 	Uptime       int           `json:"uptime"`
 	Firmware     string        `json:"firmware"`
 	WiFi         *WiFiInfo     `json:"wifi,omitempty"`
-	Dispenser    string        `json:"dispenser"`
-	GPIO         *GPIOInfo     `json:"gpio,omitempty"`
 	Metrics      Metrics       `json:"metrics"`
 	ActiveTx     *ActiveTxInfo `json:"active_tx,omitempty"`
-	Error        *ErrorInfo    `json:"error,omitempty"`
 	ErrorHistory []ErrorRecord `json:"error_history,omitempty"`
+}
+
+// DebugResponse matches GET /debug: the raw pin levels, which moved out of
+// /health in issue #6.  They are a bench instrument, not something a monitor
+// should act on, and the authenticated health document is not the place for a
+// reading nobody can interpret without the wiring diagram.
+type DebugResponse struct {
+	GPIO *GPIOInfo `json:"gpio"`
 }
 
 type Metrics struct {
@@ -56,6 +73,9 @@ type WiFiInfo struct {
 	SSID string `json:"ssid"`
 }
 
+// GPIOInfo is what GET /debug reports.  There is no hopper_low any more: the
+// empty sensor is a factory option this hopper does not have, so the pin sat
+// on its pull-up and reported "not empty" forever (issue #6).
 type GPIOInfo struct {
 	CoinPulse struct {
 		Raw    int  `json:"raw"`
@@ -65,25 +85,15 @@ type GPIOInfo struct {
 		Raw    int  `json:"raw"`
 		Active bool `json:"active"`
 	} `json:"error_signal"`
-	HopperLow struct {
-		Raw    int  `json:"raw"`
-		Active bool `json:"active"`
-	} `json:"hopper_low"`
 }
 
-type ErrorInfo struct {
-	Active      bool   `json:"active"`
-	Code        int    `json:"code,omitempty"`
-	Type        string `json:"type,omitempty"`
-	Timestamp   int64  `json:"timestamp,omitempty"`
-	Description string `json:"description,omitempty"`
-}
-
+// ErrorRecord is one decoded hopper error.  It has no `cleared` flag any
+// more: an error raises a fault, and a fault outlives every transaction until
+// somebody pulls the plug — so nothing could clear it.
 type ErrorRecord struct {
 	Code      int    `json:"code"`
 	Type      string `json:"type"`
 	Timestamp int64  `json:"timestamp"`
-	Cleared   bool   `json:"cleared"`
 }
 
 // DispenseRequest matches POST /dispense
@@ -103,8 +113,14 @@ type DispenseResponse struct {
 	// and the live count went with it.  A POINTER on purpose — a missing field
 	// must be distinguishable from an explicit false, or a device that does not
 	// implement it reads as "the count is unreliable" everywhere.
-	CountReliable *bool  `json:"count_reliable"`
-	Error         string `json:"error,omitempty"`
+	CountReliable *bool `json:"count_reliable"`
+	// ErrorCode / ErrorType say WHY a transaction ended in "error" (issue #6):
+	// the Azkoyen code 1-7 with its name, or 0 with JAM_TIMEOUT or RESET.
+	// Required on every transaction response, so ErrorCode is a pointer: 0 and
+	// "the device never told us" are different answers.
+	ErrorCode *int   `json:"error_code"`
+	ErrorType string `json:"error_type"`
+	Error     string `json:"error,omitempty"`
 }
 
 // ErrorResponse for 4xx/5xx
@@ -181,6 +197,42 @@ func (c *DispenserClient) Health() (*HealthResponse, APIResult) {
 	}
 
 	return &health, APIResult{StatusCode: 200, Latency: latency}
+}
+
+// Debug fetches GET /debug (auth required): the raw pin levels for the bench.
+func (c *DispenserClient) Debug() (*DebugResponse, APIResult) {
+	start := time.Now()
+
+	req, err := http.NewRequest("GET", c.BaseURL+"/debug", nil)
+	if err != nil {
+		return nil, APIResult{Error: err, Latency: time.Since(start)}
+	}
+	req.Header.Set("X-API-Key", c.APIKey)
+
+	resp, err := c.HTTPClient.Do(req)
+	if err != nil {
+		return nil, APIResult{Error: err, Latency: time.Since(start)}
+	}
+	defer resp.Body.Close()
+
+	latency := time.Since(start)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, APIResult{StatusCode: resp.StatusCode, Error: err, Latency: latency}
+	}
+	if resp.StatusCode != 200 {
+		return nil, APIResult{
+			StatusCode: resp.StatusCode,
+			Error:      fmt.Errorf("debug returned %d: %s", resp.StatusCode, string(body)),
+			Latency:    latency,
+		}
+	}
+
+	var debug DebugResponse
+	if err := json.Unmarshal(body, &debug); err != nil {
+		return nil, APIResult{StatusCode: resp.StatusCode, Error: err, Latency: latency}
+	}
+	return &debug, APIResult{StatusCode: 200, Latency: latency}
 }
 
 // Dispense sends POST /dispense (auth required)

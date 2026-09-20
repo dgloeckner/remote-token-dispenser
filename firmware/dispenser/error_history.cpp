@@ -6,34 +6,15 @@
 ErrorHistory::ErrorHistory() : writeIndex(0) {
   // Initialize buffer with ERROR_NONE
   for (uint8_t i = 0; i < BUFFER_SIZE; i++) {
-    buffer[i] = {ERROR_NONE, 0, true};
+    buffer[i] = {ERROR_NONE, 0};
   }
 }
 
 void ErrorHistory::addError(ErrorCode code) {
-  buffer[writeIndex] = {code, millis(), false};
+  buffer[writeIndex] = {code, millis()};
   writeIndex = (writeIndex + 1) % BUFFER_SIZE;
 
   LOG_ERROR("hopper error %s recorded at %lu ms", errorCodeToString(code), millis());
-}
-
-ErrorRecord* ErrorHistory::getActive() {
-  // Search newest to oldest for first non-cleared error
-  for (uint8_t i = 0; i < BUFFER_SIZE; i++) {
-    int idx = (writeIndex + BUFFER_SIZE - 1 - i) % BUFFER_SIZE;
-    if (buffer[idx].code != ERROR_NONE && !buffer[idx].cleared) {
-      return &buffer[idx];
-    }
-  }
-  return nullptr;
-}
-
-void ErrorHistory::clearActive() {
-  ErrorRecord* active = getActive();
-  if (active) {
-    active->cleared = true;
-    LOG_INFO("hopper error %s cleared", errorCodeToString(active->code));
-  }
 }
 
 void ErrorHistory::getAll(ErrorRecord* output, int& count) {

@@ -43,28 +43,76 @@ func ConformanceCases() []Case {
 		},
 		{
 			Name: "health_schema_has_required_fields",
+			Note: "protocol 2 replaced the overlapping status/dispenser pair with one " +
+				"state and one fault (issue #6); a device that still sends the old " +
+				"pair leaves the terminal guessing which of the two wins",
 			Run: func(c *Ctx) error {
 				health, res := c.Client.Health()
 				if health == nil {
 					return fmt.Errorf("no health document: %v", res.Error)
 				}
 				var missing []string
-				if health.Status == "" {
-					missing = append(missing, "status")
-				}
 				if health.Firmware == "" {
 					missing = append(missing, "firmware")
 				}
-				if health.Dispenser == "" {
-					missing = append(missing, "dispenser")
+				if health.State == "" {
+					missing = append(missing, "state")
+				}
+				if health.Fault == "" {
+					missing = append(missing, "fault")
+				}
+				if health.FaultCode == nil {
+					missing = append(missing, "fault_code")
 				}
 				if len(missing) > 0 {
 					return fmt.Errorf("missing field(s): %s", strings.Join(missing, ", "))
 				}
-				switch health.Dispenser {
-				case "idle", "dispensing", "done", "error":
+				switch health.State {
+				case "idle", "dispensing", "fault":
 				default:
-					return fmt.Errorf("dispenser state %q is not in the protocol's enum", health.Dispenser)
+					return fmt.Errorf("device state %q is not in the protocol's enum "+
+						"(idle | dispensing | fault)", health.State)
+				}
+				switch health.Fault {
+				case "none", "jam", "hopper_error":
+				default:
+					return fmt.Errorf("fault %q is not in the protocol's enum "+
+						"(none | jam | hopper_error)", health.Fault)
+				}
+				return nil
+			},
+		},
+		{
+			Name: "health_has_no_hopper_low",
+			Note: "the empty sensor is a factory option our hopper does not have, so the " +
+				"pin said 'fine' forever; a field that is always fine is worse than no " +
+				"field, and it was removed from the protocol in issue #6",
+			Run: func(c *Ctx) error {
+				got, err := c.raw("GET", "/health", "", nil)
+				if err != nil {
+					return err
+				}
+				if strings.Contains(got.Body, "hopper_low") {
+					return fmt.Errorf("/health still publishes hopper_low: %s",
+						strings.TrimSpace(got.Body))
+				}
+				return nil
+			},
+		},
+		{
+			Name: "no_reset_route_exists",
+			Note: "a fault is cleared by a power cycle and by nothing else (owner " +
+				"decision, 2026-09-20): no reset endpoint, none in the TUI, none on the kiosk",
+			Run: func(c *Ctx) error {
+				got, err := c.raw("POST", "/reset", "",
+					map[string]string{"X-API-Key": c.Client.APIKey,
+						"Content-Type": "application/json"})
+				if err != nil {
+					return err
+				}
+				if got.Status == 200 || got.Status == 204 {
+					return fmt.Errorf("POST /reset answered %d: the device has a way out of "+
+						"a fault that is not a power cycle", got.Status)
 				}
 				return nil
 			},
@@ -408,9 +456,9 @@ func ConformanceCases() []Case {
 				if health == nil {
 					return fmt.Errorf("no health document: %v", res.Error)
 				}
-				if health.Dispenser != "dispensing" {
+				if health.State != "dispensing" {
 					return fmt.Errorf("device reports %q while a transaction is running; "+
-						"the replay took the active transaction with it", health.Dispenser)
+						"the replay took the active transaction with it", health.State)
 				}
 				final, err := c.waitForFinalState(running, 60*time.Second)
 				if err != nil {
@@ -455,6 +503,60 @@ func ConformanceCases() []Case {
 			},
 		},
 		{
+			Name:    "failed_tx_carries_error_code_and_type",
+			Targets: []Target{TargetMock},
+			Note: "one flat 'error' made a jam, an empty hopper and a dead sensor the same " +
+				"row on the terminal; since issue #6 the transaction says which it was. " +
+				"The scenario here is the reset, because it is the one failure that " +
+				"leaves the device usable — a jam would fault the mock for every case after it",
+			Run: func(c *Ctx) error {
+				txID := c.NextTxID("ec")
+				// The crash scenario: a transaction the reboot closed as an error.
+				_, _ = c.Client.Dispense(txID, crashQuantity)
+				final, err := c.waitForFinalState(txID, 30*time.Second)
+				if err != nil {
+					return err
+				}
+				if final.State != "error" {
+					return fmt.Errorf("state %q, expected error from the jam scenario", final.State)
+				}
+				if final.ErrorCode == nil {
+					return fmt.Errorf("the failed transaction carries no error_code field")
+				}
+				if final.ErrorType == "" {
+					return fmt.Errorf("the failed transaction carries no error_type field")
+				}
+				if final.ErrorType == "NONE" {
+					return fmt.Errorf("a failed transaction reports error_type NONE: " +
+						"the terminal cannot tell a jam from a motor fault")
+				}
+				return nil
+			},
+		},
+		{
+			Name: "successful_tx_carries_error_type_none",
+			Note: "the pair is required on every transaction response, not only on the " +
+				"failures: a reader with a default cannot tell 'no error' from 'no field'",
+			Run: func(c *Ctx) error {
+				txID := c.NextTxID("en")
+				if _, res := c.Client.Dispense(txID, 1); res.Error != nil {
+					return fmt.Errorf("POST failed: %v", res.Error)
+				}
+				final, err := c.waitForFinalState(txID, 30*time.Second)
+				if err != nil {
+					return err
+				}
+				if final.ErrorCode == nil || final.ErrorType == "" {
+					return fmt.Errorf("a completed transaction is missing error_code/error_type")
+				}
+				if *final.ErrorCode != 0 || final.ErrorType != "NONE" {
+					return fmt.Errorf("a completed transaction reports error_code=%d error_type=%q, "+
+						"expected 0/NONE", *final.ErrorCode, final.ErrorType)
+				}
+				return nil
+			},
+		},
+		{
 			Name:    "crashed_tx_is_found_after_reboot",
 			Targets: []Target{TargetMock},
 			Note: "the device's own crash scenario; on a real ESP this is the " +
@@ -478,6 +580,19 @@ func ConformanceCases() []Case {
 				}
 				if final.CountReliable == nil || !*final.CountReliable {
 					return fmt.Errorf("a reset the RTC memory survives must report count_reliable=true")
+				}
+				// Issue #6: a recovered crash is not a fault.  One watchdog reset
+				// used to take the machine out of service, and the dispense that
+				// would have cleared it was exactly what the terminal refused to
+				// start.
+				health, res := c.Client.Health()
+				if health == nil {
+					return fmt.Errorf("no health document: %v", res.Error)
+				}
+				if health.Fault != "none" || health.State == "fault" {
+					return fmt.Errorf("the device reports state=%q fault=%q after a reset "+
+						"mid-dispense; nothing is wrong with it and it must be sellable again "+
+						"without anyone touching it", health.State, health.Fault)
 				}
 				return nil
 			},
@@ -616,22 +731,71 @@ func ConformanceCases() []Case {
 			},
 		},
 
-		// --- hardware error --------------------------------------------------
+		// --- the fault, and the one way out of it (issue #6) ------------------
 		{
-			Name:        "post_while_error_is_409",
+			Name:        "post_while_fault_is_409",
 			Targets:     []Target{TargetMock, TargetSimulator},
 			Destructive: true,
-			Note: "RED against the firmware until #6: only STATE_DISPENSING blocks a new POST, " +
-				"so an active hardware error is silently cleared by the next request",
+			Note: "a faulted device refuses new work; before #6 only STATE_DISPENSING " +
+				"blocked a POST, so anything that posted cleared a real jam by accident",
 			Run: func(c *Ctx) error {
-				if err := c.induceHardwareError(); err != nil {
+				if err := c.induceFault(); err != nil {
 					return err
 				}
 				got, err := c.postJSON(fmt.Sprintf(`{"tx_id":%q,"quantity":1}`, c.NextTxID("er")), true)
 				if err != nil {
 					return err
 				}
-				return wantStatus(got, 409)
+				if err := wantStatus(got, 409); err != nil {
+					return err
+				}
+				if !strings.Contains(got.Body, `"fault"`) {
+					return fmt.Errorf("the 409 does not name the fault: %s",
+						strings.TrimSpace(got.Body))
+				}
+				health, res := c.Client.Health()
+				if health == nil {
+					return fmt.Errorf("no health document: %v", res.Error)
+				}
+				if health.State != "fault" || health.Fault == "none" || health.Fault == "" {
+					return fmt.Errorf("device reports state=%q fault=%q while it is refusing "+
+						"work; the terminal has nothing to show the member", health.State, health.Fault)
+				}
+				return nil
+			},
+		},
+		{
+			Name:             "reboot_clears_fault",
+			Targets:          []Target{TargetSimulator, TargetHopper},
+			NeedsInteraction: true,
+			Destructive:      true,
+			Note: "the only way out of a fault, by owner decision: clear the jam, refill " +
+				"if empty, pull the plug for 5 s",
+			Run: func(c *Ctx) error {
+				health, res := c.Client.Health()
+				if health == nil {
+					return fmt.Errorf("no health document: %v", res.Error)
+				}
+				if health.Fault == "none" {
+					return fmt.Errorf("the device is not faulted; run this case after " +
+						"post_while_fault_is_409")
+				}
+				c.Prompt("clear the jam, then power-cycle the dispenser (5 s off)")
+				time.Sleep(10 * time.Second)
+				after, res := c.Client.Health()
+				if after == nil {
+					return fmt.Errorf("no health document after the power cycle: %v", res.Error)
+				}
+				if after.Fault != "none" || after.State == "fault" {
+					return fmt.Errorf("after the power cycle the device still reports "+
+						"state=%q fault=%q", after.State, after.Fault)
+				}
+				txID := c.NextTxID("rb")
+				if _, res := c.Client.Dispense(txID, 1); res.Error != nil {
+					return fmt.Errorf("the device refuses work after the power cycle: %v", res.Error)
+				}
+				_, _ = c.waitForFinalState(txID, 30*time.Second)
+				return nil
 			},
 		},
 
@@ -711,27 +875,33 @@ const (
 	// coast_pulse_is_counted_as_an_overrun, where the simulator's 'c' command
 	// produces that token.
 	overrunQuantity = 18
+	// The mock's hopper error: COIN_STUCK (code 1).  It faults the device, so
+	// the case that uses it is Destructive and runs last.
+	hopperErrorQuantity = 8
 )
 
-// induceHardwareError puts the target into an active hardware error.
-// The mock maps quantity 8 to COIN_STUCK; on the simulator the operator sets
-// the error switch (docs/hopper-simulator.md).
-func (c *Ctx) induceHardwareError() error {
+// induceFault puts the target into a device fault — the state only a power
+// cycle ends.  The mock maps quantity 8 to COIN_STUCK; on the simulator the
+// operator sets the error switch (docs/hopper-simulator.md).
+func (c *Ctx) induceFault() error {
 	switch c.Target {
 	case TargetMock:
+		if health, _ := c.Client.Health(); health != nil && health.Fault != "" && health.Fault != "none" {
+			return nil // already faulted; a second POST would only be refused
+		}
 		txID := c.NextTxID("hw")
-		if _, res := c.Client.Dispense(txID, 8); res.Error != nil {
+		if _, res := c.Client.Dispense(txID, hopperErrorQuantity); res.Error != nil {
 			return fmt.Errorf("could not trigger the mock's COIN_STUCK scenario: %v", res.Error)
 		}
 		deadline := time.Now().Add(5 * time.Second)
 		for time.Now().Before(deadline) {
 			health, _ := c.Client.Health()
-			if health != nil && health.Error != nil && health.Error.Active {
+			if health != nil && health.Fault != "" && health.Fault != "none" {
 				return nil
 			}
 			time.Sleep(100 * time.Millisecond)
 		}
-		return fmt.Errorf("mock did not report an active error after the COIN_STUCK scenario")
+		return fmt.Errorf("mock did not report a fault after the COIN_STUCK scenario")
 	case TargetSimulator:
 		if !c.Interactive {
 			return fmt.Errorf("set the simulator's error switch first; run with --interactive")
@@ -739,6 +909,6 @@ func (c *Ctx) induceHardwareError() error {
 		c.Prompt("set the hopper simulator's ERROR switch to code 1 (COIN_STUCK)")
 		return nil
 	default:
-		return fmt.Errorf("no way to induce a hardware error on target %s", c.Target)
+		return fmt.Errorf("no way to induce a fault on target %s", c.Target)
 	}
 }

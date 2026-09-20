@@ -48,8 +48,8 @@ public:
 };
 
 // Everything DispenseManager needs from the hopper hardware.
-// Note: the error *history* is reached through clearActiveError() rather than
-// by exposing the ErrorHistory object, so this interface stays data-only.
+// Note: the decoded hopper error is reached through takeDecodedError() rather
+// than by exposing the ErrorHistory object, so this interface stays data-only.
 class IHopper {
 public:
   virtual ~IHopper() {}
@@ -61,9 +61,11 @@ public:
   // the pulse count reaches `count`.  Call before startMotor().
   virtual void setMotorStopAt(uint8_t count) = 0;
   virtual bool checkJam() = 0;
-  virtual bool isHopperLow() = 0;
-  // Self-healing: a completed dispense clears the active hopper error.
-  virtual void clearActiveError() = 0;
+  // A hopper error decoded since the last call, or 0.  The call CONSUMES it:
+  // the manager turns it into a device fault exactly once (issue #6).  Before
+  // #6 a decoded error was only written to a history list, so the hopper said
+  // "motor fault" and the firmware kept the motor on until the jam timeout.
+  virtual uint8_t takeDecodedError() = 0;
 };
 
 #endif

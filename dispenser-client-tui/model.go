@@ -88,8 +88,9 @@ type Model struct {
 	log       []LogEntry
 	logScroll int
 
-	// Debug mode
+	// Debug mode: the [D] panel, fed by GET /debug
 	debugMode bool
+	debug     *DebugResponse
 
 	// UI state
 	ticker int // animation frame counter
@@ -114,6 +115,10 @@ func NewModel(client *DispenserClient) Model {
 type tickMsg time.Time
 type healthResultMsg struct {
 	health *HealthResponse
+	result APIResult
+}
+type debugResultMsg struct {
+	debug  *DebugResponse
 	result APIResult
 }
 type dispenseStartMsg struct {
@@ -142,6 +147,16 @@ func (m Model) fetchHealth() tea.Cmd {
 	return func() tea.Msg {
 		health, result := m.client.Health()
 		return healthResultMsg{health: health, result: result}
+	}
+}
+
+// fetchDebug asks for the raw pin levels, which live behind GET /debug since
+// issue #6.  Only while the panel is open: they are a bench instrument, and
+// nothing on the dashboard depends on them.
+func (m Model) fetchDebug() tea.Cmd {
+	return func() tea.Msg {
+		debug, result := m.client.Debug()
+		return debugResultMsg{debug: debug, result: result}
 	}
 }
 
@@ -201,6 +216,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Auto-refresh health
 		if time.Since(m.lastHealthAt) >= healthInterval {
 			cmds = append(cmds, m.fetchHealth())
+			if m.debugMode {
+				cmds = append(cmds, m.fetchDebug())
+			}
 		}
 		return m, tea.Batch(cmds...)
 
@@ -215,7 +233,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.healthErr = nil
 			m.connected = true
 			m.addLatency(msg.result.Latency)
-			m.addLog("GET", "/health", 200, msg.result.Latency, fmt.Sprintf("status=%s dispenser=%s", msg.health.Status, msg.health.Dispenser), false)
+			m.addLog("GET", "/health", 200, msg.result.Latency,
+				fmt.Sprintf("state=%s fault=%s", msg.health.State, msg.health.Fault), false)
+		}
+		return m, nil
+
+	case debugResultMsg:
+		if msg.result.Error != nil {
+			m.debug = nil
+			m.addLog("GET", "/debug", msg.result.StatusCode, msg.result.Latency, msg.result.Error.Error(), true)
+		} else {
+			m.debug = msg.debug
+			m.addLog("GET", "/debug", 200, msg.result.Latency, "gpio", false)
 		}
 		return m, nil
 
@@ -323,10 +352,17 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "r", "R":
+		if m.debugMode {
+			return m, tea.Batch(m.fetchHealth(), m.fetchDebug())
+		}
 		return m, m.fetchHealth()
 
 	case "d", "D":
 		m.debugMode = !m.debugMode
+		if m.debugMode {
+			return m, m.fetchDebug()
+		}
+		m.debug = nil
 		return m, nil
 	}
 

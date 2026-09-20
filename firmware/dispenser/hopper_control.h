@@ -24,17 +24,15 @@ public:
   // desired quantity BEFORE startMotor().  stopMotor() clears it automatically.
   void setMotorStopAt(uint8_t count) override;
   bool checkJam() override;
-  bool isHopperLow() override;
-
-  // Self-healing: clears the active decoded hopper error (see IHopper).
-  void clearActiveError() override;
+  // The decoded error the manager has not seen yet, consumed by the call
+  // (see IHopper).  updateErrorDecoder() fills it.
+  uint8_t takeDecodedError() override;
 
   // GPIO state accessors for health endpoint
   uint8_t getCoinPulseRaw();
   bool isCoinPulseActive();
   uint8_t getErrorSignalRaw();
   bool isErrorSignalActive();
-  uint8_t getHopperLowRaw();
 
   // Error handling
   ErrorDecoder errorDecoder;
@@ -43,6 +41,10 @@ public:
 
 private:
   static void IRAM_ATTR handleCoinPulse();
+  // Set by updateErrorDecoder(), cleared by takeDecodedError().  One slot:
+  // a second error while the first is unread changes nothing — the device is
+  // already faulted and only a reboot ends that.
+  uint8_t decoded_error;
 };
 
 #endif

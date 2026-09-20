@@ -18,8 +18,21 @@ struct Transaction {
   // power mid-dispense and the live count went with it.  Reported on every
   // transaction response (dispenser-protocol.md).
   bool count_reliable;
+  // Why this transaction ended in STATE_ERROR (issue #6): a TxErrorKind and,
+  // for TX_ERROR_HOPPER, the Azkoyen code 1-7.  Reported as `error_type` /
+  // `error_code` on every transaction response, so the terminal can tell a
+  // jam from a motor fault instead of seeing one flat "error".
+  uint8_t error_kind;
+  uint8_t error_code;
   unsigned long started_ms;
 };
+
+// The protocol vocabulary for the three fields above.  They live here, in a
+// file the native tests compile, and not in the HTTP layer, which no unit test
+// can reach.
+const char* deviceStateToString(DeviceState state);
+const char* faultToString(DeviceFault fault);
+const char* txErrorTypeToString(uint8_t error_kind, uint8_t error_code);
 
 class DispenseManager {
 public:
@@ -43,6 +56,14 @@ public:
   Transaction getTransaction(const char* tx_id);
   Transaction getActiveTransaction();
   bool isIdle();
+
+  // The device, as GET /health reports it (issue #6).  A fault outranks
+  // everything: it is the answer to "is it safe to run the motor", and only a
+  // reboot changes it.
+  DeviceState getDeviceState();
+  DeviceFault getFault();
+  // The Azkoyen code behind a FAULT_HOPPER_ERROR, 0 otherwise.
+  uint8_t getFaultCode();
 
   // Transaction-level metrics
   uint16_t getTotalDispenses();
@@ -109,6 +130,14 @@ private:
   // `dispensing` throughout, which is what it is doing — finishing.
   bool settling;
   unsigned long settling_since_ms;
+
+  // The device-level fault.  RAM only, on purpose: a boot clears it, which is
+  // the entire reset story (owner decision 3, 2026-09-20).  Persisting it
+  // would make the power cycle that is supposed to end a jam the one thing
+  // that cannot.
+  DeviceFault fault;
+  uint8_t fault_code;
+
 };
 
 #endif

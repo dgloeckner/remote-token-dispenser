@@ -6,11 +6,15 @@
 #include <Arduino.h>
 #include "error_decoder.h"
 
-// Single error record in ring buffer
+// Single error record in ring buffer.
+//
+// There is no `cleared` flag any more (issue #6): a decoded hopper error
+// raises a device fault, and a fault is ended by a reboot and by nothing
+// else — so the flag was false on every record that mattered and the
+// "self-healing" it described never had a case left to heal.
 struct ErrorRecord {
   ErrorCode code;
   unsigned long timestamp;  // millis() when detected
-  bool cleared;             // false = active, true = cleared by successful dispense
 };
 
 // Ring buffer for last 5 errors
@@ -23,8 +27,6 @@ private:
 public:
   ErrorHistory();
   void addError(ErrorCode code);
-  ErrorRecord* getActive();  // Returns first non-cleared error (newest first), or nullptr
-  void clearActive();        // Marks active error as cleared
   void getAll(ErrorRecord* output, int& count);  // output must have space for BUFFER_SIZE entries
 };
 
