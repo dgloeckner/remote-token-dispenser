@@ -19,11 +19,14 @@ type fakeDevice struct {
 
 	apiKey string
 	// knobs for the negative tests
-	protocol        int
-	ignoreAuth      bool
-	rejectRetry     bool // answer 409 to a retry of the active tx (the #2 bug)
-	acceptReusedQty bool // answer 200 to a known tx_id with another quantity
-	orphanOnReplay  bool // let an idempotent hit take the active tx with it
+	protocol          int
+	ignoreAuth        bool
+	rejectRetry       bool // answer 409 to a retry of the active tx (the #2 bug)
+	acceptReusedQty   bool // answer 200 to a known tx_id with another quantity
+	orphanOnReplay    bool // let an idempotent hit take the active tx with it
+	omitCountReliable bool // leave count_reliable out of the response (#3)
+	forgetCrashedTx   bool // lose the crashed transaction on reboot, as before #3
+	claimCountExact   bool // claim count_reliable=true even after a power loss
 
 	active  *fakeTx
 	history map[string]*fakeTx
@@ -35,6 +38,7 @@ type fakeTx struct {
 	State     string
 	Quantity  int
 	Dispensed int
+	Reliable  bool
 }
 
 func newFakeDevice(apiKey string) *fakeDevice {
@@ -140,7 +144,7 @@ func (f *fakeDevice) dispense(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tx := &fakeTx{ID: req.TxID, State: "dispensing", Quantity: req.Quantity}
+	tx := &fakeTx{ID: req.TxID, State: "dispensing", Quantity: req.Quantity, Reliable: true}
 	f.active = tx
 
 	// Quantity 8 is the hardware-error scenario, mirroring the Go mock.
@@ -153,8 +157,42 @@ func (f *fakeDevice) dispense(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The two resets of issue #3, keyed by quantity the way the Go mock keys
+	// its scenarios: crashQuantity keeps the RTC count, powerLossQuantity does
+	// not.  Both leave a transaction behind that a reboot can still be asked
+	// about — that is what the terminal's 404 depends on.
+	if req.Quantity == crashQuantity || req.Quantity == powerLossQuantity {
+		go f.reboot(tx, req.Quantity == crashQuantity)
+		f.writeJSON(w, 200, f.respond(tx))
+		return
+	}
+
 	go f.run(tx)
 	f.writeJSON(w, 200, f.respond(tx))
+}
+
+// reboot drops one token and then resets, the way a brownout on motor start
+// does.  countSurvives says whether RTC memory came through it.
+func (f *fakeDevice) reboot(tx *fakeTx, countSurvives bool) {
+	time.Sleep(20 * time.Millisecond)
+	f.mu.Lock()
+	tx.Dispensed++
+	f.mu.Unlock()
+
+	time.Sleep(50 * time.Millisecond)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	tx.State = "error"
+	if countSurvives {
+		tx.Reliable = true
+	} else {
+		tx.Reliable = f.claimCountExact
+		tx.Dispensed = 0 // all that is left is the lower bound from flash
+	}
+	f.active = nil
+	if !f.forgetCrashedTx {
+		f.history[tx.ID] = tx
+	}
 }
 
 // run dispenses one token every 20ms.
@@ -167,6 +205,7 @@ func (f *fakeDevice) run(tx *fakeTx) {
 	}
 	f.mu.Lock()
 	tx.State = "done"
+	tx.Reliable = true
 	f.history[tx.ID] = tx
 	f.active = nil
 	f.mu.Unlock()
@@ -194,12 +233,16 @@ func (f *fakeDevice) status(w http.ResponseWriter, r *http.Request) {
 
 // respond must be called with f.mu held.
 func (f *fakeDevice) respond(tx *fakeTx) map[string]any {
-	return map[string]any{
+	body := map[string]any{
 		"tx_id":     tx.ID,
 		"state":     tx.State,
 		"quantity":  tx.Quantity,
 		"dispensed": tx.Dispensed,
 	}
+	if !f.omitCountReliable {
+		body["count_reliable"] = tx.Reliable
+	}
+	return body
 }
 
 var _ = fmt.Sprintf

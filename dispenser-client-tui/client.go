@@ -93,7 +93,13 @@ type DispenseResponse struct {
 	State     string `json:"state"`
 	Quantity  int    `json:"quantity"`
 	Dispensed int    `json:"dispensed"`
-	Error     string `json:"error,omitempty"`
+	// CountReliable is required on every transaction response: false means
+	// Dispensed is a lower bound, because the device lost power mid-dispense
+	// and the live count went with it.  A POINTER on purpose — a missing field
+	// must be distinguishable from an explicit false, or a device that does not
+	// implement it reads as "the count is unreliable" everywhere.
+	CountReliable *bool  `json:"count_reliable"`
+	Error         string `json:"error,omitempty"`
 }
 
 // ErrorResponse for 4xx/5xx

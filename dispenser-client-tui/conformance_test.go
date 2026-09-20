@@ -93,6 +93,50 @@ func TestSuiteCatchesOrphanedActiveTransaction(t *testing.T) {
 	}
 }
 
+// --- issue #3: the count and the history across a reset ---------------------
+
+func TestSuiteCatchesMissingCountReliable(t *testing.T) {
+	dev := newFakeDevice("k")
+	dev.omitCountReliable = true // a device that leaves the required field out
+	srv := dev.server()
+	defer srv.Close()
+
+	report := RunCases(newCtx(srv.URL, "k", TargetMock), ConformanceCases(), "count_reliable_is_present")
+
+	got := findCase(t, report, "count_reliable_is_present_on_every_transaction")
+	if got.Status != "fail" {
+		t.Errorf("count_reliable_is_present_on_every_transaction = %s, want fail against a device without the field", got.Status)
+	}
+}
+
+func TestSuiteCatchesForgottenCrashedTransaction(t *testing.T) {
+	dev := newFakeDevice("k")
+	dev.forgetCrashedTx = true // the firmware before #3: a reboot loses it
+	srv := dev.server()
+	defer srv.Close()
+
+	report := RunCases(newCtx(srv.URL, "k", TargetMock), ConformanceCases(), "crashed_tx_is_found_after_reboot")
+
+	got := findCase(t, report, "crashed_tx_is_found_after_reboot")
+	if got.Status != "fail" {
+		t.Errorf("crashed_tx_is_found_after_reboot = %s, want fail against a device that forgets it", got.Status)
+	}
+}
+
+func TestSuiteCatchesFabricatedCountAfterPowerLoss(t *testing.T) {
+	dev := newFakeDevice("k")
+	dev.claimCountExact = true // a device that calls a lost count exact
+	srv := dev.server()
+	defer srv.Close()
+
+	report := RunCases(newCtx(srv.URL, "k", TargetMock), ConformanceCases(), "power_loss_reports_count_unreliable")
+
+	got := findCase(t, report, "power_loss_reports_count_unreliable")
+	if got.Status != "fail" {
+		t.Errorf("power_loss_reports_count_unreliable = %s, want fail against a device that claims the count is exact", got.Status)
+	}
+}
+
 func TestSuiteCatchesProtocolMismatch(t *testing.T) {
 	dev := newFakeDevice("k")
 	dev.protocol = 1 // a device that never got the handshake

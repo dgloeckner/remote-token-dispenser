@@ -324,6 +324,91 @@ func ConformanceCases() []Case {
 			},
 		},
 
+		// --- the count and the history across a reset (issue #3) --------------
+		{
+			Name: "count_reliable_is_present_on_every_transaction",
+			Note: "a required field, not an optional one: a reader with a default " +
+				"would turn 'we do not know' into 'we counted zero'",
+			Run: func(c *Ctx) error {
+				txID := c.NextTxID("cr")
+				if _, res := c.Client.Dispense(txID, 1); res.Error != nil {
+					return fmt.Errorf("POST failed: %v", res.Error)
+				}
+				final, err := c.waitForFinalState(txID, 30*time.Second)
+				if err != nil {
+					return err
+				}
+				if final.CountReliable == nil {
+					return fmt.Errorf("the transaction response has no count_reliable field")
+				}
+				if !*final.CountReliable {
+					return fmt.Errorf("a dispense that nothing interrupted reports count_reliable=false")
+				}
+				raw, err := c.raw("GET", "/dispense/"+txID, "",
+					map[string]string{"X-API-Key": c.Client.APIKey})
+				if err != nil {
+					return err
+				}
+				if !strings.Contains(raw.Body, "count_reliable") {
+					return fmt.Errorf("GET body carries no count_reliable: %s", strings.TrimSpace(raw.Body))
+				}
+				return nil
+			},
+		},
+		{
+			Name:    "crashed_tx_is_found_after_reboot",
+			Targets: []Target{TargetMock},
+			Note: "the device's own crash scenario; on a real ESP this is the " +
+				"interactive reset_mid_dispense case below",
+			Run: func(c *Ctx) error {
+				txID := c.NextTxID("cx")
+				// The crash scenario drops the connection mid-response — the
+				// transport error is the scenario, not a failure of the case.
+				_, _ = c.Client.Dispense(txID, crashQuantity)
+
+				final, err := c.waitForFinalState(txID, 30*time.Second)
+				if err != nil {
+					return err
+				}
+				if final.State != "error" {
+					return fmt.Errorf("state after the crash is %q, expected error", final.State)
+				}
+				if final.Dispensed == 0 {
+					return fmt.Errorf("dispensed=0 after a crash that dropped a token; " +
+						"the tokens in the tray are never billed")
+				}
+				if final.CountReliable == nil || !*final.CountReliable {
+					return fmt.Errorf("a reset the RTC memory survives must report count_reliable=true")
+				}
+				return nil
+			},
+		},
+		{
+			Name:    "power_loss_reports_count_unreliable",
+			Targets: []Target{TargetMock},
+			Note:    "the same recovery without RTC memory: a lower bound that says it is one",
+			Run: func(c *Ctx) error {
+				txID := c.NextTxID("pw")
+				_, _ = c.Client.Dispense(txID, powerLossQuantity)
+
+				final, err := c.waitForFinalState(txID, 30*time.Second)
+				if err != nil {
+					return err
+				}
+				if final.State != "error" {
+					return fmt.Errorf("state after the power loss is %q, expected error", final.State)
+				}
+				if final.CountReliable == nil {
+					return fmt.Errorf("the transaction response has no count_reliable field")
+				}
+				if *final.CountReliable {
+					return fmt.Errorf("count_reliable=true after a power loss: " +
+						"the device is claiming a count it cannot have")
+				}
+				return nil
+			},
+		},
+
 		// --- hardware error --------------------------------------------------
 		{
 			Name:        "post_while_error_is_409",
@@ -348,7 +433,7 @@ func ConformanceCases() []Case {
 			Name:             "reset_mid_dispense_reports_partial_count",
 			Targets:          []Target{TargetSimulator, TargetHopper},
 			NeedsInteraction: true,
-			Note:             "see #3: the count is persisted once, at zero, so this reports dispensed=0 today",
+			Note:             "the RST button is a reset the RTC memory survives — the count must be exact",
 			Run: func(c *Ctx) error {
 				txID := c.NextTxID("rs")
 				if _, res := c.Client.Dispense(txID, 5); res.Error != nil {
@@ -367,11 +452,54 @@ func ConformanceCases() []Case {
 				if tx.Dispensed == 0 {
 					return fmt.Errorf("dispensed=0 after a reset mid-dispense; the partial count was lost")
 				}
+				if tx.CountReliable == nil || !*tx.CountReliable {
+					return fmt.Errorf("RST keeps the RTC domain alive, so the count must be reported as exact")
+				}
+				return nil
+			},
+		},
+		{
+			Name:             "power_loss_mid_dispense_reports_count_unreliable",
+			Targets:          []Target{TargetSimulator, TargetHopper},
+			NeedsInteraction: true,
+			Destructive:      true,
+			Note:             "the other reset: without the RTC block the count is a lower bound and says so",
+			Run: func(c *Ctx) error {
+				txID := c.NextTxID("pl")
+				if _, res := c.Client.Dispense(txID, 5); res.Error != nil {
+					return fmt.Errorf("POST failed: %v", res.Error)
+				}
+				c.Prompt("cut the power to the dispenser now, while tokens are dropping, " +
+					"then switch it back on")
+				time.Sleep(10 * time.Second)
+				tx, res := c.Client.Status(txID)
+				if res.Error != nil {
+					return fmt.Errorf("status after the power loss: %v", res.Error)
+				}
+				if tx.State != "error" {
+					return fmt.Errorf("state after a power loss mid-dispense is %q, expected error", tx.State)
+				}
+				if tx.CountReliable == nil {
+					return fmt.Errorf("the transaction response has no count_reliable field")
+				}
+				if *tx.CountReliable {
+					return fmt.Errorf("count_reliable=true after a power loss: " +
+						"RTC memory cannot have survived it")
+				}
 				return nil
 			},
 		},
 	}
 }
+
+// The two quantities the mock maps to a reset mid-dispense.  They are an
+// implementation detail of the mock (dispenser-mock/scenarios.go); on a real
+// device the same two cases are the interactive ones a human triggers with the
+// RST button and the power switch.
+const (
+	crashQuantity     = 5
+	powerLossQuantity = 17
+)
 
 // induceHardwareError puts the target into an active hardware error.
 // The mock maps quantity 8 to COIN_STUCK; on the simulator the operator sets
