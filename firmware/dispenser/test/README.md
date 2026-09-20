@@ -26,6 +26,11 @@ pio test -e native
 - **`mocks/Arduino.h` grows only for Arduino-free production sources.** If a
   file needs more of the Arduino API than the handful of stubs there, that is
   a sign the logic belongs behind an interface.
+- **A mock symbol is declared in `mocks/`, but defined in `arduino_mock.cpp`
+  here in the test root.** PlatformIO compiles the sources of the test suite
+  itself, not those in its subdirectories, so a definition parked next to its
+  header is never built and the link ends in `undefined reference`. Defining
+  it in the header instead only trades that for a duplicate symbol.
 - Tests whose name ends in `KNOWN_DEVIATION_issue_N` pin behaviour that the
   protocol says is wrong and that issue N will change. They assert what the
   firmware does *today* so CI stays honest; the issue that fixes the bug
