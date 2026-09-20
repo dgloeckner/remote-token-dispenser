@@ -30,13 +30,18 @@ type HealthResponse struct {
 }
 
 type Metrics struct {
-	TotalDispenses int    `json:"total_dispenses"`
-	Successful     int    `json:"successful"`
-	Jams           int    `json:"jams"`
-	Partial        int    `json:"partial"`
-	Failures       int    `json:"failures"`
-	LastError      string `json:"last_error"`
-	LastErrorType  string `json:"last_error_type"`
+	TotalDispenses int `json:"total_dispenses"`
+	Successful     int `json:"successful"`
+	Jams           int `json:"jams"`
+	Partial        int `json:"partial"`
+	Failures       int `json:"failures"`
+	// OverrunTokens counts the tokens that left the hopper past the requested
+	// quantity (issue #5).  A POINTER, like CountReliable: a device that does
+	// not report the metric must be distinguishable from one that reports
+	// zero, or "we never looked" reads as "it never happened".
+	OverrunTokens *int   `json:"overrun_tokens"`
+	LastError     string `json:"last_error"`
+	LastErrorType string `json:"last_error_type"`
 }
 
 type ActiveTxInfo struct {

@@ -508,6 +508,114 @@ func ConformanceCases() []Case {
 			},
 		},
 
+		// --- the pulse count: noise and overrun (issue #5) --------------------
+		//
+		// The device counts coins on a falling edge, and two things used to be
+		// wrong with that number in opposite directions: electrical noise added
+		// tokens that never fell (a short dispense), and a token that fell after
+		// the motor stop was counted by the ISR and then discarded, because
+		// `dispensed` was clamped at `quantity`.  The terminal bills `dispensed`,
+		// so both are money.
+		{
+			Name:    "overrun_is_reported_above_quantity",
+			Targets: []Target{TargetMock},
+			Note: "a token that falls while the disc coasts is billed: dispensed > quantity " +
+				"is legal (issue #5); on a real device this is the interactive coast case",
+			Run: func(c *Ctx) error {
+				txID := c.NextTxID("ov")
+				if _, res := c.Client.Dispense(txID, overrunQuantity); res.Error != nil {
+					return fmt.Errorf("POST failed: %v", res.Error)
+				}
+				final, err := c.waitForFinalState(txID, 30*time.Second)
+				if err != nil {
+					return err
+				}
+				if final.State != "done" {
+					return fmt.Errorf("state %q after an overrun, expected done: one token too "+
+						"many is an accounting fact, not a fault", final.State)
+				}
+				if final.Dispensed <= final.Quantity {
+					return fmt.Errorf("dispensed %d for a quantity of %d: the token that fell "+
+						"after the motor stop was counted and then thrown away",
+						final.Dispensed, final.Quantity)
+				}
+				if final.CountReliable == nil || !*final.CountReliable {
+					return fmt.Errorf("an overrun is an exact count, not a lower bound")
+				}
+				return nil
+			},
+		},
+		{
+			Name: "health_reports_overrun_tokens",
+			Note: "without the metric an overrun is only visible to whoever reads a single " +
+				"transaction; nobody watches those",
+			Run: func(c *Ctx) error {
+				health, res := c.Client.Health()
+				if health == nil {
+					return fmt.Errorf("no health document: %v", res.Error)
+				}
+				if health.Metrics.OverrunTokens == nil {
+					return fmt.Errorf("metrics carry no overrun_tokens field")
+				}
+				return nil
+			},
+		},
+		{
+			Name:             "bounce_burst_counts_one_token_per_coin",
+			Targets:          []Target{TargetSimulator},
+			NeedsInteraction: true,
+			Note: "the simulator's bounce mode is the electrical noise of issue #5: a device " +
+				"that counts raw edges reaches the target early and dispenses short",
+			Run: func(c *Ctx) error {
+				c.Prompt("type 'b' into the hopper simulator (bounce burst per token)")
+				defer c.Prompt("type 'n' into the hopper simulator (back to normal pulses)")
+
+				txID := c.NextTxID("bo")
+				const quantity = 3
+				if _, res := c.Client.Dispense(txID, quantity); res.Error != nil {
+					return fmt.Errorf("POST failed: %v", res.Error)
+				}
+				final, err := c.waitForFinalState(txID, 60*time.Second)
+				if err != nil {
+					return err
+				}
+				if final.State != "done" {
+					return fmt.Errorf("state %q with a bouncing sensor, expected done", final.State)
+				}
+				if final.Dispensed != quantity {
+					return fmt.Errorf("dispensed %d of %d: the bounce edges were counted as tokens",
+						final.Dispensed, quantity)
+				}
+				return nil
+			},
+		},
+		{
+			Name:             "coast_pulse_is_counted_as_an_overrun",
+			Targets:          []Target{TargetSimulator},
+			NeedsInteraction: true,
+			Note:             "the simulator drops one extra token 120 ms after the motor stop; it must be billed",
+			Run: func(c *Ctx) error {
+				c.Prompt("type 'c' into the hopper simulator (one coast pulse after the stop)")
+				defer c.Prompt("type 'n' into the hopper simulator (back to normal pulses)")
+
+				txID := c.NextTxID("co")
+				const quantity = 2
+				if _, res := c.Client.Dispense(txID, quantity); res.Error != nil {
+					return fmt.Errorf("POST failed: %v", res.Error)
+				}
+				final, err := c.waitForFinalState(txID, 60*time.Second)
+				if err != nil {
+					return err
+				}
+				if final.Dispensed != quantity+1 {
+					return fmt.Errorf("dispensed %d, expected %d: the coast token is in the tray "+
+						"either way, the question is only whether it is billed",
+						final.Dispensed, quantity+1)
+				}
+				return nil
+			},
+		},
+
 		// --- hardware error --------------------------------------------------
 		{
 			Name:        "post_while_error_is_409",
@@ -598,6 +706,11 @@ func ConformanceCases() []Case {
 const (
 	crashQuantity     = 5
 	powerLossQuantity = 17
+	// The mock's overrun scenario: quantity tokens, then one that falls while
+	// the disc coasts.  On a real device the same case is the interactive
+	// coast_pulse_is_counted_as_an_overrun, where the simulator's 'c' command
+	// produces that token.
+	overrunQuantity = 18
 )
 
 // induceHardwareError puts the target into an active hardware error.

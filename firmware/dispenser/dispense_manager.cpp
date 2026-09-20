@@ -21,6 +21,7 @@ DispenseManager::DispenseManager(IStorage& storage, IHopper& hopper, ICountMemor
   crash_count = 0;
   requested_tokens = 0;
   dispensed_tokens = 0;
+  overrun_tokens = 0;
 }
 
 void DispenseManager::begin() {
@@ -292,6 +293,7 @@ uint16_t DispenseManager::getPartial() { return partial_count; }
 uint16_t DispenseManager::getCrashes() { return crash_count; }
 uint32_t DispenseManager::getRequestedTokens() { return requested_tokens; }
 uint32_t DispenseManager::getDispensedTokens() { return dispensed_tokens; }
+uint32_t DispenseManager::getOverrunTokens() { return overrun_tokens; }
 
 // Private methods
 bool DispenseManager::findInHistory(const char* tx_id, Transaction& out_tx) {

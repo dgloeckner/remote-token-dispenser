@@ -11,8 +11,10 @@
 #include <unity.h>
 #include <string.h>
 
+#include "config.h"
 #include "crash_state.h"
 #include "dispense_manager.h"
+#include "pulse_filter.h"
 #include "request_body.h"
 #include "mocks/count_memory_mock.h"
 #include "mocks/flash_storage_mock.h"
@@ -57,6 +59,18 @@ static bool startAndRun(const char* tx_id, uint8_t quantity) {
     bool accepted = manager->startDispense(tx_id, quantity);
     manager->loop();
     return accepted;
+}
+
+// The loop() pass that reaches the target, plus the settling window after it
+// (issue #5).  Reaching the count is not the end of a transaction: the motor
+// is stopped, but the disc coasts and a token that is already past the wheel
+// still falls.  The firmware keeps counting for DISPENSE_SETTLING_MS and only
+// then reports `done` — so a test that wants a FINISHED transaction advances
+// the clock, and says so by calling this.
+static void loopUntilDone(void) {
+    manager->loop();                          // target reached: motor off, settling
+    _mock_millis += DISPENSE_SETTLING_MS;
+    manager->loop();                          // window over: DONE
 }
 
 // tx_id for the ring tests: "ring1" … "ring9", without pulling in <stdio.h>.
@@ -145,7 +159,7 @@ void test_requested_tokens_accumulates_across_transactions(void) {
     startAndRun("tx002", 3);  // busy → rejected
 
     hopper->setPulseCount(5);
-    manager->loop();                     // completes tx001
+    loopUntilDone();                     // completes tx001
 
     startAndRun("tx002", 3);  // now accepted
 
@@ -159,7 +173,7 @@ void test_dispensed_tokens_tracks_actual_dispensed(void) {
 
     startAndRun("tx001", 5);
     hopper->setPulseCount(5);
-    manager->loop();                     // full success
+    loopUntilDone();                     // full success
 
     startAndRun("tx002", 3);
     hopper->setPulseCount(2);
@@ -225,7 +239,7 @@ void test_completed_dispense_clears_active_hopper_error(void) {
     startAndRun("tx_heal", 1);
 
     hopper->simulatePulseISR();
-    manager->loop();
+    loopUntilDone();
 
     TEST_ASSERT_EQUAL_INT_MESSAGE(
         1, hopper->getClearErrorCalls(),
@@ -250,7 +264,7 @@ void test_replay_of_finished_tx_returns_cached_result(void) {
     manager->begin();
     startAndRun("tx_done", 2);
     hopper->setPulseCount(2);
-    manager->loop();                     // tx_done is DONE and in the ring
+    loopUntilDone();                     // tx_done is DONE and in the ring
 
     TEST_ASSERT_TRUE_MESSAGE(
         startAndRun("tx_done", 2),
@@ -304,7 +318,7 @@ void test_idempotent_hit_does_not_touch_active_tx(void) {
 
     startAndRun("tx_old", 1);
     hopper->simulatePulseISR();
-    manager->loop();                      // tx_old DONE, lands in the ring
+    loopUntilDone();                      // tx_old DONE, lands in the ring
 
     startAndRun("tx_new", 5);  // now dispensing
     startAndRun("tx_old", 1);  // idempotent hit for the finished one
@@ -337,7 +351,7 @@ void test_idempotent_hit_while_idle_leaves_active_idle(void) {
     manager->begin();
     startAndRun("tx_done", 1);
     hopper->simulatePulseISR();
-    manager->loop();                      // idle again, tx_done in the ring
+    loopUntilDone();                      // idle again, tx_done in the ring
 
     startAndRun("tx_done", 1);
 
@@ -375,7 +389,7 @@ void test_same_tx_id_different_quantity_is_rejected(void) {
     startAndRun("tx_qty", 2);
     hopper->simulatePulseISR();
     hopper->simulatePulseISR();
-    manager->loop();                      // tx_qty DONE with quantity 2
+    loopUntilDone();                      // tx_qty DONE with quantity 2
 
     TEST_ASSERT_FALSE_MESSAGE(
         startAndRun("tx_qty", 5),
@@ -601,7 +615,7 @@ void test_loop_completes_transaction_after_isr_stop(void) {
     startAndRun("tx_isr004", 1);
 
     hopper->simulatePulseISR();
-    manager->loop();
+    loopUntilDone();
 
     Transaction tx = manager->getTransaction("tx_isr004");
     TEST_ASSERT_EQUAL_INT_MESSAGE(STATE_DONE, tx.state,
@@ -689,7 +703,7 @@ void test_done_tx_is_found_after_reboot(void) {
     manager->begin();
     startAndRun("tx_keep", 2);
     hopper->setPulseCount(2);
-    manager->loop();                     // DONE
+    loopUntilDone();                     // DONE
 
     reboot();
 
@@ -710,7 +724,7 @@ void test_ring_survives_reboot_and_wraps_at_8(void) {
         snprintfTxId(id, i);
         startAndRun(id, 1);
         hopper->setPulseCount(1);
-        manager->loop();
+        loopUntilDone();
     }
 
     reboot();
@@ -764,7 +778,7 @@ void test_successful_dispense_commits_twice(void) {
 
     startAndRun("tx_cost", 2);
     hopper->setPulseCount(2);
-    manager->loop();
+    loopUntilDone();
 
     TEST_ASSERT_EQUAL_INT_MESSAGE(
         2, storage->getSaveCalls(),
@@ -781,7 +795,7 @@ void test_corrupt_record_is_ignored(void) {
     manager->begin();
     startAndRun("tx_bad", 2);
     hopper->setPulseCount(2);
-    manager->loop();
+    loopUntilDone();
 
     storage->corruptOneByte();
     reboot();
@@ -796,7 +810,7 @@ void test_old_layout_version_is_ignored(void) {
     manager->begin();
     startAndRun("tx_old_v", 2);
     hopper->setPulseCount(2);
-    manager->loop();
+    loopUntilDone();
 
     storage->setStoredLayoutVersion(PERSIST_LAYOUT_VERSION - 1);
     reboot();
@@ -856,6 +870,256 @@ void test_sealed_rtc_block_validates_and_zeroed_one_does_not(void) {
         "A block damaged by a reset mid-write is rejected");
 }
 
+
+// =============================================================================
+// The pulse filter (issue #5)
+//
+// The coin ISR counted raw falling edges.  A bouncing optocoupler or an EMI
+// spike from the motor on the same supply is an edge too, and each one counted
+// as a token: the ISR stop fired early and the member got fewer tokens than
+// the terminal billed.  The table below is the hopper's own signal, in
+// microseconds — 30 ms pulses roughly a second apart — plus the noise the
+// simulator's bounce mode produces.
+// =============================================================================
+
+// The production spacing, in microseconds.
+static uint32_t minGapUs(void) {
+    return (uint32_t)COIN_PULSE_MIN_GAP_MS * 1000UL;
+}
+
+void test_clean_30ms_pulses_count_1_each(void) {
+    PulseFilter filter(minGapUs());
+    // One token per second, as the Hopper U-II delivers them.
+    const uint32_t edges[] = { 0, 1000000UL, 2000000UL, 3000000UL };
+
+    for (unsigned i = 0; i < sizeof(edges) / sizeof(edges[0]); i++) {
+        TEST_ASSERT_TRUE_MESSAGE(filter.accept(edges[i]),
+            "A clean pulse a second after the last one is a token");
+    }
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(4, filter.accepted(), "Four coins, four tokens");
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(0, filter.rejected(), "… and nothing thrown away");
+}
+
+void test_bounce_burst_within_5ms_counts_once(void) {
+    PulseFilter filter(minGapUs());
+    // The simulator's bounce mode: three edges 2 ms apart, then the real
+    // 30 ms pulse 4 ms later.  One coin fell.
+    const uint32_t edges[] = { 0, 2000, 4000, 8000 };
+
+    for (unsigned i = 0; i < sizeof(edges) / sizeof(edges[0]); i++) {
+        filter.accept(edges[i]);
+    }
+
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(1, filter.accepted(),
+        "A bouncing sensor delivers one coin, not four");
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(3, filter.rejected(),
+        "… and the three edges it threw away are counted, not hidden");
+}
+
+void test_pulses_2ms_apart_are_rejected(void) {
+    PulseFilter filter(minGapUs());
+
+    TEST_ASSERT_TRUE_MESSAGE(filter.accept(0), "The first edge is always a token");
+    TEST_ASSERT_FALSE_MESSAGE(filter.accept(2000),
+        "2 ms after a token is EMI, not a second coin");
+    TEST_ASSERT_FALSE_MESSAGE(filter.accept(4000),
+        "… and the deadline is measured from the accepted edge, not the last one, "
+        "so a burst cannot walk it forward");
+    TEST_ASSERT_TRUE_MESSAGE(filter.accept(minGapUs()),
+        "Exactly the minimum gap after the token is a token again");
+}
+
+void test_the_minimum_gap_fits_the_datasheet_pulse(void) {
+    // The number is derived, not chosen: one coin is a single LOW phase of
+    // 30-65 ms, so the spacing has to sit below the shortest legal pulse —
+    // otherwise a real coin arriving early is filtered away as noise.
+    TEST_ASSERT_TRUE_MESSAGE(COIN_PULSE_MIN_GAP_MS > 0,
+        "A gap of zero is the unfiltered ISR this issue is about");
+    TEST_ASSERT_TRUE_MESSAGE(COIN_PULSE_MIN_GAP_MS < PULSE_DURATION_MS,
+        "The gap must stay under the datasheet's 30 ms pulse");
+}
+
+void test_filter_counts_across_the_micros_wraparound(void) {
+    // micros() wraps every ~71 minutes.  A dispenser that treats the wrap as a
+    // huge gap is harmless; one that treats it as a tiny gap drops a token.
+    PulseFilter filter(minGapUs());
+    const uint32_t before_wrap = 0xFFFFFF00UL;
+
+    // The casts are the point: the sum is what micros() would report after the
+    // wrap, and the filter has to read it as a small difference, not a huge one.
+    TEST_ASSERT_TRUE(filter.accept(before_wrap));
+    TEST_ASSERT_FALSE_MESSAGE(filter.accept((uint32_t)(before_wrap + 2000UL)),
+        "2 ms later is still noise, even when the counter wrapped in between");
+    TEST_ASSERT_TRUE_MESSAGE(filter.accept((uint32_t)(before_wrap + minGapUs())),
+        "… and a real coin after the wrap is still a coin");
+}
+
+void test_reset_forgets_the_last_edge(void) {
+    PulseFilter filter(minGapUs());
+    filter.accept(0);
+    filter.accept(1000);        // noise
+
+    filter.reset();
+
+    TEST_ASSERT_TRUE_MESSAGE(filter.accept(1000),
+        "After a reset the next edge is the first one of a new transaction");
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(1, filter.accepted(), "… and the counters start over");
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(0, filter.rejected(), "… both of them");
+}
+
+// =============================================================================
+// The settling window and the overrun (issue #5)
+//
+// The motor is cut by the ISR the moment the target count is reached, but a
+// token already past the wheel still falls.  It used to be counted by the ISR
+// and then thrown away: loop() copied the count once, at completion, and
+// `dispensed` could never exceed `quantity`.  The tokens were in the tray and
+// invisible to the terminal and to the metrics.
+// =============================================================================
+
+void test_target_count_stops_the_motor_but_not_the_transaction(void) {
+    manager->begin();
+    startAndRun("tx_settle", 2);
+
+    hopper->simulatePulseISR();
+    hopper->simulatePulseISR();
+    manager->loop();
+
+    TEST_ASSERT_FALSE_MESSAGE(hopper->isMotorRunning(),
+        "The target count stops the motor immediately");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        STATE_DISPENSING, manager->getActiveTransaction().state,
+        "… but the transaction stays DISPENSING through the settling window: "
+        "a token can still fall, and it must be counted");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        1, storage->getSaveCalls(),
+        "… and nothing is committed yet — the final count is not final yet");
+
+    _mock_millis += DISPENSE_SETTLING_MS;
+    manager->loop();
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        STATE_DONE, manager->getTransaction("tx_settle").state,
+        "Once the window is over the transaction is done");
+    TEST_ASSERT_TRUE_MESSAGE(manager->isIdle(), "… and the device is idle again");
+}
+
+void test_coast_pulse_within_settling_window_is_counted_and_reported(void) {
+    manager->begin();
+    startAndRun("tx_coast", 2);
+
+    hopper->simulatePulseISR();
+    hopper->simulatePulseISR();
+    manager->loop();                       // target reached, motor off, settling
+
+    hopper->simulatePulseISR();            // the token that was already falling
+    _mock_millis += DISPENSE_SETTLING_MS;
+    manager->loop();
+
+    Transaction tx = manager->getTransaction("tx_coast");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(STATE_DONE, tx.state,
+        "A coast token does not turn a good dispense into an error");
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(3, tx.dispensed,
+        "Three tokens left the hopper, so dispensed is 3 — greater than quantity "
+        "is legal, and it is what the terminal bills");
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(3, manager->getDispensedTokens(),
+        "… and the token metric counts what came out, not what was asked for");
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(3, counts->storedCount(),
+        "… and the coast token reached RTC memory like every other one");
+}
+
+void test_overrun_increments_metric(void) {
+    manager->begin();
+    startAndRun("tx_over", 1);
+
+    hopper->simulatePulseISR();
+    manager->loop();
+    hopper->simulatePulseISR();            // one token too many
+    hopper->simulatePulseISR();            // and another
+    _mock_millis += DISPENSE_SETTLING_MS;
+    manager->loop();
+
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(2, manager->getOverrunTokens(),
+        "Every token past the requested quantity is counted as an overrun");
+    TEST_ASSERT_EQUAL_UINT16_MESSAGE(1, manager->getSuccessful(),
+        "… and the transaction still counts as successful: the tokens came out");
+}
+
+void test_a_clean_dispense_has_no_overrun(void) {
+    manager->begin();
+    startAndRun("tx_clean", 3);
+
+    hopper->setPulseCount(3);
+    loopUntilDone();
+
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(0, manager->getOverrunTokens(),
+        "A dispense that delivered exactly what was asked for has no overrun");
+}
+
+void test_a_token_after_the_settling_window_is_not_billed_to_the_next_tx(void) {
+    // The window ends the transaction.  Whatever the pulse counter does after
+    // that belongs to nobody — and must not be carried into the next dispense,
+    // which resets the counter before it starts the motor.
+    manager->begin();
+    startAndRun("tx_first", 1);
+    hopper->simulatePulseISR();
+    loopUntilDone();
+
+    hopper->simulatePulseISR();            // far too late, after `done`
+
+    startAndRun("tx_second", 1);
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(
+        0, manager->getActiveTransaction().dispensed,
+        "A new transaction starts at zero, whatever the counter held");
+}
+
+void test_a_request_during_the_settling_window_is_busy(void) {
+    manager->begin();
+    startAndRun("tx_busy1", 1);
+
+    hopper->simulatePulseISR();
+    manager->loop();                       // settling: the motor is off, the tx is not done
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        DISPENSE_BUSY, manager->requestDispense("tx_busy2", 1),
+        "Another transaction during the settling window is busy — tokens from the "
+        "old one may still be falling, and they would be billed to the new one");
+}
+
+void test_settling_does_not_cost_a_third_commit(void) {
+    manager->begin();
+    storage->resetCallCounts();
+
+    startAndRun("tx_cost2", 2);
+    hopper->setPulseCount(2);
+    manager->loop();                       // settling
+    manager->loop();                       // still settling
+    _mock_millis += DISPENSE_SETTLING_MS;
+    manager->loop();                       // done
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        2, storage->getSaveCalls(),
+        "The settling window is not a state transition: still two commits "
+        "per transaction (owner decision, 2026-09-20)");
+}
+
+void test_a_jam_is_still_a_jam_while_below_the_target(void) {
+    // The settling window must not swallow the jam watchdog: it only starts
+    // once the target count has been reached.
+    manager->begin();
+    startAndRun("tx_jam2", 4);
+
+    hopper->setPulseCount(1);
+    hopper->setJamDetected(true);
+    manager->loop();
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        STATE_ERROR, manager->getTransaction("tx_jam2").state,
+        "A jam below the target still ends the transaction at once");
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(
+        0, manager->getOverrunTokens(), "… and a partial dispense is no overrun");
+}
+
 int main(int argc, char **argv) {
     (void)argc; (void)argv;
     UNITY_BEGIN();
@@ -908,6 +1172,22 @@ int main(int argc, char **argv) {
     RUN_TEST(test_rtc_block_of_another_tx_is_not_this_count);
     RUN_TEST(test_sealed_record_validates_and_zeroed_one_does_not);
     RUN_TEST(test_sealed_rtc_block_validates_and_zeroed_one_does_not);
+
+    RUN_TEST(test_clean_30ms_pulses_count_1_each);
+    RUN_TEST(test_bounce_burst_within_5ms_counts_once);
+    RUN_TEST(test_pulses_2ms_apart_are_rejected);
+    RUN_TEST(test_the_minimum_gap_fits_the_datasheet_pulse);
+    RUN_TEST(test_filter_counts_across_the_micros_wraparound);
+    RUN_TEST(test_reset_forgets_the_last_edge);
+
+    RUN_TEST(test_target_count_stops_the_motor_but_not_the_transaction);
+    RUN_TEST(test_coast_pulse_within_settling_window_is_counted_and_reported);
+    RUN_TEST(test_overrun_increments_metric);
+    RUN_TEST(test_a_clean_dispense_has_no_overrun);
+    RUN_TEST(test_a_token_after_the_settling_window_is_not_billed_to_the_next_tx);
+    RUN_TEST(test_a_request_during_the_settling_window_is_busy);
+    RUN_TEST(test_settling_does_not_cost_a_third_commit);
+    RUN_TEST(test_a_jam_is_still_a_jam_while_below_the_target);
 
     return UNITY_END();
 }

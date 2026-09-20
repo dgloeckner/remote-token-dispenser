@@ -54,6 +54,11 @@ public:
   // Token-level metrics
   uint32_t getRequestedTokens();
   uint32_t getDispensedTokens();
+  // Tokens that left the hopper past the requested quantity (issue #5): the
+  // ones that fall while the disc coasts to a stop.  They used to be counted
+  // by the ISR and then dropped on the floor of the accounting, because
+  // `dispensed` was clamped at `quantity` by construction.
+  uint32_t getOverrunTokens();
 
 private:
   IStorage& flashStorage;
@@ -84,6 +89,7 @@ private:
   // Token-level metrics
   uint32_t requested_tokens;
   uint32_t dispensed_tokens;
+  uint32_t overrun_tokens;
 
   bool findInHistory(const char* tx_id, Transaction& out_tx);
   void addToHistory(const Transaction& tx);

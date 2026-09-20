@@ -64,6 +64,30 @@
 // Hardware Specs (Azkoyen Hopper U-II PULSES mode)
 #define PULSE_DURATION_MS  30     // Expected pulse duration
 
+// Pulse filtering and the settling window (issue #5).
+//
+// COIN_PULSE_MIN_GAP_MS — the smallest spacing between two edges that can both
+// be tokens.  The datasheet pins the numbers on either side of it: one coin is
+// a single LOW phase of 30-65 ms (PULSE_DURATION_MS above,
+// docs/azkoyen-hopper-protocol.md section 3.4), and the hopper dispenses
+// roughly one coin per second.  So two real tokens are never closer than the
+// pulse itself, and 20 ms sits below the shortest legal pulse with margin
+// while being a hundred times more than a bouncing optocoupler edge or an EMI
+// spike from the motor switching on the same supply needs.  Anything closer
+// than this to the last ACCEPTED edge is noise, and noise used to be a token:
+// each spurious edge shortened the dispense by one coin.
+//
+// DISPENSE_SETTLING_MS — how long a transaction keeps counting after the motor
+// has been told to stop.  The disc coasts, and a token already past the wheel
+// still falls; the ISR stop (commit a9f15af) cut the motor sooner but could
+// never make the last token unfall.  500 ms is four times the simulator's
+// coast delay (COAST_DELAY_MS = 120 ms in firmware/hopper-simulator/) and well
+// inside the 5 s jam timeout, so the window can never be mistaken for a jam.
+// A token that arrives in it is counted and reported, which is why `dispensed`
+// may exceed `quantity` (dispenser-protocol.md).
+#define COIN_PULSE_MIN_GAP_MS  20
+#define DISPENSE_SETTLING_MS  500
+
 // Set from the build (-DFIRMWARE_VERSION='"…"' in platformio.ini) so a release
 // cannot go out carrying a debug string the way 1.1.0-DEBUG-error-decoding did.
 // The fallback keeps a plain checkout of the sketch compiling in the Arduino

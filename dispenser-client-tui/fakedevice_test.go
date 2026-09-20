@@ -36,9 +36,14 @@ type fakeDevice struct {
 	postDelay time.Duration // do the work (flash erase, 500 bytes of serial) inline
 	noBodyCap bool          // accept a body of any size instead of answering 413
 
-	active  *fakeTx
-	history map[string]*fakeTx
-	errored bool
+	// Issue #5: what happens to a token that falls after the motor stop.
+	clampDispensed    bool // never report more than quantity, as the firmware did
+	omitOverrunMetric bool // leave metrics.overrun_tokens out of /health
+
+	active   *fakeTx
+	history  map[string]*fakeTx
+	errored  bool
+	overruns int
 }
 
 type fakeTx struct {
@@ -84,7 +89,13 @@ func (f *fakeDevice) health(w http.ResponseWriter, r *http.Request) {
 	}
 	errActive := f.errored
 	proto := f.protocol
+	overruns := f.overruns
 	f.mu.Unlock()
+
+	metrics := map[string]int{"total_dispenses": 0}
+	if !f.omitOverrunMetric {
+		metrics["overrun_tokens"] = overruns
+	}
 
 	f.writeJSON(w, 200, map[string]any{
 		"protocol":  proto,
@@ -92,7 +103,7 @@ func (f *fakeDevice) health(w http.ResponseWriter, r *http.Request) {
 		"uptime":    42,
 		"firmware":  "fake-device",
 		"dispenser": state,
-		"metrics":   map[string]int{"total_dispenses": 0},
+		"metrics":   metrics,
 		"error":     map[string]any{"active": errActive},
 	})
 }
@@ -195,6 +206,13 @@ func (f *fakeDevice) dispense(w http.ResponseWriter, r *http.Request) {
 	// its scenarios: crashQuantity keeps the RTC count, powerLossQuantity does
 	// not.  Both leave a transaction behind that a reboot can still be asked
 	// about — that is what the terminal's 404 depends on.
+	// One token falls after the motor stop, the way the disc coasts (issue #5).
+	if req.Quantity == overrunQuantity {
+		go f.runWithCoastToken(tx)
+		f.writeJSON(w, 200, f.respond(tx))
+		return
+	}
+
 	if req.Quantity == crashQuantity || req.Quantity == powerLossQuantity {
 		go f.reboot(tx, req.Quantity == crashQuantity)
 		f.writeJSON(w, 200, f.respond(tx))
@@ -227,6 +245,29 @@ func (f *fakeDevice) reboot(tx *fakeTx, countSurvives bool) {
 	if !f.forgetCrashedTx {
 		f.history[tx.ID] = tx
 	}
+}
+
+// runWithCoastToken dispenses the whole quantity and then, after the motor has
+// been stopped, one more: the token that was already past the wheel.  A device
+// that reports it is conforming; clampDispensed is the firmware before #5.
+func (f *fakeDevice) runWithCoastToken(tx *fakeTx) {
+	for i := 0; i < tx.Quantity; i++ {
+		time.Sleep(5 * time.Millisecond)
+		f.mu.Lock()
+		tx.Dispensed++
+		f.mu.Unlock()
+	}
+	time.Sleep(30 * time.Millisecond) // the settling window
+	f.mu.Lock()
+	if !f.clampDispensed {
+		tx.Dispensed++
+		f.overruns++
+	}
+	tx.State = "done"
+	tx.Reliable = true
+	f.history[tx.ID] = tx
+	f.active = nil
+	f.mu.Unlock()
 }
 
 // run dispenses one token every 20ms.

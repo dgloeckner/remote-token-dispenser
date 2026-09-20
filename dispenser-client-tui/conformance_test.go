@@ -297,6 +297,36 @@ func TestSuiteCatchesSlowPost(t *testing.T) {
 	}
 }
 
+// --- issue #5: the pulse count, in both directions ---------------------------
+
+func TestSuiteCatchesClampedOverrun(t *testing.T) {
+	dev := newFakeDevice("k")
+	dev.clampDispensed = true // the firmware before #5: dispensed can never exceed quantity
+	srv := dev.server()
+	defer srv.Close()
+
+	report := RunCases(newCtx(srv.URL, "k", TargetMock), ConformanceCases(), "overrun_is_reported")
+
+	got := findCase(t, report, "overrun_is_reported_above_quantity")
+	if got.Status != "fail" {
+		t.Errorf("overrun_is_reported_above_quantity = %s, want fail against a device that clamps the count", got.Status)
+	}
+}
+
+func TestSuiteCatchesMissingOverrunMetric(t *testing.T) {
+	dev := newFakeDevice("k")
+	dev.omitOverrunMetric = true // a device that counts the overrun but never reports it
+	srv := dev.server()
+	defer srv.Close()
+
+	report := RunCases(newCtx(srv.URL, "k", TargetMock), ConformanceCases(), "health_reports_overrun")
+
+	got := findCase(t, report, "health_reports_overrun_tokens")
+	if got.Status != "fail" {
+		t.Errorf("health_reports_overrun_tokens = %s, want fail against a device without the metric", got.Status)
+	}
+}
+
 func TestSuiteCatchesMissingBodyCap(t *testing.T) {
 	dev := newFakeDevice("k")
 	dev.noBodyCap = true // a device that takes a body of any size
