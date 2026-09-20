@@ -12,6 +12,7 @@ package main
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 )
@@ -173,6 +174,90 @@ func ConformanceCases() []Case {
 					return err
 				}
 				return wantStatus(got, 404)
+			},
+		},
+
+		// --- the request itself: body framing and latency (issue #4) ---------
+		//
+		// The POST handler runs in the TCP/SDK callback.  Three consequences the
+		// terminal actually sees, and all three are protocol, not implementation:
+		// a request must always be answered, a body may arrive in pieces, and an
+		// answer must not wait for a flash erase and 500 bytes of serial output.
+		{
+			Name: "post_without_body_is_400",
+			Note: "an unanswered request is worse than a rejected one: the terminal " +
+				"waits out its own timeout and then retries a transaction it cannot " +
+				"tell apart from a lost one",
+			Run: func(c *Ctx) error {
+				start := time.Now()
+				got, err := c.postJSON("", true)
+				if err != nil {
+					return fmt.Errorf("POST with an empty body was never answered: %w", err)
+				}
+				if err := wantStatus(got, 400); err != nil {
+					return err
+				}
+				if elapsed := time.Since(start); elapsed > time.Second {
+					return fmt.Errorf("answered after %s; an empty body is rejected from "+
+						"the request handler, before any work", elapsed.Round(time.Millisecond))
+				}
+				return nil
+			},
+		},
+		{
+			Name: "post_body_in_two_segments_is_accepted",
+			Note: "TCP does not promise one segment per body; a device that parses " +
+				"whatever chunk it was handed answers 400 at random",
+			Run: func(c *Ctx) error {
+				txID := c.NextTxID("sg")
+				body := fmt.Sprintf(`{"tx_id":%q,"quantity":1}`, txID)
+				got, err := c.postInTwoSegments(body)
+				if err != nil {
+					return err
+				}
+				if err := wantStatus(got, 200); err != nil {
+					return fmt.Errorf("a body split across two TCP segments must be "+
+						"assembled before it is parsed: %w", err)
+				}
+				if !strings.Contains(got.Body, txID) {
+					return fmt.Errorf("answer does not name the transaction: %s", strings.TrimSpace(got.Body))
+				}
+				_, _ = c.waitForFinalState(txID, 30*time.Second)
+				return nil
+			},
+		},
+		{
+			Name: "post_latency_p95_below_300ms",
+			Note: "the bench number from issue #4: the POST answers from memory, " +
+				"the flash commit and the motor start happen in loop()",
+			Run: func(c *Ctx) error {
+				samples := c.latencySamples()
+				latencies := make([]time.Duration, 0, samples)
+				for i := 0; i < samples; i++ {
+					txID := c.NextTxID("lt")
+					start := time.Now()
+					got, err := c.postJSON(fmt.Sprintf(`{"tx_id":%q,"quantity":1}`, txID), true)
+					latencies = append(latencies, time.Since(start))
+					if err != nil {
+						return fmt.Errorf("POST %d failed: %w", i+1, err)
+					}
+					if err := wantStatus(got, 200); err != nil {
+						return fmt.Errorf("POST %d: %w", i+1, err)
+					}
+					// One transaction at a time: a 409 busy would time the wrong thing.
+					if _, err := c.waitForFinalState(txID, 30*time.Second); err != nil {
+						return err
+					}
+				}
+				sort.Slice(latencies, func(i, j int) bool { return latencies[i] < latencies[j] })
+				p95 := latencies[(len(latencies)*95-1)/100]
+				if p95 > 300*time.Millisecond {
+					return fmt.Errorf("p95 POST latency is %s over %d requests, budget is 300ms "+
+						"(median %s, max %s)", p95.Round(time.Millisecond), samples,
+						latencies[len(latencies)/2].Round(time.Millisecond),
+						latencies[len(latencies)-1].Round(time.Millisecond))
+				}
+				return nil
 			},
 		},
 

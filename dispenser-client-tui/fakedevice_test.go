@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -27,6 +28,12 @@ type fakeDevice struct {
 	omitCountReliable bool // leave count_reliable out of the response (#3)
 	forgetCrashedTx   bool // lose the crashed transaction on reboot, as before #3
 	claimCountExact   bool // claim count_reliable=true even after a power loss
+
+	// Issue #4: what the async callback costs the caller.
+	emptyBodyDelay time.Duration // make an empty body wait instead of answering 400
+	truncateBody   int           // parse only the first N bytes, as a body callback
+	//                              that ignores index/total parses one chunk
+	postDelay time.Duration // do the work (flash erase, 500 bytes of serial) inline
 
 	active  *fakeTx
 	history map[string]*fakeTx
@@ -99,8 +106,23 @@ func (f *fakeDevice) dispense(w http.ResponseWriter, r *http.Request) {
 		f.writeJSON(w, 415, map[string]string{"error": "content-type must be application/json"})
 		return
 	}
+	raw, err := io.ReadAll(r.Body)
+	if err != nil {
+		f.writeJSON(w, 400, map[string]string{"error": "invalid json"})
+		return
+	}
+	if len(raw) == 0 {
+		// A device that answers this one late (or not at all) is the bug of
+		// issue #4: the request handler was an empty lambda.
+		time.Sleep(f.emptyBodyDelay)
+		f.writeJSON(w, 400, map[string]string{"error": "empty body"})
+		return
+	}
+	if f.truncateBody > 0 && f.truncateBody < len(raw) {
+		raw = raw[:f.truncateBody]
+	}
 	var req DispenseRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.Unmarshal(raw, &req); err != nil {
 		f.writeJSON(w, 400, map[string]string{"error": "invalid json"})
 		return
 	}
@@ -143,6 +165,10 @@ func (f *fakeDevice) dispense(w http.ResponseWriter, r *http.Request) {
 		f.writeJSON(w, 409, map[string]string{"error": "error"})
 		return
 	}
+
+	// The work the firmware used to do in the TCP callback, before the caller
+	// got its answer: a flash sector erase plus ~500 bytes at 9600 baud.
+	time.Sleep(f.postDelay)
 
 	tx := &fakeTx{ID: req.TxID, State: "dispensing", Quantity: req.Quantity, Reliable: true}
 	f.active = tx

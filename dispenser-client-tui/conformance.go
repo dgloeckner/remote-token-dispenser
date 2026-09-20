@@ -18,7 +18,9 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"sort"
 	"strings"
@@ -57,9 +59,23 @@ type Ctx struct {
 	// Interactive is the --interactive flag: cases that need a physical act
 	// (press RST, cut power) only run when it is set.
 	Interactive bool
-	in          *bufio.Reader
-	out         io.Writer
-	txCounter   int
+	// LatencySamples overrides how many POSTs the latency case times.
+	// Zero means the default; the suite's own tests lower it so a deliberately
+	// slow fake device does not cost ten seconds of unit-test time.
+	LatencySamples int
+	in             *bufio.Reader
+	out            io.Writer
+	txCounter      int
+}
+
+// latencySamples is the sample count of post_latency_p95_below_300ms.
+// Twenty, not the fifty of issue #4: on a real hopper every sample is a token
+// that has to drop, and twenty already puts the p95 on the 19th value.
+func (c *Ctx) latencySamples() int {
+	if c.LatencySamples > 0 {
+		return c.LatencySamples
+	}
+	return 20
 }
 
 // NextTxID returns a fresh tx_id (<= 16 characters, per the protocol).
@@ -308,6 +324,58 @@ func (c *Ctx) postJSON(body string, withKey bool) (rawResponse, error) {
 		h["X-API-Key"] = c.Client.APIKey
 	}
 	return c.raw("POST", "/dispense", body, h)
+}
+
+// postInTwoSegments sends POST /dispense with the JSON body split across two
+// TCP writes, with a pause in between, so the two halves land in two segments.
+//
+// This cannot go through net/http: the client buffers the body and the server
+// hands the handler a stream, which is exactly the framing detail under test.
+// A device whose body callback parses the chunk it was given (ignoring index
+// and total, as the firmware did before #4) answers 400 here.
+func (c *Ctx) postInTwoSegments(body string) (rawResponse, error) {
+	u, err := url.Parse(c.Client.BaseURL)
+	if err != nil {
+		return rawResponse{}, err
+	}
+	host := u.Host
+	if u.Port() == "" {
+		host = net.JoinHostPort(u.Hostname(), "80")
+	}
+	conn, err := net.DialTimeout("tcp", host, 5*time.Second)
+	if err != nil {
+		return rawResponse{}, fmt.Errorf("dial %s: %w", host, err)
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(15 * time.Second))
+
+	head := fmt.Sprintf("POST /dispense HTTP/1.1\r\n"+
+		"Host: %s\r\n"+
+		"X-API-Key: %s\r\n"+
+		"Content-Type: application/json\r\n"+
+		"Content-Length: %d\r\n"+
+		"Connection: close\r\n\r\n", u.Host, c.Client.APIKey, len(body))
+
+	cut := len(body) / 2
+	if _, err := io.WriteString(conn, head+body[:cut]); err != nil {
+		return rawResponse{}, fmt.Errorf("writing the first segment: %w", err)
+	}
+	// Long enough that the two halves cannot be coalesced into one segment.
+	time.Sleep(120 * time.Millisecond)
+	if _, err := io.WriteString(conn, body[cut:]); err != nil {
+		return rawResponse{}, fmt.Errorf("writing the second segment: %w", err)
+	}
+
+	resp, err := http.ReadResponse(bufio.NewReader(conn), &http.Request{Method: "POST"})
+	if err != nil {
+		return rawResponse{}, fmt.Errorf("no answer to a split body: %w", err)
+	}
+	defer resp.Body.Close()
+	blob, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return rawResponse{}, err
+	}
+	return rawResponse{Status: resp.StatusCode, Body: string(blob)}, nil
 }
 
 func wantStatus(got rawResponse, want int) error {

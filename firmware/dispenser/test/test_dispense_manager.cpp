@@ -378,6 +378,114 @@ void test_same_tx_id_different_quantity_is_rejected(void) {
 }
 
 // =============================================================================
+// The request slot (issue #4)
+//
+// ESPAsyncWebServer runs the POST handler from the TCP/SDK context, not from
+// loop().  Doing the flash commit and the motor start there blocks the WiFi
+// stack for the duration of a sector erase plus ~500 bytes of serial output —
+// the most plausible source of the multi-second POSTs the terminal retries.
+//
+// So requestDispense() only DECIDES (in memory, no I/O) and parks the accepted
+// request in a slot; the next loop() pass commits it and starts the motor.
+// Both halves are pinned here: the callback must touch nothing, and the slot
+// must be consumed exactly once.
+// =============================================================================
+
+void test_accepted_request_touches_neither_flash_nor_motor(void) {
+    manager->begin();
+    storage->resetCallCounts();
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        DISPENSE_STARTED, manager->requestDispense("tx_slot", 3),
+        "A new transaction on an idle device is accepted");
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        0, storage->getSaveCalls(),
+        "No flash commit may happen in the async callback");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        0, hopper->getStartMotorCalls(),
+        "No motor start may happen in the async callback");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        0, counts->getWriteCalls(),
+        "… and no RTC write either");
+
+    // The POST still answers from in-memory state, immediately.
+    Transaction answered = manager->getTransaction("tx_slot");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        STATE_DISPENSING, answered.state,
+        "The POST answers 'dispensing' straight away, from RAM");
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(0, answered.dispensed, "… with dispensed 0");
+}
+
+void test_pending_request_is_started_by_loop_exactly_once(void) {
+    manager->begin();
+    storage->resetCallCounts();
+
+    manager->requestDispense("tx_slot2", 4);
+    manager->loop();
+
+    TEST_ASSERT_TRUE_MESSAGE(hopper->isMotorRunning(),
+        "loop() picks the slot up and starts the motor");
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(
+        4, hopper->getMotorStopAt(),
+        "… with the ISR stop armed at the requested quantity");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        1, storage->getSaveCalls(),
+        "… and exactly one commit, on the loop side");
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(
+        0, counts->storedCount(),
+        "… and the live count seeded to zero");
+
+    manager->loop();
+    manager->loop();
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        1, hopper->getStartMotorCalls(),
+        "The slot is consumed once: further passes must not restart the motor");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        1, storage->getSaveCalls(),
+        "… nor commit a second time");
+}
+
+void test_second_request_before_loop_is_busy(void) {
+    // The window the slot opens: two POSTs can land in the same async batch,
+    // before loop() has run at all.  The second one must still be a 409.
+    manager->begin();
+    manager->requestDispense("tx_first", 2);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        DISPENSE_BUSY, manager->requestDispense("tx_second", 1),
+        "A second transaction while one is pending must be rejected");
+
+    manager->loop();
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        1, hopper->getStartMotorCalls(),
+        "Only the accepted transaction may reach the motor");
+    TEST_ASSERT_EQUAL_STRING_MESSAGE(
+        "tx_first", manager->getActiveTransaction().tx_id,
+        "… and it is the first one");
+}
+
+void test_retry_before_loop_does_not_queue_a_second_start(void) {
+    // The terminal's 3 s timeout can fire before the device has run loop()
+    // once.  That retry is the same transaction, not a second one.
+    manager->begin();
+    manager->requestDispense("tx_retry", 2);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        DISPENSE_IDEMPOTENT, manager->requestDispense("tx_retry", 2),
+        "A retry of the pending transaction is idempotent");
+
+    manager->loop();
+    manager->loop();
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        1, hopper->getStartMotorCalls(),
+        "A retry must not put a second start into the slot");
+}
+
+// =============================================================================
 // Immediate motor stop (double-dispense regression, commit a9f15af)
 // =============================================================================
 
@@ -674,6 +782,11 @@ int main(int argc, char **argv) {
     RUN_TEST(test_jam_stops_motor_and_records_partial);
     RUN_TEST(test_completed_dispense_clears_active_hopper_error);
     RUN_TEST(test_unknown_tx_is_reported_as_empty);
+
+    RUN_TEST(test_accepted_request_touches_neither_flash_nor_motor);
+    RUN_TEST(test_pending_request_is_started_by_loop_exactly_once);
+    RUN_TEST(test_second_request_before_loop_is_busy);
+    RUN_TEST(test_retry_before_loop_does_not_queue_a_second_start);
 
     RUN_TEST(test_motor_stops_immediately_on_isr_pulse_without_loop);
     RUN_TEST(test_loop_completes_transaction_after_isr_stop);

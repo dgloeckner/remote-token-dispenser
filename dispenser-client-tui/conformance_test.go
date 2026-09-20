@@ -250,3 +250,49 @@ func TestSlowQuantityPicksAScenarioPerTarget(t *testing.T) {
 		t.Errorf("device slow quantity = %d, outside the protocol's 1-20", q)
 	}
 }
+
+// --- issue #4: the request itself -------------------------------------------
+
+func TestSuiteCatchesUnansweredEmptyBody(t *testing.T) {
+	dev := newFakeDevice("k")
+	dev.emptyBodyDelay = 2 * time.Second // the empty lambda, as the firmware had it
+	srv := dev.server()
+	defer srv.Close()
+
+	report := RunCases(newCtx(srv.URL, "k", TargetMock), ConformanceCases(), "post_without_body")
+
+	got := findCase(t, report, "post_without_body_is_400")
+	if got.Status != "fail" {
+		t.Errorf("post_without_body_is_400 = %s, want fail against a device that makes the caller wait", got.Status)
+	}
+}
+
+func TestSuiteCatchesSplitBodyRejection(t *testing.T) {
+	dev := newFakeDevice("k")
+	dev.truncateBody = 12 // parses the chunk it was handed, ignoring index/total
+	srv := dev.server()
+	defer srv.Close()
+
+	report := RunCases(newCtx(srv.URL, "k", TargetMock), ConformanceCases(), "two_segments")
+
+	got := findCase(t, report, "post_body_in_two_segments_is_accepted")
+	if got.Status != "fail" {
+		t.Errorf("post_body_in_two_segments_is_accepted = %s, want fail against a device that parses one chunk", got.Status)
+	}
+}
+
+func TestSuiteCatchesSlowPost(t *testing.T) {
+	dev := newFakeDevice("k")
+	dev.postDelay = 400 * time.Millisecond // flash erase and 500 bytes at 9600 baud
+	srv := dev.server()
+	defer srv.Close()
+
+	ctx := newCtx(srv.URL, "k", TargetMock)
+	ctx.LatencySamples = 5
+	report := RunCases(ctx, ConformanceCases(), "post_latency")
+
+	got := findCase(t, report, "post_latency_p95_below_300ms")
+	if got.Status != "fail" {
+		t.Errorf("post_latency_p95_below_300ms = %s, want fail against a device that works in the callback", got.Status)
+	}
+}
