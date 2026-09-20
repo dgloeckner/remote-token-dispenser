@@ -6,6 +6,7 @@
 
 #include "flash_storage.h"
 #include <EEPROM.h>
+#include <string.h>
 
 #include "crash_state.h"
 

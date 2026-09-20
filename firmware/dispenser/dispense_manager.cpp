@@ -22,44 +22,70 @@ DispenseManager::DispenseManager(IStorage& storage, IHopper& hopper, ICountMemor
 }
 
 void DispenseManager::begin() {
-  // Load persisted record if exists
   PersistedRecord record;
-  if (flashStorage.load(record)) {
-    const PersistedTransaction& persisted = record.active;
+  if (!flashStorage.load(record)) {
+    // No record, a half-written one, or one from another layout.  Treated as
+    // empty — never as data (issue #3).
+    Serial.println("[DispenseManager] No usable persisted record");
+    return;
+  }
 
-    // Copy to active transaction
-    strncpy(active_tx.tx_id, persisted.tx_id, 16);
-    active_tx.tx_id[16] = '\0';
-    active_tx.quantity = persisted.quantity;
-    active_tx.dispensed = persisted.dispensed;
-    active_tx.state = (TransactionState)persisted.state;
-    active_tx.count_reliable = persisted.count_reliable != 0;
+  // The ring first: it is the answer to "did this transaction ever run?" for
+  // every finished transaction, and without it a reboot turns every one of
+  // them into a 404 that the terminal cannot tell from "never arrived".
+  memcpy(history, record.ring, sizeof(history));
+  history_index = record.ring_index % RING_BUFFER_SIZE;
 
-    // Handle recovery scenarios
-    if (active_tx.state == STATE_DISPENSING) {
-      // Crashed during dispense - mark as error
-      active_tx.state = STATE_ERROR;
-      persistState();
+  const PersistedTransaction& persisted = record.active;
+  strncpy(active_tx.tx_id, persisted.tx_id, 16);
+  active_tx.tx_id[16] = '\0';
+  active_tx.quantity = persisted.quantity;
+  active_tx.dispensed = persisted.dispensed;
+  active_tx.state = (TransactionState)persisted.state;
+  active_tx.count_reliable = persisted.count_reliable != 0;
 
-      // Count the crashed transaction
-      total_dispenses++;                   // Transaction was started before crash
-      crash_count++;                       // Track crash specifically
-      requested_tokens += active_tx.quantity;   // Add requested tokens
-      dispensed_tokens += active_tx.dispensed;  // Add partial dispense
-
-      Serial.print("Recovered from crash during dispense. Partial count: ");
-      Serial.println(active_tx.dispensed);
-    } else if (active_tx.state == STATE_ERROR) {
-      // Power cycled to clear jam - manual reset
-      Serial.println("Clearing previous error state (manual reset via power cycle)");
-      flashStorage.clear();
-      memset(&active_tx, 0, sizeof(active_tx));
-      active_tx.state = STATE_IDLE;
+  if (active_tx.state == STATE_DISPENSING) {
+    // The device reset while tokens were dropping.  How many are in the tray
+    // is only knowable from RTC memory: flash holds the zero written at start.
+    uint8_t live_count = 0;
+    if (countMemory.readCount(active_tx.tx_id, live_count)) {
+      active_tx.dispensed = live_count;
       active_tx.count_reliable = true;
+      Serial.print("Recovered live count from RTC memory: ");
+      Serial.println(live_count);
+    } else {
+      // A real power loss took the RTC block with it.  What is left is a lower
+      // bound, and saying so is the whole point: the terminal bills the bound
+      // and flags the rest for a human, instead of billing nothing.
+      active_tx.count_reliable = false;
+      Serial.println("RTC count lost (power loss) — count is a lower bound");
     }
 
-    // Add to history with full transaction data
+    active_tx.state = STATE_ERROR;
+
+    // Count the crashed transaction
+    total_dispenses++;                        // Transaction was started before the reset
+    crash_count++;                            // Track crashes specifically
+    requested_tokens += active_tx.quantity;
+    dispensed_tokens += active_tx.dispensed;
+
     addToHistory(active_tx);
+    countMemory.invalidate();
+    persistState();
+
+    Serial.print("Recovered from crash during dispense. Partial count: ");
+    Serial.println(active_tx.dispensed);
+  } else if (active_tx.state == STATE_ERROR) {
+    // Power cycled to clear a jam — the documented manual reset.  Only the
+    // ACTIVE slot is cleared: the ring stays, so the transaction that jammed
+    // can still be asked about.  (Nothing is added to the ring here; the
+    // transition that ended it already did, and a second boot used to plant an
+    // entry made of zeroes.)
+    Serial.println("Clearing previous error state (manual reset via power cycle)");
+    memset(&active_tx, 0, sizeof(active_tx));
+    active_tx.state = STATE_IDLE;
+    active_tx.count_reliable = true;
+    persistState();
   }
 }
 
@@ -117,6 +143,10 @@ DispenseOutcome DispenseManager::requestDispense(const char* tx_id, uint8_t quan
   Serial.println("  Persisting transaction to flash...");
   persistState();
 
+  // Seed the live count, so a reset before the first token recovers a
+  // reliable zero rather than "no block, count unknown".
+  countMemory.writeCount(active_tx.tx_id, 0);
+
   // Arm ISR-level stop BEFORE starting motor so the very first pulse that
   // reaches the target immediately cuts motor power, eliminating the ~10ms
   // main-loop latency that was causing occasional double-dispenses.
@@ -147,8 +177,14 @@ void DispenseManager::loop() {
   uint8_t previous_count = active_tx.dispensed;
   active_tx.dispensed = hopperControl.getPulseCount();
 
-  // Log pulse count changes
+  // Every token goes into RTC memory: it survives a watchdog reset, an
+  // exception and a brownout, and costs no flash wear.  A commit per token was
+  // considered and rejected (owner decision, 2026-09-20) — one extra sector
+  // erase per token, to cover only the power-loss case that count_reliable
+  // already reports honestly.
   if (active_tx.dispensed != previous_count) {
+    countMemory.writeCount(active_tx.tx_id, active_tx.dispensed);
+
     Serial.print("[DispenseManager] Pulse count: ");
     Serial.print(active_tx.dispensed);
     Serial.print(" / ");
@@ -164,16 +200,19 @@ void DispenseManager::loop() {
     // Clear active error on successful completion (self-healing)
     hopperControl.clearActiveError();
 
-    persistState();
-    addToHistory(active_tx);
-
     // Track dispensed tokens
     dispensed_tokens += active_tx.dispensed;
 
-    flashStorage.clear();
+    addToHistory(active_tx);
+    countMemory.invalidate();
+
+    // One commit, not two and an erase: the finished transaction goes into the
+    // ring and the active slot goes empty in the same write.  Clearing the
+    // record here is what made a completed transaction a 404 after a reboot.
     memset(&active_tx, 0, sizeof(active_tx));
     active_tx.state = STATE_IDLE;
     active_tx.count_reliable = true;
+    persistState();
     successful_count++;
     Serial.println("[DispenseManager] Dispense complete - active error cleared");
     return;
@@ -188,8 +227,9 @@ void DispenseManager::loop() {
     Serial.println(active_tx.quantity);
     hopperControl.stopMotor();
     active_tx.state = STATE_ERROR;
-    persistState();
     addToHistory(active_tx);
+    countMemory.invalidate();
+    persistState();
     jam_count++;
 
     // Track dispensed tokens even on jam (partial dispense)
