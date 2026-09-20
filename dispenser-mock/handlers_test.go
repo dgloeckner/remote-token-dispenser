@@ -293,3 +293,39 @@ func TestScenarioMapping(t *testing.T) {
 		}
 	}
 }
+
+// --- issue #4: the request body ---------------------------------------------
+
+func TestPostWithoutBodyIs400(t *testing.T) {
+	srv, _ := newTestServer(t)
+	status, body := do(t, srv, "POST", "/dispense", "",
+		map[string]string{"Content-Type": "application/json", "X-API-Key": "test-key"})
+	if status != http.StatusBadRequest {
+		t.Fatalf("empty body: status %d, want 400 (body: %s)", status, body)
+	}
+}
+
+func TestPostWithOversizedBodyIs413(t *testing.T) {
+	srv, _ := newTestServer(t)
+	padding := strings.Repeat("x", MaxRequestBody)
+	body := `{"tx_id":"big1","quantity":1,"pad":"` + padding + `"}`
+	status, got := do(t, srv, "POST", "/dispense", body,
+		map[string]string{"Content-Type": "application/json", "X-API-Key": "test-key"})
+	if status != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversized body: status %d, want 413 (body: %s)", status, got)
+	}
+}
+
+func TestPostAtTheBodyCapIsStillAccepted(t *testing.T) {
+	srv, _ := newTestServer(t)
+	body := `{"tx_id":"cap1","quantity":1,"pad":"`
+	body += strings.Repeat("x", MaxRequestBody-len(body)-2) + `"}`
+	if len(body) != MaxRequestBody {
+		t.Fatalf("test built a %d byte body, wanted exactly %d", len(body), MaxRequestBody)
+	}
+	status, got := do(t, srv, "POST", "/dispense", body,
+		map[string]string{"Content-Type": "application/json", "X-API-Key": "test-key"})
+	if status != http.StatusOK {
+		t.Fatalf("body of exactly the cap: status %d, want 200 (body: %s)", status, got)
+	}
+}

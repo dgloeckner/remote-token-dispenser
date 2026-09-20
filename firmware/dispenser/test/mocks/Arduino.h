@@ -26,6 +26,12 @@ public:
     void println(unsigned int val) { (void)val; }
     void println(unsigned long val) { (void)val; }
     void println() {}
+    // Swallows the LOG_* macros of ../../log.h.  A test run stays quiet, and
+    // the format strings are still compiled, so a mismatched one is a warning
+    // here rather than a surprise on the device.
+    __attribute__((format(printf, 2, 3)))
+    int printf(const char* fmt, ...) { (void)fmt; return 0; }
+    void flush() {}
 };
 
 extern MockSerial Serial;

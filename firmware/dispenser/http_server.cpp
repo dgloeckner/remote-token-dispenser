@@ -4,8 +4,10 @@
 // firmware/dispenser/http_server.cpp
 
 #include "http_server.h"
+#include "log.h"
 #include <ArduinoJson.h>
 #include <ESP8266WiFi.h>
+#include <stdlib.h>
 
 HttpServer::HttpServer(DispenseManager& manager, HopperControl& hopper)
   : dispenseManager(manager), hopperControl(hopper), server(80) {
@@ -18,14 +20,20 @@ void HttpServer::begin() {
   });
 
   // POST /dispense - REQUIRES AUTH
+  //
+  // The body callback only collects bytes; the request handler answers.  That
+  // order is the fix for two bugs at once (issue #4): a POST with no body never
+  // reaches a body callback, so an empty lambda there left the caller waiting
+  // for its own timeout — and a body split across TCP segments reached the old
+  // handler as a fragment, which parsed as "400 invalid json" at random.
   server.on("/dispense", HTTP_POST,
-    [](AsyncWebServerRequest *request) {
-      // This is called after body is parsed
+    [this](AsyncWebServerRequest *request) {
+      this->handleDispensePost(request);
     },
     NULL,  // Upload handler
     [this](AsyncWebServerRequest *request, uint8_t *data, size_t len,
            size_t index, size_t total) {
-      this->handleDispensePost(request, data, len, index, total);
+      this->collectDispenseBody(request, data, len, index, total);
     }
   );
 
@@ -35,7 +43,7 @@ void HttpServer::begin() {
   });
 
   server.begin();
-  Serial.println("HTTP server started on port 80");
+  LOG_INFO("HTTP server started on port 80");
 }
 
 bool HttpServer::checkAuth(AsyncWebServerRequest *request) {
@@ -141,56 +149,76 @@ void HttpServer::handleHealth(AsyncWebServerRequest *request) {
   request->send(200, "application/json", response);
 }
 
-void HttpServer::handleDispensePost(AsyncWebServerRequest *request,
-                                    uint8_t *data, size_t len,
-                                    size_t index, size_t total) {
-  Serial.println("[HttpServer] POST /dispense received");
-  Serial.print("  Body length: ");
-  Serial.println(len);
+void HttpServer::collectDispenseBody(AsyncWebServerRequest *request,
+                                     uint8_t *data, size_t len,
+                                     size_t index, size_t total) {
+  // The body buffer hangs off the request, because several requests can be in
+  // flight at once and a single member would mix their bytes.  _tempObject is
+  // the slot the async server provides for exactly this; it frees it with the
+  // request, so it must come from malloc and not from new.
+  if (request->_tempObject == NULL) {
+    request->_tempObject = malloc(sizeof(RequestBody));
+    if (request->_tempObject == NULL) {
+      return;  // out of heap: the handler answers 413 on the empty buffer
+    }
+    ((RequestBody*)request->_tempObject)->reset();
+  }
+  ((RequestBody*)request->_tempObject)->append(data, len, index, total);
+}
 
-  // Check authentication
+void HttpServer::handleDispensePost(AsyncWebServerRequest *request) {
+  // Everything below runs in the async TCP callback, so it must stay cheap:
+  // parse, decide, answer.  The flash commit and the motor start happen in
+  // loop(), where DispenseManager picks the request slot up (issue #4).
   if (!checkAuth(request)) {
-    Serial.println("  ERROR: Authentication failed");
     request->send(401, "application/json", "{\"error\":\"unauthorized\"}");
     return;
   }
-  Serial.println("  Authentication OK");
 
-  // Validate Content-Type
   if (!request->hasHeader("Content-Type") ||
       request->header("Content-Type").indexOf("application/json") == -1) {
-    request->send(415, "application/json", "{\"error\":\"content-type must be application/json\"}");
+    request->send(415, "application/json",
+                  "{\"error\":\"content-type must be application/json\"}");
     return;
   }
 
-  // Parse JSON body
-  JsonDocument doc;
-  DeserializationError error = deserializeJson(doc, data, len);
+  RequestBody* body = (RequestBody*)request->_tempObject;
 
+  // No body callback ever ran: the request carried no body at all.  This is
+  // the case that used to hang.
+  if (body == NULL || body->isEmpty()) {
+    request->send(400, "application/json", "{\"error\":\"empty body\"}");
+    return;
+  }
+
+  if (body->status() == BODY_TOO_LARGE) {
+    request->send(413, "application/json", "{\"error\":\"body too large\"}");
+    return;
+  }
+
+  if (body->status() != BODY_COMPLETE) {
+    // A stream with a gap, or one that stopped short of its announced length.
+    request->send(400, "application/json", "{\"error\":\"incomplete body\"}");
+    return;
+  }
+
+  JsonDocument doc;
+  DeserializationError error = deserializeJson(doc, body->data(), body->size());
   if (error) {
-    Serial.print("  ERROR: JSON parse failed: ");
-    Serial.println(error.c_str());
+    LOG_DEBUG("POST /dispense: JSON parse failed: %s", error.c_str());
     request->send(400, "application/json", "{\"error\":\"invalid json\"}");
     return;
   }
-  Serial.println("  JSON parsed successfully");
 
-  // Add type validation
   if (!doc.containsKey("tx_id") || !doc["tx_id"].is<const char*>() ||
       !doc.containsKey("quantity") || !doc["quantity"].is<uint8_t>()) {
-    Serial.println("  ERROR: Invalid request format");
     request->send(400, "application/json", "{\"error\":\"invalid request format\"}");
     return;
   }
 
   const char* tx_id = doc["tx_id"];
   uint8_t quantity = doc["quantity"];
-  Serial.print("  Parsed tx_id: ");
-  Serial.println(tx_id);
-  Serial.print("  Parsed quantity: ");
-  Serial.println(quantity);
 
-  // Add tx_id length validation
   size_t tx_id_len = strlen(tx_id);
   if (tx_id_len == 0 || tx_id_len > 16 || quantity == 0 || quantity > MAX_TOKENS) {
     request->send(400, "application/json",
@@ -198,15 +226,12 @@ void HttpServer::handleDispensePost(AsyncWebServerRequest *request,
     return;
   }
 
-  // Try to start dispense
-  Serial.println("  Calling dispenseManager.requestDispense()...");
   DispenseOutcome outcome = dispenseManager.requestDispense(tx_id, quantity);
 
   if (outcome == DISPENSE_TX_ID_REUSED) {
     // The caller contradicted itself: a tx_id it already used, with another
     // quantity.  Answering with the old quantity would look like a successful
     // retry of a request that was never made.
-    Serial.println("  tx_id reused with another quantity, returning 409");
     request->send(409, "application/json", "{\"error\":\"tx_id reused\"}");
     return;
   }
@@ -214,7 +239,6 @@ void HttpServer::handleDispensePost(AsyncWebServerRequest *request,
   if (outcome == DISPENSE_BUSY) {
     // Busy always means ANOTHER transaction now — a retry of the running one
     // is answered above with its current state (issue #2).
-    Serial.println("  Another transaction is active, returning 409");
     Transaction active = dispenseManager.getActiveTransaction();
 
     JsonDocument response;

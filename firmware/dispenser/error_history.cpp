@@ -1,5 +1,6 @@
 // firmware/dispenser/error_history.cpp
 
+#include "log.h"
 #include "error_history.h"
 
 ErrorHistory::ErrorHistory() : writeIndex(0) {
@@ -13,10 +14,7 @@ void ErrorHistory::addError(ErrorCode code) {
   buffer[writeIndex] = {code, millis(), false};
   writeIndex = (writeIndex + 1) % BUFFER_SIZE;
 
-  Serial.print("[ErrorHistory] Added error: ");
-  Serial.print(errorCodeToString(code));
-  Serial.print(" at timestamp ");
-  Serial.println(millis());
+  LOG_ERROR("hopper error %s recorded at %lu ms", errorCodeToString(code), millis());
 }
 
 ErrorRecord* ErrorHistory::getActive() {
@@ -34,8 +32,7 @@ void ErrorHistory::clearActive() {
   ErrorRecord* active = getActive();
   if (active) {
     active->cleared = true;
-    Serial.print("[ErrorHistory] Cleared active error: ");
-    Serial.println(errorCodeToString(active->code));
+    LOG_INFO("hopper error %s cleared", errorCodeToString(active->code));
   }
 }
 

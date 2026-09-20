@@ -34,6 +34,7 @@ type fakeDevice struct {
 	truncateBody   int           // parse only the first N bytes, as a body callback
 	//                              that ignores index/total parses one chunk
 	postDelay time.Duration // do the work (flash erase, 500 bytes of serial) inline
+	noBodyCap bool          // accept a body of any size instead of answering 413
 
 	active  *fakeTx
 	history map[string]*fakeTx
@@ -47,6 +48,9 @@ type fakeTx struct {
 	Dispensed int
 	Reliable  bool
 }
+
+// fakeMaxBody mirrors REQUEST_BODY_CAPACITY in the firmware.
+const fakeMaxBody = 256
 
 func newFakeDevice(apiKey string) *fakeDevice {
 	return &fakeDevice{apiKey: apiKey, protocol: ProtocolVersion, history: map[string]*fakeTx{}}
@@ -116,6 +120,10 @@ func (f *fakeDevice) dispense(w http.ResponseWriter, r *http.Request) {
 		// issue #4: the request handler was an empty lambda.
 		time.Sleep(f.emptyBodyDelay)
 		f.writeJSON(w, 400, map[string]string{"error": "empty body"})
+		return
+	}
+	if len(raw) > fakeMaxBody && !f.noBodyCap {
+		f.writeJSON(w, 413, map[string]string{"error": "body too large"})
 		return
 	}
 	if f.truncateBody > 0 && f.truncateBody < len(raw) {

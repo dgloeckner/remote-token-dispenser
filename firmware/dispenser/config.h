@@ -63,7 +63,14 @@
 
 // Hardware Specs (Azkoyen Hopper U-II PULSES mode)
 #define PULSE_DURATION_MS  30     // Expected pulse duration
-#define FIRMWARE_VERSION   "1.1.0-DEBUG-error-decoding"
+
+// Set from the build (-DFIRMWARE_VERSION='"…"' in platformio.ini) so a release
+// cannot go out carrying a debug string the way 1.1.0-DEBUG-error-decoding did.
+// The fallback keeps a plain checkout of the sketch compiling in the Arduino
+// IDE, which passes no flags.
+#ifndef FIRMWARE_VERSION
+  #define FIRMWARE_VERSION "1.2.0"
+#endif
 
 // Include local configuration (not tracked in git)
 // Copy config.local.h.example to config.local.h and customize

@@ -296,3 +296,17 @@ func TestSuiteCatchesSlowPost(t *testing.T) {
 		t.Errorf("post_latency_p95_below_300ms = %s, want fail against a device that works in the callback", got.Status)
 	}
 }
+
+func TestSuiteCatchesMissingBodyCap(t *testing.T) {
+	dev := newFakeDevice("k")
+	dev.noBodyCap = true // a device that takes a body of any size
+	srv := dev.server()
+	defer srv.Close()
+
+	report := RunCases(newCtx(srv.URL, "k", TargetMock), ConformanceCases(), "oversized_body")
+
+	got := findCase(t, report, "post_with_oversized_body_is_413")
+	if got.Status != "fail" {
+		t.Errorf("post_with_oversized_body_is_413 = %s, want fail against a device without the cap", got.Status)
+	}
+}

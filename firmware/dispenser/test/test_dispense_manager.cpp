@@ -13,6 +13,7 @@
 
 #include "crash_state.h"
 #include "dispense_manager.h"
+#include "request_body.h"
 #include "mocks/count_memory_mock.h"
 #include "mocks/flash_storage_mock.h"
 #include "mocks/hopper_control_mock.h"
@@ -496,6 +497,87 @@ void test_retry_before_loop_does_not_queue_a_second_start(void) {
 }
 
 // =============================================================================
+// The request body (issue #4)
+//
+// ESPAsyncWebServer hands the body callback one chunk at a time.  The POST
+// handler used to parse whatever chunk it got, so a body split across two TCP
+// segments was answered "400 invalid json" — at random, since the split
+// depends on the network and not on the request.
+//
+// These tests live in the same binary because PlatformIO builds one test
+// binary per directory; there can be only one main().
+// =============================================================================
+
+static BodyStatus feed(RequestBody& body, const char* chunk, size_t index, size_t total) {
+    return body.append((const uint8_t*)chunk, strlen(chunk), index, total);
+}
+
+void test_body_in_one_chunk_is_complete(void) {
+    RequestBody body;
+    body.reset();
+    const char* json = "{\"tx_id\":\"a1\",\"quantity\":2}";
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        BODY_COMPLETE, feed(body, json, 0, strlen(json)),
+        "A body that arrives in one piece is complete at once");
+    TEST_ASSERT_EQUAL_STRING_MESSAGE(json, body.data(), "… and is the body that was sent");
+}
+
+void test_body_in_two_chunks_is_assembled_before_parsing(void) {
+    RequestBody body;
+    body.reset();
+    const char* first = "{\"tx_id\":\"a1\",";
+    const char* second = "\"quantity\":2}";
+    size_t total = strlen(first) + strlen(second);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        BODY_INCOMPLETE, feed(body, first, 0, total),
+        "Half a body is not a body: nothing may be parsed yet");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        BODY_COMPLETE, feed(body, second, strlen(first), total),
+        "The last chunk completes it");
+    TEST_ASSERT_EQUAL_STRING_MESSAGE(
+        "{\"tx_id\":\"a1\",\"quantity\":2}", body.data(),
+        "… and the two segments are one body again");
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(total, (uint32_t)body.size(), "… of the announced length");
+}
+
+void test_empty_body_is_complete_and_empty(void) {
+    RequestBody body;
+    body.reset();
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        BODY_COMPLETE, body.append(NULL, 0, 0, 0),
+        "A zero-length body is complete, not pending");
+    TEST_ASSERT_TRUE_MESSAGE(body.isEmpty(), "… and empty, which the handler answers with 400");
+}
+
+void test_body_over_the_cap_is_refused_not_truncated(void) {
+    RequestBody body;
+    body.reset();
+    char big[REQUEST_BODY_CAPACITY + 8];
+    memset(big, 'x', sizeof(big));
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        BODY_TOO_LARGE, body.append((const uint8_t*)big, 8, 0, sizeof(big)),
+        "An oversized body is refused from its first chunk — 413, not a parse error");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        BODY_TOO_LARGE, body.append((const uint8_t*)big, 8, 8, sizeof(big)),
+        "… and the verdict stands for the rest of the stream");
+}
+
+void test_chunk_with_a_gap_is_malformed(void) {
+    RequestBody body;
+    body.reset();
+    const char* first = "{\"tx_id\":";
+
+    feed(body, first, 0, 32);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        BODY_MALFORMED, feed(body, "\"a1\"}", strlen(first) + 4, 32),
+        "A chunk that does not continue where the last one ended is not guessed at");
+}
+
+// =============================================================================
 // Immediate motor stop (double-dispense regression, commit a9f15af)
 // =============================================================================
 
@@ -797,6 +879,12 @@ int main(int argc, char **argv) {
     RUN_TEST(test_pending_request_is_started_by_loop_exactly_once);
     RUN_TEST(test_second_request_before_loop_is_busy);
     RUN_TEST(test_retry_before_loop_does_not_queue_a_second_start);
+
+    RUN_TEST(test_body_in_one_chunk_is_complete);
+    RUN_TEST(test_body_in_two_chunks_is_assembled_before_parsing);
+    RUN_TEST(test_empty_body_is_complete_and_empty);
+    RUN_TEST(test_body_over_the_cap_is_refused_not_truncated);
+    RUN_TEST(test_chunk_with_a_gap_is_malformed);
 
     RUN_TEST(test_motor_stops_immediately_on_isr_pulse_without_loop);
     RUN_TEST(test_loop_completes_transaction_after_isr_stop);

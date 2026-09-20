@@ -1,6 +1,7 @@
 // firmware/dispenser/dispense_manager.cpp
 
 #include "dispense_manager.h"
+#include "log.h"
 #include <string.h>
 
 DispenseManager::DispenseManager(IStorage& storage, IHopper& hopper, ICountMemory& counts)
@@ -27,7 +28,7 @@ void DispenseManager::begin() {
   if (!flashStorage.load(record)) {
     // No record, a half-written one, or one from another layout.  Treated as
     // empty — never as data (issue #3).
-    Serial.println("[DispenseManager] No usable persisted record");
+    LOG_INFO("boot: no usable persisted record");
     return;
   }
 
@@ -52,14 +53,13 @@ void DispenseManager::begin() {
     if (countMemory.readCount(active_tx.tx_id, live_count)) {
       active_tx.dispensed = live_count;
       active_tx.count_reliable = true;
-      Serial.print("Recovered live count from RTC memory: ");
-      Serial.println(live_count);
+      LOG_INFO("boot: recovered live count %u from RTC memory", (unsigned)live_count);
     } else {
       // A real power loss took the RTC block with it.  What is left is a lower
       // bound, and saying so is the whole point: the terminal bills the bound
       // and flags the rest for a human, instead of billing nothing.
       active_tx.count_reliable = false;
-      Serial.println("RTC count lost (power loss) — count is a lower bound");
+      LOG_INFO("boot: RTC count lost (power loss), count is a lower bound");
     }
 
     active_tx.state = STATE_ERROR;
@@ -74,15 +74,15 @@ void DispenseManager::begin() {
     countMemory.invalidate();
     persistState();
 
-    Serial.print("Recovered from crash during dispense. Partial count: ");
-    Serial.println(active_tx.dispensed);
+    LOG_INFO("boot: %s recovered as ERROR after a reset, dispensed %u",
+             active_tx.tx_id, (unsigned)active_tx.dispensed);
   } else if (active_tx.state == STATE_ERROR) {
     // Power cycled to clear a jam — the documented manual reset.  Only the
     // ACTIVE slot is cleared: the ring stays, so the transaction that jammed
     // can still be asked about.  (Nothing is added to the ring here; the
     // transition that ended it already did, and a second boot used to plant an
     // entry made of zeroes.)
-    Serial.println("Clearing previous error state (manual reset via power cycle)");
+    LOG_INFO("boot: previous error cleared (manual reset via power cycle)");
     memset(&active_tx, 0, sizeof(active_tx));
     active_tx.state = STATE_IDLE;
     active_tx.count_reliable = true;
@@ -91,11 +91,7 @@ void DispenseManager::begin() {
 }
 
 DispenseOutcome DispenseManager::requestDispense(const char* tx_id, uint8_t quantity) {
-  Serial.println("[DispenseManager] requestDispense() called");
-  Serial.print("  tx_id: ");
-  Serial.println(tx_id);
-  Serial.print("  quantity: ");
-  Serial.println(quantity);
+  LOG_DEBUG("requestDispense tx_id=%s quantity=%u", tx_id, (unsigned)quantity);
 
   // Idempotency, first half: the transaction that is running right now.  It is
   // not in the history ring yet — entries land there when a transaction
@@ -103,10 +99,10 @@ DispenseOutcome DispenseManager::requestDispense(const char* tx_id, uint8_t quan
   // answer 409 to the caller's own retry while its tokens are falling.
   if (active_tx.state != STATE_IDLE && strcmp(active_tx.tx_id, tx_id) == 0) {
     if (active_tx.quantity != quantity) {
-      Serial.println("  ERROR: tx_id of the active transaction reused with another quantity");
+      LOG_ERROR("tx_id %s of the active transaction reused with another quantity", tx_id);
       return DISPENSE_TX_ID_REUSED;
     }
-    Serial.println("  Retry of the active transaction (idempotent request)");
+    LOG_DEBUG("retry of the active transaction %s (idempotent)", tx_id);
     return DISPENSE_IDEMPOTENT;
   }
 
@@ -117,16 +113,16 @@ DispenseOutcome DispenseManager::requestDispense(const char* tx_id, uint8_t quan
   Transaction cached_tx;
   if (findInHistory(tx_id, cached_tx)) {
     if (cached_tx.quantity != quantity) {
-      Serial.println("  ERROR: known tx_id reused with another quantity");
+      LOG_ERROR("known tx_id %s reused with another quantity", tx_id);
       return DISPENSE_TX_ID_REUSED;
     }
-    Serial.println("  Transaction found in history (idempotent request)");
+    LOG_DEBUG("transaction %s found in history (idempotent)", tx_id);
     return DISPENSE_IDEMPOTENT;
   }
 
   // Check if busy.  From here on a 409 always means ANOTHER transaction.
   if (active_tx.state == STATE_DISPENSING) {
-    Serial.println("  ERROR: another transaction is dispensing, rejecting request");
+    LOG_INFO("busy: %s is dispensing, %s rejected", active_tx.tx_id, tx_id);
     return DISPENSE_BUSY;
   }
 
@@ -140,7 +136,7 @@ DispenseOutcome DispenseManager::requestDispense(const char* tx_id, uint8_t quan
   // A reset in that window loses the transaction, because nothing was written
   // yet — and that is the harmless direction: no token has dropped, so the
   // terminal's retry starts it for real.
-  Serial.println("  Accepting new dispense transaction");
+  LOG_INFO("accepted %s, quantity %u", tx_id, (unsigned)quantity);
   strncpy(active_tx.tx_id, tx_id, 16);
   active_tx.tx_id[16] = '\0';
   active_tx.quantity = quantity;
@@ -162,7 +158,7 @@ void DispenseManager::startPending() {
   // never started twice.
   pending_start = false;
 
-  Serial.println("[DispenseManager] Starting the accepted transaction");
+  LOG_INFO("starting %s", active_tx.tx_id);
   persistState();
 
   // Seed the live count, so a reset before the first token recovers a
@@ -208,15 +204,13 @@ void DispenseManager::loop() {
   if (active_tx.dispensed != previous_count) {
     countMemory.writeCount(active_tx.tx_id, active_tx.dispensed);
 
-    Serial.print("[DispenseManager] Pulse count: ");
-    Serial.print(active_tx.dispensed);
-    Serial.print(" / ");
-    Serial.println(active_tx.quantity);
+    LOG_DEBUG("pulse %u/%u", (unsigned)active_tx.dispensed, (unsigned)active_tx.quantity);
   }
 
   // Check for completion
   if (active_tx.dispensed >= active_tx.quantity) {
-    Serial.println("[DispenseManager] Dispense COMPLETE!");
+    LOG_INFO("done: %s dispensed %u/%u", active_tx.tx_id,
+             (unsigned)active_tx.dispensed, (unsigned)active_tx.quantity);
     hopperControl.stopMotor();
     active_tx.state = STATE_DONE;
 
@@ -237,17 +231,13 @@ void DispenseManager::loop() {
     active_tx.count_reliable = true;
     persistState();
     successful_count++;
-    Serial.println("[DispenseManager] Dispense complete - active error cleared");
     return;
   }
 
   // Check for jam
   if (hopperControl.checkJam()) {
-    Serial.println("[DispenseManager] JAM DETECTED!");
-    Serial.print("  Dispensed: ");
-    Serial.print(active_tx.dispensed);
-    Serial.print(" / ");
-    Serial.println(active_tx.quantity);
+    LOG_INFO("jam: %s stopped at %u/%u",
+             active_tx.tx_id, (unsigned)active_tx.dispensed, (unsigned)active_tx.quantity);
     hopperControl.stopMotor();
     active_tx.state = STATE_ERROR;
     addToHistory(active_tx);

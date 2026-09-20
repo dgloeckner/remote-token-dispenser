@@ -2,6 +2,7 @@
 
 #include <ESP8266WiFi.h>
 #include "config.h"
+#include "log.h"
 #include "flash_storage.h"
 #include "rtc_count_memory.h"
 #include "hopper_control.h"
@@ -15,16 +16,13 @@ DispenseManager dispenseManager(flashStorage, hopperControl, rtcCountMemory);
 HttpServer httpServer(dispenseManager, hopperControl);
 
 void setup() {
-  Serial.begin(9600);  // Lower baud rate for reliable debug output
+  // LOG_BAUD, not 9600: platformio.ini's monitor_speed has always said 115200,
+  // and at 9600 a line of output is a stall long enough to matter (issue #4).
+  Serial.begin(LOG_BAUD);
   delay(1000);
 
-  Serial.println("\n\n=== Token Dispenser Starting ===");
-  Serial.print("Firmware: ");
-  Serial.println(FIRMWARE_VERSION);
-
-  // Connect to WiFi
-  Serial.print("Connecting to WiFi: ");
-  Serial.println(WIFI_SSID);
+  LOG_INFO("=== Token Dispenser %s starting ===", FIRMWARE_VERSION);
+  LOG_INFO("connecting to WiFi: %s", WIFI_SSID);
 
   WiFi.mode(WIFI_STA);
   WiFi.config(STATIC_IP, GATEWAY, SUBNET);
@@ -33,69 +31,43 @@ void setup() {
   int attempts = 0;
   while (WiFi.status() != WL_CONNECTED && attempts < 30) {
     delay(500);
-    Serial.print(".");
     attempts++;
   }
 
   if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("\nWiFi connected!");
-    Serial.print("IP address: ");
-    Serial.println(WiFi.localIP());
-    Serial.flush();  // Ensure output is sent
-    delay(100);
-    Serial.println(">>> DEBUG: Continuing setup...");
-    Serial.flush();
+    LOG_INFO("WiFi connected, IP %s", WiFi.localIP().toString().c_str());
   } else {
-    Serial.println("\nWiFi connection failed!");
+    LOG_ERROR("WiFi connection failed after %d attempts", attempts);
   }
 
-  Serial.println(">>> DEBUG: Initializing flash storage...");
-  Serial.flush();
-  // Initialize flash storage
   flashStorage.begin();
-  Serial.println(">>> DEBUG: Flash storage initialized");
 
   PersistedRecord persistedRecord;
   if (flashStorage.load(persistedRecord)) {
     const PersistedTransaction& tx = persistedRecord.active;
-    Serial.println("Found persisted record:");
-    Serial.print("  tx_id: ");
-    Serial.println(tx.tx_id);
-    Serial.print("  quantity: ");
-    Serial.println(tx.quantity);
-    Serial.print("  dispensed: ");
-    Serial.println(tx.dispensed);
-    Serial.print("  state: ");
-    Serial.println((int)tx.state);
-    Serial.print("  history ring index: ");
-    Serial.println((int)persistedRecord.ring_index);
+    LOG_DEBUG("persisted record: tx_id=%s quantity=%u dispensed=%u state=%d ring=%u",
+              tx.tx_id, (unsigned)tx.quantity, (unsigned)tx.dispensed, (int)tx.state,
+              (unsigned)persistedRecord.ring_index);
   } else {
-    Serial.println("No persisted record");
+    LOG_DEBUG("no persisted record");
   }
 
-  // Initialize hopper control
-  Serial.println(">>> DEBUG: About to call hopperControl.begin()...");
-  Serial.flush();
   hopperControl.begin();
-  Serial.println(">>> DEBUG: hopperControl.begin() completed");
-  Serial.println("Hopper control initialized");
-  Serial.print("Hopper low: ");
-  Serial.println(hopperControl.isHopperLow() ? "YES" : "NO");
+  LOG_INFO("hopper low: %s", hopperControl.isHopperLow() ? "YES" : "NO");
 
-  // Initialize dispense manager
   dispenseManager.begin();
-  Serial.println("Dispense manager initialized");
-  Serial.print("State: ");
-  Serial.println(dispenseManager.isIdle() ? "IDLE" : "BUSY");
 
-  // Start HTTP server
   httpServer.begin();
 
-  Serial.println("Setup complete");
+  LOG_INFO("setup complete, state %s", dispenseManager.isIdle() ? "IDLE" : "BUSY");
 }
 
 void loop() {
-  dispenseManager.loop();  // Monitor watchdog and completion
+  // Two jobs: start whatever the HTTP layer accepted into the request slot,
+  // and watch the running transaction.  Everything with a side effect — the
+  // flash commit, the motor — happens from here and never from the async TCP
+  // callback, so the delay below is also the worst-case start latency (#4).
+  dispenseManager.loop();
 
   // Update error decoder (check timeouts, process new errors)
   hopperControl.updateErrorDecoder();

@@ -227,6 +227,20 @@ func ConformanceCases() []Case {
 			},
 		},
 		{
+			Name: "post_with_oversized_body_is_413",
+			Note: "a body past the device's 256-byte cap is refused as too large, " +
+				"not truncated into a parse error that blames the JSON",
+			Run: func(c *Ctx) error {
+				body := fmt.Sprintf(`{"tx_id":%q,"quantity":1,"pad":%q}`,
+					c.NextTxID("big"), strings.Repeat("x", 300))
+				got, err := c.postJSON(body, true)
+				if err != nil {
+					return err
+				}
+				return wantStatus(got, 413)
+			},
+		},
+		{
 			Name: "post_latency_p95_below_300ms",
 			Note: "the bench number from issue #4: the POST answers from memory, " +
 				"the flash commit and the motor start happen in loop()",

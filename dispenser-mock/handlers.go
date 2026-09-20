@@ -3,11 +3,18 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"strings"
 	"time"
 )
+
+// MaxRequestBody is the firmware's body cap (REQUEST_BODY_CAPACITY in
+// firmware/dispenser/request_body.h).  A dispense request is about 40 bytes;
+// past this the device answers 413 instead of truncating the body into a parse
+// error that blames the JSON.
+const MaxRequestBody = 256
 
 // writeJSON writes a JSON response with the given status code
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -82,8 +89,25 @@ func (m *MockDispenser) handleDispense(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The body, framed the way the firmware frames it (dispenser-protocol.md):
+	// read it whole, refuse anything past the cap, and answer an empty body
+	// rather than leaving the caller to time out.
+	raw, err := io.ReadAll(io.LimitReader(r.Body, MaxRequestBody+1))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "invalid json"})
+		return
+	}
+	if len(raw) > MaxRequestBody {
+		writeJSON(w, http.StatusRequestEntityTooLarge, ErrorResponse{Error: "body too large"})
+		return
+	}
+	if len(raw) == 0 {
+		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "empty body"})
+		return
+	}
+
 	var req DispenseRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.Unmarshal(raw, &req); err != nil {
 		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: fmt.Sprintf("invalid JSON: %v", err)})
 		return
 	}

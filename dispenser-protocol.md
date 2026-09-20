@@ -400,6 +400,16 @@ Returned when:
 Returned when `tx_id` is already known (active or in the history ring) but
 `quantity` differs from the one it was started with.
 
+**Response (413 Payload Too Large) - Body over 256 bytes:**
+```json
+{
+  "error": "body too large"
+}
+```
+
+A dispense request is about 40 bytes. Anything past 256 is refused outright
+rather than truncated into a parse error that blames the JSON.
+
 **Response (415 Unsupported Media Type) - Wrong Content-Type:**
 ```json
 {
@@ -407,13 +417,45 @@ Returned when `tx_id` is already known (active or in the history ring) but
 }
 ```
 
+**Response (400 Bad Request) - Empty body:**
+```json
+{
+  "error": "empty body"
+}
+```
+
+Every POST is answered. A request without a body is a client bug, and a client
+bug must produce a status code, not silence: an unanswered request costs the
+caller its whole timeout and then looks exactly like a lost one.
+
+**Request framing:**
+
+The body may arrive in any number of TCP segments. The device assembles it
+before parsing — `Content-Length` is what says how much to wait for, and a
+device that parses the first segment it receives rejects perfectly valid
+requests whenever the network happens to split them.
+
+
 **Behavior:**
 
 1. **New transaction:** If dispenser is `idle` and `tx_id` is new:
    - Transition to `dispensing` state
-   - Persist to flash
-   - Start motor
-   - Return `200` with `state: "dispensing"`
+   - Return `200` with `state: "dispensing"` and `dispensed: 0`, answered from
+     memory
+   - Persist to flash and start the motor **within 10 ms, after the answer**
+
+   The order matters to the caller, not just to the device. The answer does not
+   wait for a flash sector erase or for the serial log; the POST is a decision,
+   and the work follows it. A device that does the work first takes seconds to
+   answer, and the terminal retries a transaction that is already running
+   (issue #4).
+
+   The window this opens is a reset between the answer and the flash write.
+   Nothing has been persisted and no token has dropped, so the transaction is
+   forgotten: a retry of the same `tx_id` then starts it for real, and a
+   `GET /dispense/{tx_id}` in between answers `404`. That is the safe
+   direction — the opposite, a flash record for a dispense that never ran,
+   would bill tokens nobody received.
 
 2. **Idempotent retry:** If `tx_id` is the transaction currently running, or
    one in the history ring, and `quantity` is the one it was started with:
@@ -640,11 +682,14 @@ exists once the HTTP layer and the hardware are in play.
 | `400` | `invalid tx_id or quantity` | Missing fields, invalid length/range | Fix request format |
 | `400` | `invalid url` | Malformed URL path | Check URL format |
 | `400` | `invalid request format` | JSON type mismatch | Check field types |
+| `400` | `empty body` | POST without a body | Send the JSON body |
+| `400` | `incomplete body` | Body shorter than `Content-Length` | Send the whole body |
 | `401` | `unauthorized` | Missing or invalid API key | Add/fix `X-API-Key` header |
 | `404` | `not found` | Unknown `tx_id` | Check tx_id, may have expired |
 | `409` | `busy` | Another transaction active | Wait and retry |
 | `409` | `tx_id reused` | Known `tx_id`, different `quantity` | Use a fresh `tx_id` |
 | `409` | `error` (dispenser in error state) | Jam or hardware fault | Clear jam, power cycle |
+| `413` | `body too large` | Body over 256 bytes | Send a dispense request, nothing else |
 | `415` | `content-type must be application/json` | Wrong/missing Content-Type | Set `Content-Type: application/json` |
 
 ### Azkoyen Hardware Error Codes
