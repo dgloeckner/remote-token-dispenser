@@ -3,10 +3,11 @@
 #include "dispense_manager.h"
 #include <string.h>
 
-DispenseManager::DispenseManager(IStorage& storage, IHopper& hopper)
-  : flashStorage(storage), hopperControl(hopper) {
+DispenseManager::DispenseManager(IStorage& storage, IHopper& hopper, ICountMemory& counts)
+  : flashStorage(storage), hopperControl(hopper), countMemory(counts) {
   memset(&active_tx, 0, sizeof(active_tx));
   active_tx.state = STATE_IDLE;
+  active_tx.count_reliable = true;
 
   memset(history, 0, sizeof(history));
   history_index = 0;
@@ -21,22 +22,24 @@ DispenseManager::DispenseManager(IStorage& storage, IHopper& hopper)
 }
 
 void DispenseManager::begin() {
-  // Load persisted transaction if exists
-  if (flashStorage.hasPersistedTransaction()) {
-    PersistedTransaction persisted = flashStorage.load();
+  // Load persisted record if exists
+  PersistedRecord record;
+  if (flashStorage.load(record)) {
+    const PersistedTransaction& persisted = record.active;
 
     // Copy to active transaction
     strncpy(active_tx.tx_id, persisted.tx_id, 16);
     active_tx.tx_id[16] = '\0';
     active_tx.quantity = persisted.quantity;
     active_tx.dispensed = persisted.dispensed;
-    active_tx.state = persisted.state;
+    active_tx.state = (TransactionState)persisted.state;
+    active_tx.count_reliable = persisted.count_reliable != 0;
 
     // Handle recovery scenarios
     if (active_tx.state == STATE_DISPENSING) {
       // Crashed during dispense - mark as error
       active_tx.state = STATE_ERROR;
-      persistActiveTransaction();
+      persistState();
 
       // Count the crashed transaction
       total_dispenses++;                   // Transaction was started before crash
@@ -52,10 +55,11 @@ void DispenseManager::begin() {
       flashStorage.clear();
       memset(&active_tx, 0, sizeof(active_tx));
       active_tx.state = STATE_IDLE;
+      active_tx.count_reliable = true;
     }
 
     // Add to history with full transaction data
-    addToHistory(active_tx.tx_id, active_tx.state, active_tx.quantity, active_tx.dispensed);
+    addToHistory(active_tx);
   }
 }
 
@@ -106,11 +110,12 @@ DispenseOutcome DispenseManager::requestDispense(const char* tx_id, uint8_t quan
   active_tx.quantity = quantity;
   active_tx.dispensed = 0;
   active_tx.state = STATE_DISPENSING;
+  active_tx.count_reliable = true;
   active_tx.started_ms = millis();
 
   // Persist to flash
   Serial.println("  Persisting transaction to flash...");
-  persistActiveTransaction();
+  persistState();
 
   // Arm ISR-level stop BEFORE starting motor so the very first pulse that
   // reaches the target immediately cuts motor power, eliminating the ~10ms
@@ -159,8 +164,8 @@ void DispenseManager::loop() {
     // Clear active error on successful completion (self-healing)
     hopperControl.clearActiveError();
 
-    persistActiveTransaction();
-    addToHistory(active_tx.tx_id, STATE_DONE, active_tx.quantity, active_tx.dispensed);
+    persistState();
+    addToHistory(active_tx);
 
     // Track dispensed tokens
     dispensed_tokens += active_tx.dispensed;
@@ -168,6 +173,7 @@ void DispenseManager::loop() {
     flashStorage.clear();
     memset(&active_tx, 0, sizeof(active_tx));
     active_tx.state = STATE_IDLE;
+    active_tx.count_reliable = true;
     successful_count++;
     Serial.println("[DispenseManager] Dispense complete - active error cleared");
     return;
@@ -182,8 +188,8 @@ void DispenseManager::loop() {
     Serial.println(active_tx.quantity);
     hopperControl.stopMotor();
     active_tx.state = STATE_ERROR;
-    persistActiveTransaction();
-    addToHistory(active_tx.tx_id, STATE_ERROR, active_tx.quantity, active_tx.dispensed);
+    persistState();
+    addToHistory(active_tx);
     jam_count++;
 
     // Track dispensed tokens even on jam (partial dispense)
@@ -214,6 +220,7 @@ Transaction DispenseManager::getTransaction(const char* tx_id) {
   Transaction empty_tx;
   memset(&empty_tx, 0, sizeof(empty_tx));
   empty_tx.state = STATE_IDLE;
+  empty_tx.count_reliable = true;
   return empty_tx;
 }
 
@@ -235,37 +242,48 @@ uint32_t DispenseManager::getDispensedTokens() { return dispensed_tokens; }
 
 // Private methods
 bool DispenseManager::findInHistory(const char* tx_id, Transaction& out_tx) {
+  if (tx_id == NULL || tx_id[0] == '\0') {
+    return false;
+  }
   for (int i = 0; i < RING_BUFFER_SIZE; i++) {
     if (strcmp(history[i].tx_id, tx_id) == 0) {
       // Found in history - return complete transaction data
       memset(&out_tx, 0, sizeof(out_tx));
       strncpy(out_tx.tx_id, tx_id, 16);
       out_tx.tx_id[16] = '\0';
-      out_tx.state = history[i].state;
+      out_tx.state = (TransactionState)history[i].state;
       out_tx.quantity = history[i].quantity;
       out_tx.dispensed = history[i].dispensed;
+      out_tx.count_reliable = history[i].count_reliable != 0;
       return true;
     }
   }
   return false;
 }
 
-void DispenseManager::addToHistory(const char* tx_id, TransactionState state, uint8_t quantity, uint8_t dispensed) {
-  strncpy(history[history_index].tx_id, tx_id, 16);
+void DispenseManager::addToHistory(const Transaction& tx) {
+  strncpy(history[history_index].tx_id, tx.tx_id, 16);
   history[history_index].tx_id[16] = '\0';
-  history[history_index].state = state;
-  history[history_index].quantity = quantity;
-  history[history_index].dispensed = dispensed;
+  history[history_index].state = (uint8_t)tx.state;
+  history[history_index].quantity = tx.quantity;
+  history[history_index].dispensed = tx.dispensed;
+  history[history_index].count_reliable = tx.count_reliable ? 1 : 0;
   history_index = (history_index + 1) % RING_BUFFER_SIZE;
 }
 
-void DispenseManager::persistActiveTransaction() {
-  PersistedTransaction persisted;
-  strncpy(persisted.tx_id, active_tx.tx_id, 16);
-  persisted.tx_id[16] = '\0';
-  persisted.quantity = active_tx.quantity;
-  persisted.dispensed = active_tx.dispensed;
-  persisted.state = active_tx.state;
+void DispenseManager::persistState() {
+  PersistedRecord record;
+  memset(&record, 0, sizeof(record));
 
-  flashStorage.persist(persisted);
+  strncpy(record.active.tx_id, active_tx.tx_id, 16);
+  record.active.tx_id[16] = '\0';
+  record.active.quantity = active_tx.quantity;
+  record.active.dispensed = active_tx.dispensed;
+  record.active.state = (uint8_t)active_tx.state;
+  record.active.count_reliable = active_tx.count_reliable ? 1 : 0;
+
+  memcpy(record.ring, history, sizeof(record.ring));
+  record.ring_index = history_index;
+
+  flashStorage.save(record);
 }

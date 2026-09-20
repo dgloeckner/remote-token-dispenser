@@ -7,15 +7,15 @@
 #include "dispenser_types.h"
 #include "interfaces.h"
 
-// TransactionState and PersistedTransaction live in dispenser_types.h so that
-// the native test build can use them without the ESP SDK.
+// TransactionState, PersistedTransaction and PersistedRecord live in
+// dispenser_types.h so that the native test build can use them without the
+// ESP SDK.
 
 class FlashStorage : public IStorage {
 public:
   void begin() override;
-  bool hasPersistedTransaction() override;
-  PersistedTransaction load() override;
-  void persist(const PersistedTransaction& tx) override;
+  bool load(PersistedRecord& out) override;
+  void save(const PersistedRecord& record) override;
   void clear() override;
 };
 

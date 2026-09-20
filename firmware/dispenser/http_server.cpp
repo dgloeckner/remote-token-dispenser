@@ -236,6 +236,9 @@ void HttpServer::handleDispensePost(AsyncWebServerRequest *request,
   response["state"] = stateToString(tx.state);
   response["quantity"] = tx.quantity;
   response["dispensed"] = tx.dispensed;
+  // Required on every transaction response: false means the count is a lower
+  // bound because the device lost power mid-dispense (dispenser-protocol.md).
+  response["count_reliable"] = tx.count_reliable;
 
   String responseStr;
   serializeJson(response, responseStr);
@@ -280,6 +283,9 @@ void HttpServer::handleDispenseGet(AsyncWebServerRequest *request) {
   response["state"] = stateToString(tx.state);
   response["quantity"] = tx.quantity;
   response["dispensed"] = tx.dispensed;
+  // Required on every transaction response: false means the count is a lower
+  // bound because the device lost power mid-dispense (dispenser-protocol.md).
+  response["count_reliable"] = tx.count_reliable;
 
   String responseStr;
   serializeJson(response, responseStr);

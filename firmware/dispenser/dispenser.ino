@@ -3,13 +3,15 @@
 #include <ESP8266WiFi.h>
 #include "config.h"
 #include "flash_storage.h"
+#include "rtc_count_memory.h"
 #include "hopper_control.h"
 #include "dispense_manager.h"
 #include "http_server.h"
 
 FlashStorage flashStorage;
 HopperControl hopperControl;
-DispenseManager dispenseManager(flashStorage, hopperControl);
+RtcCountMemory rtcCountMemory;
+DispenseManager dispenseManager(flashStorage, hopperControl, rtcCountMemory);
 HttpServer httpServer(dispenseManager, hopperControl);
 
 void setup() {
@@ -53,9 +55,10 @@ void setup() {
   flashStorage.begin();
   Serial.println(">>> DEBUG: Flash storage initialized");
 
-  if (flashStorage.hasPersistedTransaction()) {
-    PersistedTransaction tx = flashStorage.load();
-    Serial.println("Found persisted transaction:");
+  PersistedRecord persistedRecord;
+  if (flashStorage.load(persistedRecord)) {
+    const PersistedTransaction& tx = persistedRecord.active;
+    Serial.println("Found persisted record:");
     Serial.print("  tx_id: ");
     Serial.println(tx.tx_id);
     Serial.print("  quantity: ");
@@ -63,9 +66,11 @@ void setup() {
     Serial.print("  dispensed: ");
     Serial.println(tx.dispensed);
     Serial.print("  state: ");
-    Serial.println(tx.state);
+    Serial.println((int)tx.state);
+    Serial.print("  history ring index: ");
+    Serial.println((int)persistedRecord.ring_index);
   } else {
-    Serial.println("No persisted transaction");
+    Serial.println("No persisted record");
   }
 
   // Initialize hopper control

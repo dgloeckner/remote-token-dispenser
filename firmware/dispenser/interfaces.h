@@ -16,15 +16,35 @@
 #include <stdint.h>
 #include "dispenser_types.h"
 
-// Persistence of the active transaction (EEPROM on the device).
+// Persistence of the crash-safe record (EEPROM on the device): the active
+// transaction AND the ring of finished ones.  It is one record and one commit,
+// because the ring has to survive a reboot without costing an extra sector
+// erase (issue #3).
 class IStorage {
 public:
   virtual ~IStorage() {}
   virtual void begin() = 0;
-  virtual bool hasPersistedTransaction() = 0;
-  virtual PersistedTransaction load() = 0;
-  virtual void persist(const PersistedTransaction& tx) = 0;
+  // Reads the stored record.  false means "nothing usable": no record, a
+  // half-written one, or one from another layout.  `out` is then untouched.
+  virtual bool load(PersistedRecord& out) = 0;
+  virtual void save(const PersistedRecord& record) = 0;
   virtual void clear() = 0;
+};
+
+// The live token count between two state transitions.
+//
+// On the device this is RTC user memory: it survives a watchdog reset, an
+// exception and a soft reset, so the count may be written on every token
+// without a flash erase.  A real power loss wipes it — readCount() then says
+// no, and the transaction is reported with count_reliable = false instead of
+// with a fabricated zero.
+class ICountMemory {
+public:
+  virtual ~ICountMemory() {}
+  // true only when an intact count for THIS tx_id is present.
+  virtual bool readCount(const char* tx_id, uint8_t& out_count) = 0;
+  virtual void writeCount(const char* tx_id, uint8_t count) = 0;
+  virtual void invalidate() = 0;
 };
 
 // Everything DispenseManager needs from the hopper hardware.

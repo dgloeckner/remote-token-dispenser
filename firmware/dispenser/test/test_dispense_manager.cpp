@@ -11,25 +11,48 @@
 #include <unity.h>
 #include <string.h>
 
+#include "crash_state.h"
 #include "dispense_manager.h"
+#include "mocks/count_memory_mock.h"
 #include "mocks/flash_storage_mock.h"
 #include "mocks/hopper_control_mock.h"
 
 FlashStorageMock* storage;
 HopperControlMock* hopper;
+CountMemoryMock* counts;
 DispenseManager* manager;
 
 void setUp(void) {
     storage = new FlashStorageMock();
     hopper = new HopperControlMock();
-    manager = new DispenseManager(*storage, *hopper);
+    counts = new CountMemoryMock();
+    manager = new DispenseManager(*storage, *hopper, *counts);
     _mock_millis = 0;
 }
 
 void tearDown(void) {
     delete manager;
+    delete counts;
     delete hopper;
     delete storage;
+}
+
+// Boot the firmware again on the same storage and the same RTC memory: a new
+// DispenseManager over the mocks that survived, which is exactly what a reset
+// is from the manager's point of view.
+static void reboot(void) {
+    delete manager;
+    hopper->setPulseCount(0);
+    manager = new DispenseManager(*storage, *hopper, *counts);
+    manager->begin();
+}
+
+
+// tx_id for the ring tests: "ring1" … "ring9", without pulling in <stdio.h>.
+static void snprintfTxId(char* out, int n) {
+    out[0] = 'r'; out[1] = 'i'; out[2] = 'n'; out[3] = 'g';
+    out[4] = (char)('0' + n);
+    out[5] = '\0';
 }
 
 // =============================================================================
@@ -151,7 +174,7 @@ void test_start_dispense_persists_and_starts_motor(void) {
         3, hopper->getMotorStopAt(),
         "startDispense must arm the ISR stop with the requested quantity");
     TEST_ASSERT_EQUAL_INT_MESSAGE(
-        1, storage->getPersistCalls(),
+        1, storage->getSaveCalls(),
         "The started transaction must be persisted exactly once");
     TEST_ASSERT_FALSE_MESSAGE(manager->isIdle(), "Manager is busy while dispensing");
 }
@@ -255,7 +278,7 @@ void test_retry_of_active_tx_returns_true_and_does_not_restart(void) {
         1, hopper->getResetPulseCalls(),
         "A retry must never reset the pulse counter of a running dispense");
     TEST_ASSERT_EQUAL_INT_MESSAGE(
-        1, storage->getPersistCalls(),
+        1, storage->getSaveCalls(),
         "A retry must not write the transaction to flash a second time");
 
     Transaction active = manager->getActiveTransaction();
@@ -387,6 +410,252 @@ void test_loop_completes_transaction_after_isr_stop(void) {
     TEST_ASSERT_TRUE_MESSAGE(manager->isIdle(), "Manager is idle again");
 }
 
+
+// =============================================================================
+// Count and history survive a reset (issue #3)
+//
+// Two different resets, and the difference is the whole point:
+//   - watchdog / exception / brownout: RTC memory survives, the count is exact
+//   - power loss:                      RTC memory is gone, the count is a
+//                                      lower bound and says so
+// =============================================================================
+
+void test_reset_mid_dispense_recovers_rtc_count(void) {
+    manager->begin();
+    manager->startDispense("tx_rst", 5);
+
+    // Three tokens are in the tray when the watchdog fires.
+    hopper->setPulseCount(3);
+    manager->loop();
+
+    reboot();  // RTC memory survives this kind of reset
+
+    Transaction recovered = manager->getTransaction("tx_rst");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        STATE_ERROR, recovered.state,
+        "A reset mid-dispense ends the transaction in ERROR");
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(
+        3, recovered.dispensed,
+        "The three tokens in the tray must be billed, not reported as zero");
+    TEST_ASSERT_TRUE_MESSAGE(
+        recovered.count_reliable,
+        "The RTC block survived, so the count is exact");
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(
+        3, manager->getDispensedTokens(),
+        "… and the token metric counts them too");
+}
+
+void test_power_loss_mid_dispense_reports_count_unreliable(void) {
+    manager->begin();
+    manager->startDispense("tx_pwr", 5);
+
+    hopper->setPulseCount(3);
+    manager->loop();
+
+    counts->loseRtcMemory();  // the supply went away, RTC memory with it
+    reboot();
+
+    Transaction recovered = manager->getTransaction("tx_pwr");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        STATE_ERROR, recovered.state,
+        "A power loss mid-dispense also ends in ERROR");
+    TEST_ASSERT_FALSE_MESSAGE(
+        recovered.count_reliable,
+        "Without the RTC block the count is a lower bound, and must say so");
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(
+        0, recovered.dispensed,
+        "The lower bound is what flash holds — here the zero written at start");
+}
+
+void test_live_count_goes_to_rtc_and_not_to_flash(void) {
+    manager->begin();
+    storage->resetCallCounts();
+
+    manager->startDispense("tx_live", 3);
+    hopper->setPulseCount(1);
+    manager->loop();
+    hopper->setPulseCount(2);
+    manager->loop();
+
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(
+        2, counts->storedCount(),
+        "Every token updates the live count in RTC memory");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        1, storage->getSaveCalls(),
+        "… and none of them costs a flash commit (owner decision, 2026-09-20)");
+}
+
+void test_done_tx_is_found_after_reboot(void) {
+    manager->begin();
+    manager->startDispense("tx_keep", 2);
+    hopper->setPulseCount(2);
+    manager->loop();                     // DONE
+
+    reboot();
+
+    Transaction found = manager->getTransaction("tx_keep");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        STATE_DONE, found.state,
+        "A finished transaction must survive a reboot: a 404 would be "
+        "indistinguishable from 'the request never arrived'");
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(2, found.dispensed, "… with its count");
+    TEST_ASSERT_TRUE_MESSAGE(found.count_reliable, "… and its count_reliable flag");
+}
+
+void test_ring_survives_reboot_and_wraps_at_8(void) {
+    manager->begin();
+
+    char id[8];
+    for (int i = 1; i <= 9; i++) {
+        snprintfTxId(id, i);
+        manager->startDispense(id, 1);
+        hopper->setPulseCount(1);
+        manager->loop();
+    }
+
+    reboot();
+
+    snprintfTxId(id, 1);
+    Transaction evicted = manager->getTransaction(id);
+    TEST_ASSERT_EQUAL_MESSAGE('\0', evicted.tx_id[0],
+        "The ring holds 8; the ninth transaction pushes the first one out");
+
+    for (int i = 2; i <= 9; i++) {
+        snprintfTxId(id, i);
+        Transaction kept = manager->getTransaction(id);
+        TEST_ASSERT_EQUAL_INT_MESSAGE(
+            STATE_DONE, kept.state,
+            "The last eight transactions must come back after a reboot");
+    }
+}
+
+void test_second_boot_after_crash_adds_no_empty_history_entry(void) {
+    storage->setPersistedTransaction("tx_two", 4, 0, STATE_DISPENSING);
+    counts->survivesWith("tx_two", 2);
+
+    manager->begin();   // first boot: crash recovery
+    reboot();           // second boot: the persisted ERROR is cleared
+
+    TEST_ASSERT_TRUE_MESSAGE(manager->isIdle(),
+        "The second boot clears the error, as a power cycle always did");
+
+    PersistedRecord record = storage->raw();
+    int used = 0;
+    for (int i = 0; i < PERSIST_RING_SIZE; i++) {
+        if (record.ring[i].tx_id[0] != '\0') {
+            used++;
+        }
+    }
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        1, used,
+        "The second boot must not plant an empty entry in the ring");
+
+    Transaction recovered = manager->getTransaction("tx_two");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        STATE_ERROR, recovered.state,
+        "… and clearing the error must not throw the crashed transaction away");
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(
+        2, recovered.dispensed, "… nor its recovered count");
+}
+
+void test_successful_dispense_commits_twice(void) {
+    manager->begin();
+    storage->resetCallCounts();
+
+    manager->startDispense("tx_cost", 2);
+    hopper->setPulseCount(2);
+    manager->loop();
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        2, storage->getSaveCalls(),
+        "A successful dispense costs two commits: start and finish");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        0, storage->getClearCalls(),
+        "… and no third erase — the ring IS the record, it is not cleared");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        1, counts->getInvalidateCalls(),
+        "The finished transaction releases the RTC block");
+}
+
+void test_corrupt_record_is_ignored(void) {
+    manager->begin();
+    manager->startDispense("tx_bad", 2);
+    hopper->setPulseCount(2);
+    manager->loop();
+
+    storage->corruptOneByte();
+    reboot();
+
+    TEST_ASSERT_TRUE_MESSAGE(manager->isIdle(),
+        "A record that fails its checksum is empty, never data");
+    TEST_ASSERT_EQUAL_MESSAGE('\0', manager->getTransaction("tx_bad").tx_id[0],
+        "… so nothing from it is answered as a transaction");
+}
+
+void test_old_layout_version_is_ignored(void) {
+    manager->begin();
+    manager->startDispense("tx_old_v", 2);
+    hopper->setPulseCount(2);
+    manager->loop();
+
+    storage->setStoredLayoutVersion(PERSIST_LAYOUT_VERSION - 1);
+    reboot();
+
+    TEST_ASSERT_TRUE_MESSAGE(manager->isIdle(),
+        "Bytes from another layout are ignored, not reinterpreted");
+}
+
+void test_rtc_block_of_another_tx_is_not_this_count(void) {
+    // The block belongs to the transaction that wrote it.  Reading a stale one
+    // would bill the previous customer's tokens to this transaction.
+    storage->setPersistedTransaction("tx_mine", 5, 0, STATE_DISPENSING);
+    counts->survivesWith("tx_someone_else", 4);
+
+    manager->begin();
+
+    Transaction recovered = manager->getTransaction("tx_mine");
+    TEST_ASSERT_FALSE_MESSAGE(
+        recovered.count_reliable,
+        "A block from another tx_id is no count for this one");
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(
+        0, recovered.dispensed, "… and must not be adopted as the count");
+}
+
+// =============================================================================
+// The guards on the two blocks themselves
+// =============================================================================
+
+void test_sealed_record_validates_and_zeroed_one_does_not(void) {
+    PersistedRecord record;
+    memset(&record, 0, sizeof(record));
+    TEST_ASSERT_FALSE_MESSAGE(persistedRecordValid(record),
+        "A zeroed EEPROM is not a record");
+
+    sealPersistedRecord(record);
+    TEST_ASSERT_TRUE_MESSAGE(persistedRecordValid(record),
+        "A sealed record validates");
+
+    record.active.dispensed++;
+    TEST_ASSERT_FALSE_MESSAGE(persistedRecordValid(record),
+        "A byte changed after sealing breaks the checksum");
+}
+
+void test_sealed_rtc_block_validates_and_zeroed_one_does_not(void) {
+    RtcCountBlock block;
+    memset(&block, 0, sizeof(block));
+    TEST_ASSERT_FALSE_MESSAGE(rtcCountBlockValid(block),
+        "RTC memory after a power loss is not a count");
+
+    strncpy(block.tx_id, "tx_seal", sizeof(block.tx_id) - 1);
+    block.dispensed = 3;
+    sealRtcCountBlock(block);
+    TEST_ASSERT_TRUE_MESSAGE(rtcCountBlockValid(block), "A sealed block validates");
+
+    block.dispensed = 4;
+    TEST_ASSERT_FALSE_MESSAGE(rtcCountBlockValid(block),
+        "A block damaged by a reset mid-write is rejected");
+}
+
 int main(int argc, char **argv) {
     (void)argc; (void)argv;
     UNITY_BEGIN();
@@ -415,6 +684,19 @@ int main(int argc, char **argv) {
     RUN_TEST(test_idempotent_hit_while_idle_leaves_active_idle);
     RUN_TEST(test_same_tx_id_different_quantity_is_rejected);
     RUN_TEST(test_outcome_distinguishes_busy_from_a_reused_tx_id);
+
+    RUN_TEST(test_reset_mid_dispense_recovers_rtc_count);
+    RUN_TEST(test_power_loss_mid_dispense_reports_count_unreliable);
+    RUN_TEST(test_live_count_goes_to_rtc_and_not_to_flash);
+    RUN_TEST(test_done_tx_is_found_after_reboot);
+    RUN_TEST(test_ring_survives_reboot_and_wraps_at_8);
+    RUN_TEST(test_second_boot_after_crash_adds_no_empty_history_entry);
+    RUN_TEST(test_successful_dispense_commits_twice);
+    RUN_TEST(test_corrupt_record_is_ignored);
+    RUN_TEST(test_old_layout_version_is_ignored);
+    RUN_TEST(test_rtc_block_of_another_tx_is_not_this_count);
+    RUN_TEST(test_sealed_record_validates_and_zeroed_one_does_not);
+    RUN_TEST(test_sealed_rtc_block_validates_and_zeroed_one_does_not);
 
     return UNITY_END();
 }
