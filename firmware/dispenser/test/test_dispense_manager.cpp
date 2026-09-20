@@ -231,41 +231,41 @@ void test_replay_of_finished_tx_returns_cached_result(void) {
 }
 
 // ---------------------------------------------------------------------------
-// KNOWN DEVIATION from dispenser-protocol.md, tracked in issue #2.
+// Idempotency of the ACTIVE transaction (issue #2).
 //
-// The protocol says a retry of the *active* transaction returns its current
-// state (200).  The production code looks the tx_id up in the history ring
-// only, and a running transaction is not in the ring yet — so the busy check
-// answers 409 for the caller's own transaction.
-//
-// This test pins TODAY's production behaviour on purpose, so that CI is green
-// on a foundation PR that changes no behaviour.  #2 inverts it into
-// `retry_of_active_tx_returns_true_and_does_not_restart`: assert `true`, one
-// startMotor call, one resetPulseCount call, one persist call.
-//
-// That this test can distinguish the two at all is the point of #1: the
-// assertions below run against dispense_manager.cpp, not against a copy.
+// dispenser-protocol.md § POST /dispense: a POST for the transaction that is
+// currently running returns its current state (200), and an idempotent hit
+// never touches the active transaction.  Both used to be wrong — the retry was
+// answered 409 busy and the hit overwrote active_tx, which switched the jam
+// watchdog off while the motor was running.
 // ---------------------------------------------------------------------------
-void test_retry_of_active_tx_is_rejected_today_KNOWN_DEVIATION_issue_2(void) {
+void test_retry_of_active_tx_returns_true_and_does_not_restart(void) {
     manager->begin();
     manager->startDispense("tx_active", 5);
 
     bool retry = manager->startDispense("tx_active", 5);
 
-    TEST_ASSERT_FALSE_MESSAGE(
+    TEST_ASSERT_TRUE_MESSAGE(
         retry,
-        "TODAY the retry of the active tx is rejected (409). #2 makes this true.");
+        "A retry of the RUNNING transaction is its own state, not 409 busy");
     TEST_ASSERT_EQUAL_INT_MESSAGE(
         1, hopper->getStartMotorCalls(),
-        "Whatever the verdict, the retry must never start the motor twice");
+        "The retry must never start the motor twice");
     TEST_ASSERT_EQUAL_INT_MESSAGE(
         1, hopper->getResetPulseCalls(),
         "A retry must never reset the pulse counter of a running dispense");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        1, storage->getPersistCalls(),
+        "A retry must not write the transaction to flash a second time");
+
+    Transaction active = manager->getActiveTransaction();
+    TEST_ASSERT_EQUAL_STRING_MESSAGE("tx_active", active.tx_id,
+        "The running transaction stays the active one");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(STATE_DISPENSING, active.state,
+        "… and stays in DISPENSING, so loop() keeps watching the motor");
 }
 
-// Second half of #2: an idempotent hit must not overwrite the active
-// transaction.  Also a known deviation today — pinned, not asserted as correct.
-void test_replay_while_other_tx_dispensing_overwrites_active_KNOWN_DEVIATION_issue_2(void) {
+void test_idempotent_hit_does_not_touch_active_tx(void) {
     manager->begin();
 
     manager->startDispense("tx_old", 1);
@@ -277,9 +277,61 @@ void test_replay_while_other_tx_dispensing_overwrites_active_KNOWN_DEVIATION_iss
 
     Transaction active = manager->getActiveTransaction();
     TEST_ASSERT_EQUAL_STRING_MESSAGE(
-        "tx_old", active.tx_id,
-        "TODAY the idempotent hit replaces active_tx — the jam watchdog is off "
-        "while the motor runs. #2 makes this \"tx_new\".");
+        "tx_new", active.tx_id,
+        "The idempotent hit must not replace the running transaction");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        STATE_DISPENSING, active.state,
+        "… and must not flip it out of DISPENSING");
+
+    // The point of the assertions above: the watchdog is still on the motor.
+    hopper->setPulseCount(2);
+    hopper->setJamDetected(true);
+    manager->loop();
+
+    TEST_ASSERT_FALSE_MESSAGE(hopper->isMotorRunning(),
+        "A jam after an idempotent hit must still stop the motor");
+    TEST_ASSERT_EQUAL_UINT16_MESSAGE(1, manager->getJams(), "… and be counted");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        STATE_ERROR, manager->getTransaction("tx_new").state,
+        "… and be recorded against the running transaction");
+}
+
+void test_idempotent_hit_while_idle_leaves_active_idle(void) {
+    // The second half of #2 seen through GET /health: the health document
+    // reports getActiveTransaction().state.  A replay of a finished tx_id
+    // must not make an idle device claim it is doing something.
+    manager->begin();
+    manager->startDispense("tx_done", 1);
+    hopper->simulatePulseISR();
+    manager->loop();                      // idle again, tx_done in the ring
+
+    manager->startDispense("tx_done", 1);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        STATE_IDLE, manager->getActiveTransaction().state,
+        "A replay while idle leaves the device idle");
+    TEST_ASSERT_TRUE_MESSAGE(manager->isIdle(), "… and ready for the next transaction");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        STATE_DONE, manager->getTransaction("tx_done").state,
+        "… while the replayed transaction still answers with its cached state");
+}
+
+void test_same_tx_id_different_quantity_is_rejected(void) {
+    manager->begin();
+    manager->startDispense("tx_qty", 2);
+    hopper->simulatePulseISR();
+    hopper->simulatePulseISR();
+    manager->loop();                      // tx_qty DONE with quantity 2
+
+    TEST_ASSERT_FALSE_MESSAGE(
+        manager->startDispense("tx_qty", 5),
+        "The same tx_id with another quantity is a client bug, not a retry");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        1, hopper->getStartMotorCalls(),
+        "… and must not dispense anything");
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(
+        2, manager->getTransaction("tx_qty").quantity,
+        "… and must not silently answer with the old quantity as if it matched");
 }
 
 // =============================================================================
@@ -338,8 +390,10 @@ int main(int argc, char **argv) {
     RUN_TEST(test_loop_completes_transaction_after_isr_stop);
 
     RUN_TEST(test_replay_of_finished_tx_returns_cached_result);
-    RUN_TEST(test_retry_of_active_tx_is_rejected_today_KNOWN_DEVIATION_issue_2);
-    RUN_TEST(test_replay_while_other_tx_dispensing_overwrites_active_KNOWN_DEVIATION_issue_2);
+    RUN_TEST(test_retry_of_active_tx_returns_true_and_does_not_restart);
+    RUN_TEST(test_idempotent_hit_does_not_touch_active_tx);
+    RUN_TEST(test_idempotent_hit_while_idle_leaves_active_idle);
+    RUN_TEST(test_same_tx_id_different_quantity_is_rejected);
 
     return UNITY_END();
 }
