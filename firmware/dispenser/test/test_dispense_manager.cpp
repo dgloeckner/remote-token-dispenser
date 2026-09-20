@@ -316,6 +316,26 @@ void test_idempotent_hit_while_idle_leaves_active_idle(void) {
         "… while the replayed transaction still answers with its cached state");
 }
 
+void test_outcome_distinguishes_busy_from_a_reused_tx_id(void) {
+    // The HTTP layer needs the reason, not just "no": 409 busy means ANOTHER
+    // transaction, 409 tx_id reused means the caller contradicted itself.
+    manager->begin();
+    manager->startDispense("tx_run", 3);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        DISPENSE_BUSY, manager->requestDispense("tx_other", 1),
+        "A different tx_id while dispensing is busy");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        DISPENSE_TX_ID_REUSED, manager->requestDispense("tx_run", 4),
+        "The ACTIVE tx_id with another quantity is a reused id, not busy");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        DISPENSE_IDEMPOTENT, manager->requestDispense("tx_run", 3),
+        "The active tx_id with its own quantity is the idempotent retry");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        1, hopper->getStartMotorCalls(),
+        "None of the three answers may start a second dispense");
+}
+
 void test_same_tx_id_different_quantity_is_rejected(void) {
     manager->begin();
     manager->startDispense("tx_qty", 2);
@@ -394,6 +414,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_idempotent_hit_does_not_touch_active_tx);
     RUN_TEST(test_idempotent_hit_while_idle_leaves_active_idle);
     RUN_TEST(test_same_tx_id_different_quantity_is_rejected);
+    RUN_TEST(test_outcome_distinguishes_busy_from_a_reused_tx_id);
 
     return UNITY_END();
 }

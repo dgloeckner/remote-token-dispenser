@@ -24,7 +24,10 @@ public:
   void begin();
   void loop();  // Called from main loop for watchdog
 
-  // Transaction operations
+  // Transaction operations.
+  // requestDispense() is the full answer (see DispenseOutcome);
+  // startDispense() is the same call reduced to "accepted or not".
+  DispenseOutcome requestDispense(const char* tx_id, uint8_t quantity);
   bool startDispense(const char* tx_id, uint8_t quantity);
   Transaction getTransaction(const char* tx_id);
   Transaction getActiveTransaction();

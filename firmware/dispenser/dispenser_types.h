@@ -17,6 +17,16 @@ enum TransactionState {
   STATE_ERROR = 3
 };
 
+// Why a POST /dispense was answered the way it was.  The HTTP layer maps it
+// to a status code; startDispense() collapses it back to a bool for the
+// callers that only need "did this go wrong".
+enum DispenseOutcome {
+  DISPENSE_STARTED = 0,      // new transaction, motor running        → 200
+  DISPENSE_IDEMPOTENT = 1,   // same tx_id and quantity as before     → 200
+  DISPENSE_BUSY = 2,         // ANOTHER transaction is dispensing     → 409 busy
+  DISPENSE_TX_ID_REUSED = 3  // known tx_id, different quantity       → 409 tx_id reused
+};
+
 // Persisted transaction structure
 struct PersistedTransaction {
   char tx_id[17];           // "a3f8c012" + null terminator

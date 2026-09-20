@@ -59,26 +59,44 @@ void DispenseManager::begin() {
   }
 }
 
-bool DispenseManager::startDispense(const char* tx_id, uint8_t quantity) {
-  Serial.println("[DispenseManager] startDispense() called");
+DispenseOutcome DispenseManager::requestDispense(const char* tx_id, uint8_t quantity) {
+  Serial.println("[DispenseManager] requestDispense() called");
   Serial.print("  tx_id: ");
   Serial.println(tx_id);
   Serial.print("  quantity: ");
   Serial.println(quantity);
 
-  // Check if already in history (idempotency)
-  Transaction cached_tx;
-  if (findInHistory(tx_id, cached_tx)) {
-    // Return cached result
-    Serial.println("  Transaction found in history (idempotent request)");
-    active_tx = cached_tx;
-    return true;  // Not an error, just idempotent
+  // Idempotency, first half: the transaction that is running right now.  It is
+  // not in the history ring yet — entries land there when a transaction
+  // finishes — so it has to be recognised here, or the busy check below would
+  // answer 409 to the caller's own retry while its tokens are falling.
+  if (active_tx.state != STATE_IDLE && strcmp(active_tx.tx_id, tx_id) == 0) {
+    if (active_tx.quantity != quantity) {
+      Serial.println("  ERROR: tx_id of the active transaction reused with another quantity");
+      return DISPENSE_TX_ID_REUSED;
+    }
+    Serial.println("  Retry of the active transaction (idempotent request)");
+    return DISPENSE_IDEMPOTENT;
   }
 
-  // Check if busy
+  // Idempotency, second half: a finished transaction in the ring.  active_tx
+  // is deliberately NOT touched here.  Overwriting it used to switch loop()
+  // off while the motor was running (no jam watchdog), and to make an idle
+  // device report the state of some old transaction in /health.
+  Transaction cached_tx;
+  if (findInHistory(tx_id, cached_tx)) {
+    if (cached_tx.quantity != quantity) {
+      Serial.println("  ERROR: known tx_id reused with another quantity");
+      return DISPENSE_TX_ID_REUSED;
+    }
+    Serial.println("  Transaction found in history (idempotent request)");
+    return DISPENSE_IDEMPOTENT;
+  }
+
+  // Check if busy.  From here on a 409 always means ANOTHER transaction.
   if (active_tx.state == STATE_DISPENSING) {
-    Serial.println("  ERROR: Already dispensing, rejecting request");
-    return false;  // 409 Conflict
+    Serial.println("  ERROR: another transaction is dispensing, rejecting request");
+    return DISPENSE_BUSY;
   }
 
   // Start new transaction
@@ -107,7 +125,12 @@ bool DispenseManager::startDispense(const char* tx_id, uint8_t quantity) {
   requested_tokens += quantity;
 
   Serial.println("[DispenseManager] Dispense started successfully");
-  return true;
+  return DISPENSE_STARTED;
+}
+
+bool DispenseManager::startDispense(const char* tx_id, uint8_t quantity) {
+  DispenseOutcome outcome = requestDispense(tx_id, quantity);
+  return outcome == DISPENSE_STARTED || outcome == DISPENSE_IDEMPOTENT;
 }
 
 void DispenseManager::loop() {

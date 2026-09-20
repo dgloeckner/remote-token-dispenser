@@ -199,14 +199,22 @@ void HttpServer::handleDispensePost(AsyncWebServerRequest *request,
   }
 
   // Try to start dispense
-  Serial.println("  Calling dispenseManager.startDispense()...");
-  bool started = dispenseManager.startDispense(tx_id, quantity);
-  Serial.print("  startDispense returned: ");
-  Serial.println(started ? "true" : "false");
+  Serial.println("  Calling dispenseManager.requestDispense()...");
+  DispenseOutcome outcome = dispenseManager.requestDispense(tx_id, quantity);
 
-  if (!started && !dispenseManager.isIdle()) {
-    // Busy - return 409
-    Serial.println("  System is busy, returning 409");
+  if (outcome == DISPENSE_TX_ID_REUSED) {
+    // The caller contradicted itself: a tx_id it already used, with another
+    // quantity.  Answering with the old quantity would look like a successful
+    // retry of a request that was never made.
+    Serial.println("  tx_id reused with another quantity, returning 409");
+    request->send(409, "application/json", "{\"error\":\"tx_id reused\"}");
+    return;
+  }
+
+  if (outcome == DISPENSE_BUSY) {
+    // Busy always means ANOTHER transaction now — a retry of the running one
+    // is answered above with its current state (issue #2).
+    Serial.println("  Another transaction is active, returning 409");
     Transaction active = dispenseManager.getActiveTransaction();
 
     JsonDocument response;
