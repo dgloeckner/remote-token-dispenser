@@ -1,0 +1,166 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 210 297" width="210mm" height="297mm" font-family="Helvetica, Arial, sans-serif">
+<style>
+.vis   { fill: none; stroke: #111; stroke-width: 1.6; }
+.door  { fill: #f4f4f2; stroke: #111; stroke-width: 1.6; }
+.thin  { fill: none; stroke: #111; stroke-width: 0.8; }
+.part  { fill: #d9d9d6; stroke: #111; stroke-width: 1.2; }
+.cut   { fill: #111; stroke: #111; stroke-width: 0.8; }
+.hid   { fill: none; stroke: #666; stroke-width: 0.9; stroke-dasharray: 7 4; }
+.hidf  { fill: #ececea; stroke: #666; stroke-width: 0.9; }
+.zone  { fill: #2a6fb5; fill-opacity: 0.06; stroke: #2a6fb5; stroke-width: 0.9; stroke-dasharray: 3 3; }
+.band  { fill: #c0281c; fill-opacity: 0.10; stroke: #c0281c; stroke-width: 0.9; stroke-dasharray: 7 4; }
+.coin  { fill: none; stroke: #c0281c; stroke-width: 1.4; }
+.coinh { fill: none; stroke: #c0281c; stroke-width: 1.2; stroke-dasharray: 6 3; }
+.coinp { fill: none; stroke: #c0281c; stroke-width: 1; stroke-dasharray: 1.5 3; }
+.exit  { stroke: #c0281c; stroke-opacity: 0.55; stroke-linecap: butt; }
+.ctr   { fill: none; stroke: #111; stroke-width: 0.5; stroke-dasharray: 12 3 2 3; }
+.dim   { fill: none; stroke: #111; stroke-width: 0.5; }
+.arrow { fill: #111; stroke: none; }
+.wall  { fill: none; stroke: #111; stroke-width: 0.6; }
+text   { fill: #111; paint-order: stroke; stroke: #fff; stroke-width: 3px; stroke-linejoin: round; }
+.d     { font-size: 10px; }
+.t     { font-size: 9.5px; }
+.tr    { font-size: 9.5px; fill: #c0281c; }
+.tb    { font-size: 9.5px; fill: #2a6fb5; }
+.h     { font-size: 14px; font-weight: bold; }
+.n     { font-size: 9.5px; stroke: none; }
+.nb    { font-size: 9.5px; font-weight: bold; stroke: none; }
+.title { font-size: 13px; font-weight: bold; stroke: none; }
+</style>
+<rect x="0" y="0" width="210" height="297" fill="#fff"/>
+<style>
+.vis, .door, .part { stroke-width: 0.5; }
+.thin { stroke-width: 0.25; }
+.cut  { stroke-width: 0.25; }
+.hid  { stroke-width: 0.3; stroke-dasharray: 2 1.2; }
+.hidf { stroke-width: 0.3; }
+.bend { fill: none; stroke: #2a6fb5; stroke-width: 0.4; stroke-dasharray: 4 1.2 0.8 1.2; }
+.sheet { fill: #eef1f4; stroke: #111; stroke-width: 0.5; }
+.coin { stroke-width: 0.5; }
+.coinp { stroke-width: 0.4; stroke-dasharray: 0.6 1.2; }
+.exit { stroke-opacity: 0.55; }
+.ctr  { stroke-width: 0.18; stroke-dasharray: 4 1 0.7 1; }
+.dim  { stroke-width: 0.18; }
+.wall { stroke-width: 0.2; }
+text  { stroke-width: 0.9px; }
+.d    { font-size: 3.1px; }
+.t    { font-size: 3px; }
+.tr   { font-size: 3px; }
+.tb   { font-size: 3px; }
+.h    { font-size: 4.6px; }
+.n    { font-size: 3px; }
+.nb   { font-size: 3px; }
+.title { font-size: 4.2px; }
+</style>
+<rect x="7" y="7" width="196" height="283" class="thin"/>
+<text x="14" y="18" class="h">Teil B – Rampe (Abwicklung 1:1)</text>
+<text x="14" y="24" class="t">Ansicht auf die Rutschfläche. Blau strichpunktiert = Biegelinie. 1× fertigen.</text>
+<line x1="146" y1="17" x2="196" y2="17" class="vis"/>
+<line x1="146" y1="15" x2="146" y2="19" class="thin"/>
+<line x1="156" y1="15" x2="156" y2="19" class="thin"/>
+<line x1="166" y1="15" x2="166" y2="19" class="thin"/>
+<line x1="176" y1="15" x2="176" y2="19" class="thin"/>
+<line x1="186" y1="15" x2="186" y2="19" class="thin"/>
+<line x1="196" y1="15" x2="196" y2="19" class="thin"/>
+<text x="171" y="23" class="t" text-anchor="middle">Kontrollmaß 50 mm – Druck 100 %</text>
+<rect x="93" y="276" width="110" height="14" class="thin" fill="#fff"/>
+<text x="96" y="281.5" class="title">Münztrichter Alu 1 mm, vernietet</text>
+<text x="96" y="287" class="n">M 1:1 · Maße in mm · 2026-09-20 · Rev. A · Blatt 2/3</text>
+<polygon points="42.0,118.0 87.0,118.0 87.0,115.0 97.0,115.0 97.0,78.6 87.0,70.1 87.0,62.1 42.0,62.1 42.0,70.1 32.0,78.6 32.0,115.0 42.0,115.0" class="sheet" />
+<line x1="42.0" y1="115.0" x2="42.0" y2="70.1" class="bend" />
+<line x1="87.0" y1="115.0" x2="87.0" y2="70.1" class="bend" />
+<line x1="42.0" y1="67.1" x2="87.0" y2="67.1" class="bend" />
+<circle cx="37.0" cy="83.1" r="1.65" class="thin"/>
+<circle cx="92.0" cy="83.1" r="1.65" class="thin"/>
+<circle cx="37.0" cy="107.1" r="1.65" class="thin"/>
+<circle cx="92.0" cy="107.1" r="1.65" class="thin"/>
+<text x="64.5" y="88.5" class="t" text-anchor="middle">Rutschfläche</text>
+<text x="64.5" y="93.5" class="t" text-anchor="middle">(blank, entgratet, keine Niete)</text>
+<text x="64.5" y="65.9" class="t" text-anchor="middle">Lippe</text>
+<text x="64.5" y="123.0" class="t" text-anchor="middle">↓ Türseite</text>
+<text x="64.5" y="59.1" class="t" text-anchor="middle">↑ Hopperseite</text>
+<line x1="42.0" y1="106.0" x2="48.0" y2="144.0" class="dim" />
+<circle cx="42.0" cy="106.0" r="0.44200000000000006" class="arrow"/>
+<text x="49.0" y="145.0" class="t" text-anchor="start">① Laschen 90° nach unten (weg von der Rutschfläche)</text>
+<line x1="81.0" y1="67.1" x2="85.0" y2="50.1" class="dim" />
+<circle cx="81.0" cy="67.1" r="0.44200000000000006" class="arrow"/>
+<text x="86.0" y="51.1" class="t" text-anchor="start">② Lippe 90° nach oben</text>
+<line x1="92.0" y1="107.1" x2="103.0" y2="114.0" class="dim" />
+<circle cx="92.0" cy="107.1" r="0.44200000000000006" class="arrow"/>
+<text x="104.0" y="115.0" class="t" text-anchor="start">4× Ø3,3</text>
+<line x1="32.0" y1="115.0" x2="32.0" y2="133.4" class="dim" />
+<line x1="42.0" y1="115.0" x2="42.0" y2="133.4" class="dim" />
+<line x1="32.0" y1="132.0" x2="42.0" y2="132.0" class="dim" />
+<polygon points="32.0,132.0 34.4,132.6 34.4,131.4" class="arrow" />
+<polygon points="42.0,132.0 39.6,131.4 39.6,132.6" class="arrow" />
+<text x="37.0" y="131.0" class="d" text-anchor="middle">10</text>
+<line x1="42.0" y1="118.0" x2="42.0" y2="133.4" class="dim" />
+<line x1="87.0" y1="118.0" x2="87.0" y2="133.4" class="dim" />
+<line x1="42.0" y1="132.0" x2="87.0" y2="132.0" class="dim" />
+<polygon points="42.0,132.0 44.4,132.6 44.4,131.4" class="arrow" />
+<polygon points="87.0,132.0 84.6,131.4 84.6,132.6" class="arrow" />
+<text x="64.5" y="131.0" class="d" text-anchor="middle">45</text>
+<line x1="87.0" y1="115.0" x2="87.0" y2="133.4" class="dim" />
+<line x1="97.0" y1="115.0" x2="97.0" y2="133.4" class="dim" />
+<line x1="87.0" y1="132.0" x2="97.0" y2="132.0" class="dim" />
+<polygon points="87.0,132.0 89.4,132.6 89.4,131.4" class="arrow" />
+<polygon points="97.0,132.0 94.6,131.4 94.6,132.6" class="arrow" />
+<text x="92.0" y="131.0" class="d" text-anchor="middle">10</text>
+<line x1="42.0" y1="118.0" x2="20.6" y2="118.0" class="dim" />
+<line x1="42.0" y1="67.1" x2="20.6" y2="67.1" class="dim" />
+<line x1="22.0" y1="118.0" x2="22.0" y2="67.1" class="dim" />
+<polygon points="22.0,118.0 22.6,115.6 21.4,115.6" class="arrow" />
+<polygon points="22.0,67.1 21.4,69.4 22.6,69.4" class="arrow" />
+<text x="21.0" y="92.5" class="d" text-anchor="middle" transform="rotate(-90 21.0 92.5)">50,9</text>
+<line x1="42.0" y1="67.1" x2="20.6" y2="67.1" class="dim" />
+<line x1="42.0" y1="62.1" x2="20.6" y2="62.1" class="dim" />
+<line x1="22.0" y1="67.1" x2="22.0" y2="62.1" class="dim" />
+<polygon points="22.0,67.1 22.6,64.7 21.4,64.7" class="arrow" />
+<polygon points="22.0,62.1 21.4,64.4 22.6,64.4" class="arrow" />
+<text x="21.0" y="64.6" class="d" text-anchor="middle" transform="rotate(-90 21.0 64.6)">5</text>
+<line x1="35.0" y1="76.1" x2="29.0" y2="58.1" class="dim" />
+<circle cx="35.0" cy="76.1" r="0.44200000000000006" class="arrow"/>
+<text x="28.0" y="59.1" class="t" text-anchor="end">Schräge 12</text>
+<line x1="97.0" y1="83.1" x2="106.4" y2="83.1" class="dim" />
+<line x1="97.0" y1="67.1" x2="106.4" y2="67.1" class="dim" />
+<line x1="105.0" y1="83.1" x2="105.0" y2="67.1" class="dim" />
+<polygon points="105.0,83.1 105.6,80.7 104.4,80.7" class="arrow" />
+<polygon points="105.0,67.1 104.4,69.4 105.6,69.4" class="arrow" />
+<text x="104.0" y="75.1" class="d" text-anchor="middle" transform="rotate(-90 104.0 75.1)">16</text>
+<line x1="97.0" y1="107.1" x2="106.4" y2="107.1" class="dim" />
+<line x1="97.0" y1="83.1" x2="106.4" y2="83.1" class="dim" />
+<line x1="105.0" y1="107.1" x2="105.0" y2="83.1" class="dim" />
+<polygon points="105.0,107.1 105.6,104.7 104.4,104.7" class="arrow" />
+<polygon points="105.0,83.1 104.4,85.4 105.6,85.4" class="arrow" />
+<text x="104.0" y="95.1" class="d" text-anchor="middle" transform="rotate(-90 104.0 95.1)">24</text>
+<text x="132" y="48" class="nb">Stückliste</text>
+<text x="132" y="52.3" class="n">Alu-Blech 1 mm (AlMg3 o. ä.):</text>
+<text x="132" y="56.599999999999994" class="n">  Teil A  Zuschnitt 116 × 186</text>
+<text x="132" y="60.89999999999999" class="n">  Teil B  Zuschnitt 65 × 56</text>
+<text x="132" y="65.19999999999999" class="n">4× Blindniet Alu Ø3,2 × 6</text>
+<text x="132" y="69.49999999999999" class="n">2× M4 × 10 + Mutter (oder Blindniet Ø4)</text>
+<text x="132" y="73.79999999999998" class="n"></text>
+<text x="132" y="78.09999999999998" class="nb">Reihenfolge</text>
+<text x="132" y="82.39999999999998" class="n">1  Vorlage 100 % drucken, Kontrollmaß prüfen,</text>
+<text x="132" y="86.69999999999997" class="n">    aufkleben, schneiden, alle Kanten entgraten.</text>
+<text x="132" y="90.99999999999997" class="n">2  Fuß- und Laschenlöcher bohren (Teil B),</text>
+<text x="132" y="95.29999999999997" class="n">    Wangenlöcher in Teil A noch NICHT.</text>
+<text x="132" y="99.59999999999997" class="n">3  Biegen in der Reihenfolge ①②③.</text>
+<text x="132" y="103.89999999999996" class="n">4  Rampe nach Anriss einsetzen, Wangen durch</text>
+<text x="132" y="108.19999999999996" class="n">    die Laschen abbohren, nieten.</text>
+<text x="132" y="112.49999999999996" class="n">    Nietköpfe liegen unter der Rutschfläche.</text>
+<text x="132" y="116.79999999999995" class="n">5  Erst aus Pappe bauen und ≥ 20 Münzen</text>
+<text x="132" y="121.09999999999995" class="n">    testen, dann Blech. Türschlitz zuletzt.</text>
+<text x="132" y="125.39999999999995" class="n"></text>
+<text x="132" y="129.69999999999996" class="nb">Hinweise</text>
+<text x="132" y="133.99999999999997" class="n">• Maße sind Innenmaße; Biegeverkürzung bei</text>
+<text x="132" y="138.29999999999998" class="n">   1 mm Alu (≈ 1 mm je Biegung) unkritisch.</text>
+<text x="132" y="142.6" class="n">• Spalt Hopper–Tür am Schrank messen und</text>
+<text x="132" y="146.9" class="n">   GAP im Skript anpassen (Wange = Spalt − 3).</text>
+<text x="132" y="151.20000000000002" class="n">• Trichter nur am Schrankboden befestigen,</text>
+<text x="132" y="155.50000000000003" class="n">   nicht an Hopper oder Tür.</text>
+<text x="132" y="159.80000000000004" class="n">• Schräge an den Laschen von Teil B hält sie</text>
+<text x="132" y="164.10000000000005" class="n">   frei vom Hopper-Seitenblech.</text>
+<text x="132" y="168.40000000000006" class="n">• Auslass und Türschlitz ≥ 30 hoch, damit</text>
+<text x="132" y="172.70000000000007" class="n">   auch hochkant rollende Münzen durchgehen.</text>
+</svg>

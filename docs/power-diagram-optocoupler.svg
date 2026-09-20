@@ -20,7 +20,7 @@
 
   <!-- Title -->
   <text x="490" y="32" text-anchor="middle" font-size="17" font-weight="800" fill="#f1f5f9" letter-spacing="-0.3">Power Supply Wiring — Optocoupler Version</text>
-  <text x="490" y="50" text-anchor="middle" font-size="11" fill="#64748b">12V PSU · DC Shield für ESP · 4× PC817 Optokoppler · Hopper 12-24V ⎓ 450mA</text>
+  <text x="490" y="50" text-anchor="middle" font-size="11" fill="#64748b">12V PSU · Sicherung 4 A · Buck Converter für ESP · 4× PC817 Optokoppler · Hopper 12-24V ⎓ 450mA</text>
 
   <!-- ═══ 12V PSU ═══ -->
   <g filter="url(#shadow)">
@@ -39,21 +39,27 @@
   <circle cx="230" cy="250" r="5" fill="#64748b"/>
   <text x="218" y="247" text-anchor="end" font-size="10" font-weight="600" fill="#94a3b8" font-family="monospace">GND</text>
 
-  <!-- 12V line → split -->
-  <line x1="235" y1="200" x2="340" y2="200" stroke="#ef4444" stroke-width="2.5"/>
+  <!-- 12V line → fuse F1 → split (fuse protects everything downstream) -->
+  <line x1="235" y1="200" x2="262" y2="200" stroke="#ef4444" stroke-width="2.5"/>
+  <rect x="262" y="191" width="50" height="18" rx="4" fill="#1e293b" stroke="#ef4444" stroke-width="1.5"/>
+  <line x1="262" y1="200" x2="312" y2="200" stroke="#ef4444" stroke-width="1"/>
+  <line x1="312" y1="200" x2="340" y2="200" stroke="#ef4444" stroke-width="2.5"/>
+  <text x="287" y="184" text-anchor="middle" font-size="10" font-weight="700" fill="#fca5a5">F1 · 4 A</text>
+  <text x="287" y="222" text-anchor="middle" font-size="8" fill="#94a3b8">KFZ-Flachsicherung</text>
+  <text x="287" y="232" text-anchor="middle" font-size="8" fill="#64748b">nur in +12V, nicht in GND</text>
   <circle cx="340" cy="200" r="4" fill="#ef4444"/>
 
-  <!-- ═══ UPPER: 12V → DC Shield → ESP ═══ -->
+  <!-- ═══ UPPER: 12V → Buck Converter → ESP ═══ -->
   <line x1="340" y1="200" x2="340" y2="120" stroke="#ef4444" stroke-width="2.2"/>
   <line x1="340" y1="120" x2="398" y2="120" stroke="#ef4444" stroke-width="2.2" marker-end="url(#arr-red)"/>
 
-  <!-- DC Shield (7-24V) -->
+  <!-- Buck converter (Mini-360 type, adjustable) -->
   <g filter="url(#shadow)">
     <rect x="400" y="84" width="150" height="100" rx="8" fill="#1e293b" stroke="#334155" stroke-width="1.5"/>
     <rect x="400" y="84" width="150" height="28" rx="8" fill="#2e1065"/>
     <rect x="400" y="104" width="150" height="8" fill="#2e1065"/>
-    <text x="475" y="102" text-anchor="middle" font-size="11" font-weight="700" fill="#c4b5fd">Wemos DC Shield</text>
-    <text x="475" y="148" text-anchor="middle" font-size="9" fill="#64748b">7-24V → 5V/3.3V</text>
+    <text x="475" y="102" text-anchor="middle" font-size="11" font-weight="700" fill="#c4b5fd">Mini-360 Modul</text>
+    <text x="475" y="148" text-anchor="middle" font-size="9" fill="#64748b">12V → 5,0V (einstellen!)</text>
     <text x="475" y="162" text-anchor="middle" font-size="9" fill="#64748b">Buck Converter</text>
   </g>
   <circle cx="400" cy="120" r="4" fill="#ef4444" opacity="0.8"/>

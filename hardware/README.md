@@ -83,6 +83,7 @@ The bestep brand PC817 optocoupler modules ship with **inadequate resistor value
 | **Power Supply** | 12V/2A DC adapter | Hopper motor power | ~€10 |
 | **Optocouplers** | 4× PC817 modules (bestep) | Galvanic isolation, signal conditioning | ~€5 |
 | **Capacitor** | 2200µF 25V electrolytic | Motor startup surge protection | ~€1 |
+| **Buck Converter** | Mini-360 type, adjustable (12V → 5V) | Powers the Wemos D1 from the 12V rail | ~€2 |
 
 ### Electronic Components
 
@@ -93,6 +94,8 @@ The bestep brand PC817 optocoupler modules ship with **inadequate resistor value
 | PC817 optocoupler modules (bestep brand) | 4 | Galvanic isolation | ⚠️ Requires resistor modification! |
 | 330Ω resistor (1/4W) | 1 | R1 modification for motor control optocoupler | Solder in parallel with stock 1kΩ |
 | 2200µF 25V capacitor | 1 | Motor startup surge protection | Observe polarity! |
+| Mini-360 buck converter module (adjustable) | 1 | 12V → 5V supply for the Wemos D1 | ⚠️ Set to 5.0V before connecting the Wemos! |
+| Inline blade fuse holder (ATO) + 4A blade fuse | 1 | Short-circuit protection for the whole 12V side | In the +12V lead, right after the cable entry |
 
 **⚠️ PC817 Module Resistor Modification:**
 
@@ -188,10 +191,43 @@ The stock PC817 modules include onboard resistors R1 (1kΩ) and R2 (10kΩ), but 
 **Critical power requirements:**
 - **12V/2A power supply** for hopper motor and voltage regulator
 - **Voltage regulator** (12V→5V) powers ESP8266 (NOT USB in production)
+- **Fuse F1 (4A blade fuse, inline holder)** in the +12V lead directly after the PSU / cable entry
 - **Common ground** between all components (absolutely required!)
 - **2200µF capacitor** across 12V rail absorbs motor startup surge
 - All 3 hopper VCC pins connected to +12V
 - Both hopper GND pins connected to common ground
+
+**Fuse F1:**
+
+One inline automotive blade fuse holder (ATO) with a **4A** fuse sits in the **+12V lead only**
+(never in GND), between the PSU and the point where +12V is distributed. Everything -
+hopper + capacitor, buck converter input, optocoupler #1 VCC - is connected *behind* the fuse,
+so a short anywhere on the 12V side blows the fuse instead of heating the thin hookup wire.
+
+- The 2200µF capacitor stays behind the fuse, close to the hopper, so the motor start-up
+  surge (~3A per the Azkoyen manual, 0.45A while running) is buffered and does not blow it.
+- If the fuse blows on motor start, step up to 5A - not higher with the thin wiring used here.
+- The 5V side needs no separate fuse: the buck converter is current limited, and a short at
+  its input is covered by F1.
+- Keep the holder reachable with the cabinet door open.
+
+**5V supply (buck converter):**
+
+The Wemos D1 is powered from the 12V rail through a small adjustable buck converter
+(Mini-360 type: trimmer potentiometer, "150" inductor). The power diagram above shows
+this block as "Buck Converter".
+
+- ⚠️ **Adjust before first use:** the module ships with an arbitrary output voltage.
+  Connect 12V to IN+/IN-, measure OUT+/OUT- with a multimeter and turn the trimmer
+  until it reads **5.0V** (4.9-5.1V). Only then connect the Wemos.
+- **Lock the trimmer** with a drop of nail polish or threadlocker. A trimmer that
+  creeps upwards destroys the ESP8266.
+- **Connection:** OUT+ → Wemos `5V` pin (not `3V3`), OUT- → common ground.
+- Do **not** power the Wemos from USB and the buck converter at the same time
+  (unplug 12V while flashing over USB, or disconnect the 5V wire).
+- Insulate the module (heat shrink) - it has exposed pads on both sides.
+- Input and output wires should use different colours; swapping IN and OUT
+  destroys the module.
 
 ---
 

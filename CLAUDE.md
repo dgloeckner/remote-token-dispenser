@@ -113,6 +113,8 @@ Transaction fields: `tx_id`, `user_id`, `quantity`, `dispensed`, `state`, `times
 
 **Power:**
 - 12V/2A DC adapter with 2200µF capacitor for motor startup surge
+- Inline 4A blade fuse (F1) in the +12V lead right after the PSU; hopper, capacitor, buck converter and optocoupler #1 VCC all sit behind it
+- Mini-360 type adjustable buck converter (12V → 5.0V) feeds the Wemos `5V` pin; trimmer must be set to 5.0V and locked before connecting the Wemos (see `hardware/README.md`)
 
 **Isolation:**
 - 4× PC817 optocoupler modules (bestep brand) for galvanic isolation
