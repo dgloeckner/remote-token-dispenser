@@ -53,6 +53,19 @@ go run .
 
 See [dispenser-mock/README.md](dispenser-mock/README.md) for details.
 
+### Tests
+
+| What | Where | How |
+|------|-------|-----|
+| Firmware logic | `firmware/dispenser/test/` | `cd firmware/dispenser && pio test -e native` — links the real `dispense_manager.cpp`, no copies |
+| Firmware build | `firmware/dispenser/` | `pio run -e esp8266` |
+| Go modules | `dispenser-mock/`, `dispenser-client-tui/` | `go vet ./... && go test ./...` |
+| Protocol conformance | `dispenser-client-tui/conformance_cases.go` | `token-tui conformance --target mock` (CI) or `--target simulator` against a real ESP |
+| Hardware without a hopper | `firmware/hopper-simulator/` | second D1 mini, see [docs/hopper-simulator.md](docs/hopper-simulator.md) |
+
+All of it runs on every push and pull request
+([.github/workflows/ci.yaml](.github/workflows/ci.yaml)).
+
 ---
 
 ## 🏗️ System Architecture

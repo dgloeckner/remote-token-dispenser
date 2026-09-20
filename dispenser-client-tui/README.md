@@ -84,6 +84,31 @@ export TOKEN_DISPENSER_ENDPOINT=http://192.168.4.20
 | `C`     | Clear result / log               |
 | `H`     | Force health refresh (Test tab)  |
 
+## Conformance mode (headless)
+
+The same binary also runs the protocol conformance suite — the table of cases
+that decides whether an implementation speaks `dispenser-protocol.md`:
+
+```bash
+# against the Go mock (this is what CI runs)
+token-tui conformance --endpoint http://127.0.0.1:8080 --api-key dev --target mock
+
+# against a real ESP8266 with the hopper simulator
+token-tui conformance --endpoint http://192.168.4.20 --api-key mysecret \
+  --target simulator --interactive --json report.json
+```
+
+| Flag | Meaning |
+|------|---------|
+| `--target` | `mock`, `simulator` or `hopper` — decides which cases apply |
+| `--interactive` | also run cases that ask for a physical act (press RST, flip a switch) |
+| `--json PATH` | write a per-case report |
+| `--only SUBSTR` | run only the cases whose name contains SUBSTR |
+
+The exit code is the verdict. Cases are defined in `conformance_cases.go`;
+`conformance.go` is the runner. Both are covered by `go test` against a fake
+device, so a case that can never fail is caught.
+
 ## Dependencies
 
 - [Bubble Tea](https://github.com/charmbracelet/bubbletea) — TUI framework
