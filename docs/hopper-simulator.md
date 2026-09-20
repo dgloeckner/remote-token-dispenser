@@ -75,6 +75,17 @@ token-tui conformance --endpoint http://192.168.4.20 --api-key … \
 Set the simulator to fast mode (`f`) first; a 20-token case otherwise takes
 20 seconds of real hopper time.
 
+Two interactive cases drive the switches of issue #5, and the prompt names the
+command to type:
+
+| Case | Command | What it proves |
+|------|---------|----------------|
+| `bounce_burst_counts_one_token_per_coin` | `b` | the pulse filter: three noise edges plus the real pulse are **one** token, so the dispense is not cut short |
+| `coast_pulse_is_counted_as_an_overrun` | `c` | the settling window: the token that falls 120 ms after the motor stop is counted and reported, so `dispensed` is `quantity + 1` |
+
+Both end by prompting for `n` again — a simulator left in bounce mode makes
+every later case fail for the wrong reason.
+
 ## Limits
 
 - It models the **signals**, not the mechanics: no coin weight, no motor
@@ -83,6 +94,12 @@ Set the simulator to fast mode (`f`) first; a 20-token case otherwise takes
 - It answers the motor line from `loop()`, so its pulse edges are accurate to
   about a millisecond — fine against the 30 ms hopper pulse, useless for
   timing experiments below that.
+- The coast pulse is fixed at 120 ms after the motor stop (`COAST_DELAY_MS`),
+  so it only exercises the near edge of the firmware's 500 ms settling window.
+  A token that coasts out later than the window is not reproducible here, and
+  would be reported as an overrun of the *next* transaction or not at all.
+  That is a deliberate gap: the number that matters is measured on the real
+  hopper (Cycle B of the epic's plan), not on a board that invents it.
 - Fast mode is faster than the real hopper. A timing-dependent bug that only
   shows at 1000 ms/token will not show at 300 ms/token; leave fast mode off
   when chasing one.
