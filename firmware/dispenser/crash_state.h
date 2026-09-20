@@ -14,9 +14,10 @@
 
 #include "dispenser_types.h"
 
-// CRC-16/CCITT-FALSE.  Small, no table, and it catches the single-bit and
-// truncation damage a half-finished EEPROM commit leaves behind.
-uint16_t crc16Ccitt(const void* data, size_t length);
+// Both blocks are checked with CRC-16/CCITT-FALSE: small, no table, and it
+// catches the single-bit and truncation damage a half-finished EEPROM commit
+// leaves behind.  The routine itself is private to crash_state.cpp — what the
+// rest of the firmware needs is "seal this" and "is this intact".
 
 // Fill in magic, layout version and checksum.  Call before writing.
 void sealPersistedRecord(PersistedRecord& record);
