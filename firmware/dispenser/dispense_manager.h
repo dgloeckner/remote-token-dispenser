@@ -97,6 +97,18 @@ private:
   void persistState();
   // Consumes the request slot: commit, seed the live count, start the motor.
   void startPending();
+  // Ends the transaction after the settling window: the final count, the
+  // overrun, the ring, one commit.
+  void finishDispense();
+
+  // The settling window (issue #5).  The motor is cut by the ISR the instant
+  // the target count is reached, but a token already past the wheel still
+  // falls.  The transaction therefore stays DISPENSING for
+  // DISPENSE_SETTLING_MS after the stop and keeps counting; only then is the
+  // count final.  It is not a new protocol state: the device reports
+  // `dispensing` throughout, which is what it is doing — finishing.
+  bool settling;
+  unsigned long settling_since_ms;
 };
 
 #endif

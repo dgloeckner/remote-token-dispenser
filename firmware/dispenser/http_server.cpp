@@ -115,6 +115,13 @@ void HttpServer::handleHealth(AsyncWebServerRequest *request) {
   // Token-level metrics
   metrics["requested_tokens"] = dispenseManager.getRequestedTokens();
   metrics["dispensed_tokens"] = dispenseManager.getDispensedTokens();
+  // Tokens past the requested quantity: the ones that fall while the disc
+  // coasts (issue #5).  A single transaction shows its own overrun in
+  // `dispensed`; this is the number anybody actually watches.
+  metrics["overrun_tokens"] = dispenseManager.getOverrunTokens();
+  // Falling edges the pulse filter rejected as noise.  A hopper whose sensor
+  // bounces is visible here before it is visible in a short dispense.
+  metrics["filtered_pulses"] = hopperControl.getFilteredPulseCount();
 
   // Add error information
   ErrorRecord* activeError = hopperControl.errorHistory.getActive();

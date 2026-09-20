@@ -17,10 +17,21 @@ void PulseFilter::reset() {
   rejected_count = 0;
 }
 
-// TODO(issue #5): this is today's behaviour — every edge is a token.
-// IRAM_ATTR because the coin-pulse ISR calls it: a function left in flash is
-// a cache miss the interrupt cannot take.
+// IRAM_ATTR because the coin-pulse ISR calls it: a function left in flash is a
+// cache miss the interrupt cannot take.
+//
+// The subtraction is deliberately done in uint32_t: micros() wraps every ~71
+// minutes, and the wrapped difference is still the elapsed time.  A signed
+// comparison against a stored timestamp would read the wrap as a gap of half
+// an hour in the wrong direction and let a burst of noise through.
 bool IRAM_ATTR PulseFilter::accept(uint32_t now_us) {
+  if (have_last && (uint32_t)(now_us - last_accepted_us) < min_gap_us) {
+    // Measured against the last ACCEPTED edge, never the last edge seen: a
+    // bouncing sensor would otherwise push the deadline ahead of itself and
+    // swallow the real pulse at the end of its own burst.
+    rejected_count++;
+    return false;
+  }
   last_accepted_us = now_us;
   have_last = true;
   accepted_count++;

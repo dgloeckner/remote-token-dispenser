@@ -1,6 +1,7 @@
 // firmware/dispenser/dispense_manager.cpp
 
 #include "dispense_manager.h"
+#include "config.h"
 #include "log.h"
 #include <string.h>
 
@@ -10,6 +11,8 @@ DispenseManager::DispenseManager(IStorage& storage, IHopper& hopper, ICountMemor
   active_tx.state = STATE_IDLE;
   active_tx.count_reliable = true;
   pending_start = false;
+  settling = false;
+  settling_since_ms = 0;
 
   memset(history, 0, sizeof(history));
   history_index = 0;
@@ -158,6 +161,7 @@ void DispenseManager::startPending() {
   // The slot is cleared FIRST: whatever happens below, this transaction is
   // never started twice.
   pending_start = false;
+  settling = false;
 
   LOG_INFO("starting %s", active_tx.tx_id);
   persistState();
@@ -172,6 +176,45 @@ void DispenseManager::startPending() {
   hopperControl.resetPulseCount();
   hopperControl.setMotorStopAt(active_tx.quantity);
   hopperControl.startMotor();
+}
+
+void DispenseManager::finishDispense() {
+  settling = false;
+
+  // What actually came out.  It may be MORE than was asked for: the tokens
+  // that fell while the disc coasted are in the tray either way, and the
+  // terminal bills `dispensed` (dispenser-protocol.md).  Reporting the
+  // requested quantity instead was the silent half of issue #5.
+  if (active_tx.dispensed > active_tx.quantity) {
+    uint8_t overrun = active_tx.dispensed - active_tx.quantity;
+    overrun_tokens += overrun;
+    LOG_INFO("overrun: %s delivered %u for a quantity of %u", active_tx.tx_id,
+             (unsigned)active_tx.dispensed, (unsigned)active_tx.quantity);
+  }
+
+  LOG_INFO("done: %s dispensed %u/%u", active_tx.tx_id,
+           (unsigned)active_tx.dispensed, (unsigned)active_tx.quantity);
+  active_tx.state = STATE_DONE;
+
+  // Clear active error on successful completion (self-healing)
+  hopperControl.clearActiveError();
+
+  // Track dispensed tokens
+  dispensed_tokens += active_tx.dispensed;
+
+  addToHistory(active_tx);
+  countMemory.invalidate();
+
+  // One commit, not two and an erase: the finished transaction goes into the
+  // ring and the active slot goes empty in the same write.  Clearing the
+  // record here is what made a completed transaction a 404 after a reboot.
+  // The settling window adds no commit of its own — it is not a state
+  // transition, it is the end of one (owner decision, 2026-09-20).
+  memset(&active_tx, 0, sizeof(active_tx));
+  active_tx.state = STATE_IDLE;
+  active_tx.count_reliable = true;
+  persistState();
+  successful_count++;
 }
 
 bool DispenseManager::startDispense(const char* tx_id, uint8_t quantity) {
@@ -208,30 +251,27 @@ void DispenseManager::loop() {
     LOG_DEBUG("pulse %u/%u", (unsigned)active_tx.dispensed, (unsigned)active_tx.quantity);
   }
 
-  // Check for completion
+  // The settling window (issue #5).  Started by the pass below, it is checked
+  // BEFORE the jam watchdog: the motor is already off in here, so `no pulse
+  // for five seconds` would eventually be read as a jam on a transaction that
+  // has done everything right.
+  if (settling) {
+    if (millis() - settling_since_ms < DISPENSE_SETTLING_MS) {
+      return;  // a token may still be falling; the loop above counts it
+    }
+    finishDispense();
+    return;
+  }
+
+  // Target reached: cut the motor, then wait out the coast.  The ISR has
+  // normally cut it already — this is the belt to that braces, and it is also
+  // what clears the ISR stop target.
   if (active_tx.dispensed >= active_tx.quantity) {
-    LOG_INFO("done: %s dispensed %u/%u", active_tx.tx_id,
-             (unsigned)active_tx.dispensed, (unsigned)active_tx.quantity);
     hopperControl.stopMotor();
-    active_tx.state = STATE_DONE;
-
-    // Clear active error on successful completion (self-healing)
-    hopperControl.clearActiveError();
-
-    // Track dispensed tokens
-    dispensed_tokens += active_tx.dispensed;
-
-    addToHistory(active_tx);
-    countMemory.invalidate();
-
-    // One commit, not two and an erase: the finished transaction goes into the
-    // ring and the active slot goes empty in the same write.  Clearing the
-    // record here is what made a completed transaction a 404 after a reboot.
-    memset(&active_tx, 0, sizeof(active_tx));
-    active_tx.state = STATE_IDLE;
-    active_tx.count_reliable = true;
-    persistState();
-    successful_count++;
+    settling = true;
+    settling_since_ms = millis();
+    LOG_INFO("target reached: %s at %u/%u, settling", active_tx.tx_id,
+             (unsigned)active_tx.dispensed, (unsigned)active_tx.quantity);
     return;
   }
 
@@ -240,6 +280,7 @@ void DispenseManager::loop() {
     LOG_INFO("jam: %s stopped at %u/%u",
              active_tx.tx_id, (unsigned)active_tx.dispensed, (unsigned)active_tx.quantity);
     hopperControl.stopMotor();
+    settling = false;
     active_tx.state = STATE_ERROR;
     addToHistory(active_tx);
     countMemory.invalidate();

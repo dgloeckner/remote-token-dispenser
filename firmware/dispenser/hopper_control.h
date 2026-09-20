@@ -16,6 +16,8 @@ public:
   void stopMotor() override;
   uint8_t getPulseCount() override;
   void resetPulseCount() override;
+  // Falling edges rejected as noise since the last reset (issue #5).
+  uint32_t getFilteredPulseCount();
   // Arm ISR-level stop: the coin-pulse ISR will write MOTOR_PIN LOW the
   // instant pulse_count reaches `count`, eliminating the up-to-10ms delay
   // between a pulse firing and the main loop() reacting.  Call this with the

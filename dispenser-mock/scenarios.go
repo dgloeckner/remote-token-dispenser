@@ -35,6 +35,8 @@ func GetScenarioForQuantity(quantity int) string {
 		return "slow_dispense"
 	case 17:
 		return "power_loss_after_first"
+	case 18:
+		return "overrun_after_last"
 	default:
 		if quantity >= 16 && quantity <= 20 {
 			return "success"
@@ -54,6 +56,8 @@ func (m *MockDispenser) ExecuteScenario(tx *Transaction, scenario string) {
 		m.executeCrashAfterFirst(tx)
 	case "power_loss_after_first":
 		m.executePowerLossAfterFirst(tx)
+	case "overrun_after_last":
+		m.executeOverrunAfterLast(tx)
 	case "partial_dispense":
 		m.executePartialDispense(tx)
 	case "load_delay":
@@ -222,6 +226,50 @@ func (m *MockDispenser) executePowerLossAfterFirst(tx *Transaction) {
 	tx.Dispensed = 0 // the lower bound from flash, not the token in the tray
 	tx.CountReliable = false
 	m.metrics.Failures++
+	m.activeTx = nil
+	m.addToHistoryLocked(tx)
+	m.mu.Unlock()
+}
+
+// executeOverrunAfterLast dispenses the whole quantity and then one token more:
+// the one that was already past the wheel when the motor was cut.  The firmware
+// counts it during its settling window and reports it, so `dispensed` ends up
+// greater than `quantity` — legal, and what the terminal bills (issue #5).
+func (m *MockDispenser) executeOverrunAfterLast(tx *Transaction) {
+	m.mu.Lock()
+	m.metrics.TotalDispenses++
+	m.metrics.RequestedTokens += tx.Quantity
+	m.mu.Unlock()
+
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+
+	for i := 0; i < tx.Quantity; i++ {
+		select {
+		case <-tx.StopChan:
+			return
+		case <-ticker.C:
+			m.mu.Lock()
+			tx.Dispensed++
+			m.mu.Unlock()
+		}
+	}
+
+	// The settling window: the motor is off, the transaction is not done yet.
+	settling := time.NewTimer(200 * time.Millisecond)
+	defer settling.Stop()
+	select {
+	case <-tx.StopChan:
+		return
+	case <-settling.C:
+	}
+
+	m.mu.Lock()
+	tx.Dispensed++ // the coast token
+	tx.State = StateDone
+	m.metrics.Successful++
+	m.metrics.DispensedTokens += tx.Dispensed
+	m.metrics.OverrunTokens += tx.Dispensed - tx.Quantity
 	m.activeTx = nil
 	m.addToHistoryLocked(tx)
 	m.mu.Unlock()

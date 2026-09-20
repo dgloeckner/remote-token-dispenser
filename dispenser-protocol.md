@@ -114,6 +114,34 @@ one reading that bills nothing while the tray is full.
   the hopper, possibly more. Bill the bound and put the difference in front of
   a human; do not treat it as a completed reconciliation.
 
+### 4b. `dispensed` may be greater than `quantity`
+A token that is already past the wheel when the motor is cut still falls. The
+firmware therefore keeps counting for a short **settling window** (500 ms)
+after the target count is reached, and reports what actually came out — even
+when that is one more than was asked for.
+
+- `dispensed > quantity` is **legal** and means exactly that: more tokens left
+  the hopper than were requested. The terminal **bills what came out**.
+- The transaction is still `done`. An overrun is an accounting fact, not a
+  fault; nothing was lost and nothing jammed.
+- `metrics.overrun_tokens` in `GET /health` counts these tokens across all
+  transactions, because a single transaction's overrun is only visible to
+  whoever reads that transaction — and nobody watches those.
+
+During the settling window the transaction is still reported as `dispensing`:
+the motor is off, but the count is not final yet, and a `POST` for another
+`tx_id` in that window is the usual `409 busy`. There is no separate
+`settling` state — a state a client would have to learn to ignore.
+
+The opposite error has the same cause and is invisible in the other direction:
+the coin line is an optocoupler output next to a motor, and a bouncing sensor
+or an EMI spike produces falling edges that are not coins. The device accepts
+an edge as a token only if at least 20 ms have passed since the last accepted
+one (the hopper's own pulse is 30–65 ms, and coins arrive about a second
+apart), and reports the rejected edges as `metrics.filtered_pulses`. Counting
+raw edges ended the dispense early, so the member got fewer tokens than the
+terminal billed.
+
 ### 5. Dispense-First, Pay-After
 Tokens are **physically dispensed before payment processing**. This ensures:
 - Exact token count tracking (even during failures)
@@ -203,7 +231,9 @@ Host: 192.168.4.20
     "successful": 1189,
     "jams": 3,
     "partial": 2,
-    "failures": 55
+    "failures": 55,
+    "overrun_tokens": 4,
+    "filtered_pulses": 11
   },
   "error": {
     "active": false
@@ -235,7 +265,9 @@ Host: 192.168.4.20
     "successful": 1189,
     "jams": 3,
     "partial": 2,
-    "failures": 55
+    "failures": 55,
+    "overrun_tokens": 4,
+    "filtered_pulses": 11
   },
   "error": {
     "active": true,
@@ -284,6 +316,8 @@ Host: 192.168.4.20
 | `metrics.jams` | integer | Jam errors detected (timeout-based) |
 | `metrics.partial` | integer | Partial dispenses (subset of jams) |
 | `metrics.failures` | integer | Total failures (jams + other errors) |
+| `metrics.overrun_tokens` | integer | Tokens delivered past the requested quantity, across all transactions (see Design Principle 4b) |
+| `metrics.filtered_pulses` | integer | Falling edges on the coin line rejected as noise since the last transaction started |
 | `error` | object | Active error information |
 | `error.active` | boolean | Whether an error is currently active |
 | `error.code` | integer | Error code (1-7, see Error Codes section) |
@@ -523,7 +557,7 @@ X-API-Key: your-secret-api-key-here
 | `tx_id` | string | Transaction ID |
 | `state` | string | Current state: `"dispensing"`, `"done"`, `"error"` |
 | `quantity` | integer | Requested token count |
-| `dispensed` | integer | Actual tokens dispensed so far |
+| `dispensed` | integer | Actual tokens dispensed so far. **May exceed `quantity`** (Design Principle 4b) |
 | `count_reliable` | boolean | **Required.** `false` means `dispensed` is a lower bound (see Design Principle 4a) |
 
 **Response (400 Bad Request) - Invalid tx_id:**
@@ -605,9 +639,12 @@ idle ──POST /dispense──► dispensing ──[success]──► done
    - Duration: ~2.5 seconds per token
 
 2. **dispensing → done:**
-   - Trigger: `dispensed >= quantity`
-   - Actions: Stop motor, persist final state, add to history
-   - Result: Successful completion
+   - Trigger: `dispensed >= quantity`, then 500 ms of settling
+   - Actions: Stop the motor at once, keep counting for `DISPENSE_SETTLING_MS`,
+     then persist the final state and add it to the history
+   - Result: Successful completion, with `dispensed >= quantity` — a token that
+     fell while the disc coasted is part of it (Design Principle 4b)
+   - The state stays `dispensing` for the whole window; the device is busy
 
 3. **dispensing → error:**
    - Trigger: Jam timeout (5 seconds without pulse)
@@ -658,6 +695,11 @@ The table lives in `dispenser-client-tui/conformance_cases.go`. Adding to it:
   pass.
 - A case that is known to fail against one target carries a `Note` naming the
   issue that will fix it, so a red line reads as *known* or *new* at a glance.
+- The overrun of Design Principle 4b is covered from both sides: the mock runs
+  `overrun_is_reported_above_quantity` (its quantity-18 scenario) and
+  `health_reports_overrun_tokens` in CI, and on a real device the hopper
+  simulator's `b` and `c` commands drive `bounce_burst_counts_one_token_per_coin`
+  and `coast_pulse_is_counted_as_an_overrun`, which need `--interactive`.
 - Known-red today: `post_while_error_is_409` (firmware accepts a dispense while
   a hardware error is active — issue #6). It is green against the mock.
 - The two resets of Design Principle 4 are covered from both sides: the mock
@@ -720,14 +762,16 @@ These error codes are reported via the error signal pin (GPIO D5) from the Azkoy
 | Parameter | Value | Description |
 |-----------|-------|-------------|
 | Token dispense rate | ~2.5 seconds/token | Azkoyen Hopper U-II mechanical speed |
-| Pulse width | 30ms | Opto-sensor pulse duration per token |
+| Pulse width | 30ms | Opto-sensor pulse duration per token (30–65 ms per the datasheet) |
 | Pulse detection | FALLING edge | GPIO interrupt trigger |
+| Minimum pulse spacing | 20ms | Below the shortest legal pulse: an edge closer than this to the last accepted one is noise, not a coin |
 
 ### Software Timeouts
 
 | Timeout | Value | Description |
 |---------|-------|-------------|
 | Jam detection | 5 seconds | No pulse received → jam error |
+| Settling window | 500 ms | After the target count: the motor is off, the count is still running (Design Principle 4b) |
 | History retention | 8 transactions | Ring buffer size for idempotency |
 
 **Jam Detection Logic:**

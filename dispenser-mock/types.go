@@ -54,6 +54,11 @@ type Metrics struct {
 	// Token-level metrics
 	RequestedTokens int `json:"requested_tokens"`
 	DispensedTokens int `json:"dispensed_tokens"`
+	// OverrunTokens counts the tokens that left the hopper past the requested
+	// quantity: the ones that fall while the disc coasts to a stop (issue #5).
+	// They are billed, so they are counted — a device that clamps `dispensed`
+	// at `quantity` hides them from everyone.
+	OverrunTokens int `json:"overrun_tokens"`
 }
 
 type ActiveTxInfo struct {

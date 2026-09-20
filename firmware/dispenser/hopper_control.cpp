@@ -2,6 +2,7 @@
 
 #include "hopper_control.h"
 #include "log.h"
+#include "pulse_filter.h"
 
 // Global instance pointer for ISR
 static HopperControl* hopperControlInstance = nullptr;
@@ -46,7 +47,17 @@ static volatile unsigned long last_pulse_time = 0;
 // the ISR itself once triggered.  0 = disabled (don't stop in ISR).
 static volatile uint8_t isr_stop_at = 0;
 
+// Which falling edges are coins (issue #5).  Everything closer than
+// COIN_PULSE_MIN_GAP_MS to the last accepted edge is a bouncing sensor or an
+// EMI spike from the motor, and counting it used to end the dispense one token
+// early — with nothing anywhere saying so.  The filter is a plain class in
+// IRAM; the decision stays inside the ISR, where the motor stop is.
+static PulseFilter coinPulseFilter((uint32_t)COIN_PULSE_MIN_GAP_MS * 1000UL);
+
 void IRAM_ATTR HopperControl::handleCoinPulse() {
+  if (!coinPulseFilter.accept(micros())) {
+    return;  // noise, not a coin: no count, and above all no motor stop
+  }
   pulse_count++;
   last_pulse_time = millis();
   // Stop motor immediately if target count reached, eliminating the up-to-10ms
@@ -95,6 +106,7 @@ void HopperControl::begin() {
 
   // Initialize pulse tracking
   pulse_count = 0;
+  coinPulseFilter.reset();
   isr_stop_at = 0;
   last_pulse_time = millis();
 
@@ -140,7 +152,16 @@ uint8_t HopperControl::getPulseCount() {
 
 void HopperControl::resetPulseCount() {
   pulse_count = 0;
+  // A new transaction starts with no history of edges, so its first pulse is
+  // never measured against the last one of the previous dispense.
+  coinPulseFilter.reset();
   last_pulse_time = millis();
+}
+
+// Edges the filter threw away since the last reset.  Diagnostics only: a
+// hopper whose sensor bounces says so here instead of quietly dispensing short.
+uint32_t HopperControl::getFilteredPulseCount() {
+  return coinPulseFilter.rejected();
 }
 
 bool HopperControl::checkJam() {

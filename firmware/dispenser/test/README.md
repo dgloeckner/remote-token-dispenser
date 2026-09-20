@@ -44,6 +44,12 @@ pio test -e native
   transaction uses it. The tests that assert the split itself (the four under
   "The request slot") deliberately call `requestDispense()` and `loop()`
   separately — that is the whole point of them.
+- **A transaction is not finished when the count is reached.** Since #5 the
+  target count stops the motor and opens the 500 ms settling window; the
+  transaction reaches `STATE_DONE` only in a later `loop()` pass. The
+  `loopUntilDone()` helper in `test_dispense_manager.cpp` is that pair — the
+  completing pass and the clock advance after it. The tests that assert the
+  window itself do the two steps by hand, which is the point of them.
 - Tests whose name ends in `KNOWN_DEVIATION_issue_N` pin behaviour that the
   protocol says is wrong and that issue N will change. They assert what the
   firmware does *today* so CI stays honest; the issue that fixes the bug

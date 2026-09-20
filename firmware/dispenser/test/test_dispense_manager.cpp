@@ -1013,6 +1013,11 @@ void test_coast_pulse_within_settling_window_is_counted_and_reported(void) {
     manager->loop();                       // target reached, motor off, settling
 
     hopper->simulatePulseISR();            // the token that was already falling
+    manager->loop();                       // still inside the window
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(3, counts->storedCount(),
+        "The coast token reaches RTC memory like every other one, while it can "
+        "still be recovered — the block is released only when the tx ends");
+
     _mock_millis += DISPENSE_SETTLING_MS;
     manager->loop();
 
@@ -1024,8 +1029,8 @@ void test_coast_pulse_within_settling_window_is_counted_and_reported(void) {
         "is legal, and it is what the terminal bills");
     TEST_ASSERT_EQUAL_UINT32_MESSAGE(3, manager->getDispensedTokens(),
         "… and the token metric counts what came out, not what was asked for");
-    TEST_ASSERT_EQUAL_UINT8_MESSAGE(3, counts->storedCount(),
-        "… and the coast token reached RTC memory like every other one");
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(1, manager->getOverrunTokens(),
+        "… and the one token past the quantity is the overrun");
 }
 
 void test_overrun_increments_metric(void) {
