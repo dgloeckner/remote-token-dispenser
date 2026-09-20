@@ -83,13 +83,19 @@ type DispenseRequest struct {
 	Quantity int    `json:"quantity"`
 }
 
-// DispenseResponse matches dispense endpoint responses
+// DispenseResponse matches dispense endpoint responses.
+//
+// CountReliable is required on every transaction response and therefore has no
+// omitempty: false must be sent as false.  It says whether Dispensed is exact
+// or only a lower bound — the device lost power mid-dispense and the live
+// count in RTC memory went with it (dispenser-protocol.md, issue #3).
 type DispenseResponse struct {
-	TxID      string `json:"tx_id"`
-	State     string `json:"state"`
-	Quantity  int    `json:"quantity"`
-	Dispensed int    `json:"dispensed"`
-	Error     string `json:"error,omitempty"`
+	TxID          string `json:"tx_id"`
+	State         string `json:"state"`
+	Quantity      int    `json:"quantity"`
+	Dispensed     int    `json:"dispensed"`
+	CountReliable bool   `json:"count_reliable"`
+	Error         string `json:"error,omitempty"`
 }
 
 // ErrorResponse for 4xx/5xx
@@ -105,6 +111,9 @@ type Transaction struct {
 	State     string // "idle", "dispensing", "done", "error"
 	Quantity  int
 	Dispensed int
-	Timestamp time.Time
-	StopChan  chan bool // For controlling dispensing goroutine
+	// CountReliable mirrors the firmware: true unless the transaction was
+	// recovered after a reset that took the live count with it.
+	CountReliable bool
+	Timestamp     time.Time
+	StopChan      chan bool // For controlling dispensing goroutine
 }

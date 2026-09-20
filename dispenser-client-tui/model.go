@@ -43,7 +43,11 @@ type DispenseState struct {
 	Dispensed int
 	State     string // "dispensing", "done", "error"
 	Error     string
-	StartTime time.Time
+	// CountUnreliable: the device says Dispensed is a lower bound, not a fact
+	// (count_reliable=false).  Shown, because the difference decides whether a
+	// human has to count the tray (issue #3).
+	CountUnreliable bool
+	StartTime       time.Time
 }
 
 // TestState tracks a test cycle
@@ -249,6 +253,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.dispense.Dispensed = msg.resp.Dispensed
 		m.dispense.State = msg.resp.State
 		m.dispense.Error = msg.resp.Error
+		m.dispense.CountUnreliable = msg.resp.CountReliable != nil && !*msg.resp.CountReliable
 		m.addLatency(msg.result.Latency)
 		m.addLog("GET", "/dispense/"+msg.resp.TxID, 200, msg.result.Latency,
 			fmt.Sprintf("dispensed=%d/%d state=%s", msg.resp.Dispensed, msg.resp.Quantity, msg.resp.State), false)

@@ -33,6 +33,8 @@ func GetScenarioForQuantity(quantity int) string {
 		return "error_power_fault"
 	case 15:
 		return "slow_dispense"
+	case 17:
+		return "power_loss_after_first"
 	default:
 		if quantity >= 16 && quantity <= 20 {
 			return "success"
@@ -50,6 +52,8 @@ func (m *MockDispenser) ExecuteScenario(tx *Transaction, scenario string) {
 		m.executeTimeoutPartial(tx)
 	case "crash_after_first":
 		m.executeCrashAfterFirst(tx)
+	case "power_loss_after_first":
+		m.executePowerLossAfterFirst(tx)
 	case "partial_dispense":
 		m.executePartialDispense(tx)
 	case "load_delay":
@@ -147,7 +151,15 @@ func (m *MockDispenser) executeTimeoutPartial(tx *Transaction) {
 	}
 }
 
-// executeCrashAfterFirst simulates crash (closes connection)
+// executeCrashAfterFirst simulates a watchdog reset / brownout: the connection
+// dies mid-response and the MCU restarts, but the RTC domain survives.
+//
+// What the device does on the way back up (issue #3): the flash record says
+// DISPENSING, the RTC block holds the live count, so the transaction is closed
+// as `error` with the EXACT count and count_reliable = true — and it stays in
+// the persisted history ring, so a later GET is a 200 and not a 404.  Before
+// #3 the mock threw the transaction away here, which is what made every
+// crashed checkout on the terminal a permanent "manual reconciliation" row.
 func (m *MockDispenser) executeCrashAfterFirst(tx *Transaction) {
 	m.mu.Lock()
 	m.metrics.TotalDispenses++
@@ -169,13 +181,49 @@ func (m *MockDispenser) executeCrashAfterFirst(tx *Transaction) {
 		m.mu.Unlock()
 	}
 
-	// Simulate ESP8266 restart after crash: brief delay, then lose all state.
-	// Real hardware: MCU resets, all RAM is lost. The terminal will receive 404
-	// on subsequent GET /dispense/{txId} calls, triggering manual reconciliation.
-	// Note: Connection is closed by the handler (hijack) before we reach here.
+	// The reboot itself: a couple of seconds of silence, then the recovered
+	// transaction.  Note: the connection is closed by the handler (hijack)
+	// before we reach here.
 	time.Sleep(2 * time.Second)
 	m.mu.Lock()
-	m.activeTx = nil // Clear without adding to history — restart loses all state
+	tx.State = StateError
+	tx.CountReliable = true // RTC memory came through the reset
+	m.metrics.Failures++
+	m.metrics.Partial++
+	m.activeTx = nil
+	m.addToHistoryLocked(tx)
+	m.mu.Unlock()
+}
+
+// executePowerLossAfterFirst is the same reset without the RTC domain: the
+// supply went away, the live count with it.  One token physically fell, but
+// the device cannot know that — all it has is the zero its flash record holds
+// from the start of the transaction.  It reports that lower bound and says the
+// count is not exact, instead of presenting the zero as a fact.
+func (m *MockDispenser) executePowerLossAfterFirst(tx *Transaction) {
+	m.mu.Lock()
+	m.metrics.TotalDispenses++
+	m.metrics.RequestedTokens += tx.Quantity
+	m.metrics.Crashes++
+	m.mu.Unlock()
+
+	timer := time.NewTimer(100 * time.Millisecond)
+	defer timer.Stop()
+
+	select {
+	case <-tx.StopChan:
+		return
+	case <-timer.C:
+	}
+
+	time.Sleep(1 * time.Second)
+	m.mu.Lock()
+	tx.State = StateError
+	tx.Dispensed = 0 // the lower bound from flash, not the token in the tray
+	tx.CountReliable = false
+	m.metrics.Failures++
+	m.activeTx = nil
+	m.addToHistoryLocked(tx)
 	m.mu.Unlock()
 }
 

@@ -116,10 +116,11 @@ func (m *MockDispenser) handleDispense(w http.ResponseWriter, r *http.Request) {
 		}
 		log.Printf("POST /dispense tx_id=%q idempotent hit, state=%s", req.TxID, existing.State)
 		writeJSON(w, http.StatusOK, DispenseResponse{
-			TxID:      existing.TxID,
-			State:     existing.State,
-			Quantity:  existing.Quantity,
-			Dispensed: existing.Dispensed,
+			TxID:          existing.TxID,
+			State:         existing.State,
+			Quantity:      existing.Quantity,
+			Dispensed:     existing.Dispensed,
+			CountReliable: existing.CountReliable,
 		})
 		return
 	}
@@ -150,12 +151,13 @@ func (m *MockDispenser) handleDispense(w http.ResponseWriter, r *http.Request) {
 
 	// Create transaction and set as active
 	tx := &Transaction{
-		TxID:      req.TxID,
-		State:     StateDispensing,
-		Quantity:  req.Quantity,
-		Dispensed: 0,
-		Timestamp: time.Now(),
-		StopChan:  make(chan bool, 1),
+		TxID:          req.TxID,
+		State:         StateDispensing,
+		Quantity:      req.Quantity,
+		Dispensed:     0,
+		CountReliable: true,
+		Timestamp:     time.Now(),
+		StopChan:      make(chan bool, 1),
 	}
 	m.activeTx = tx
 
@@ -191,15 +193,17 @@ func (m *MockDispenser) handleDispense(w http.ResponseWriter, r *http.Request) {
 
 	// Capture response values before starting goroutine to avoid data race
 	txID, state, quantity, dispensed := tx.TxID, tx.State, tx.Quantity, tx.Dispensed
+	reliable := tx.CountReliable
 
 	// Start scenario in a goroutine
 	go m.ExecuteScenario(tx, scenario)
 
 	writeJSON(w, http.StatusOK, DispenseResponse{
-		TxID:      txID,
-		State:     state,
-		Quantity:  quantity,
-		Dispensed: dispensed,
+		TxID:          txID,
+		State:         state,
+		Quantity:      quantity,
+		Dispensed:     dispensed,
+		CountReliable: reliable,
 	})
 }
 
@@ -231,10 +235,11 @@ func (m *MockDispenser) handleDispenseStatus(w http.ResponseWriter, r *http.Requ
 	}
 
 	writeJSON(w, http.StatusOK, DispenseResponse{
-		TxID:      tx.TxID,
-		State:     tx.State,
-		Quantity:  tx.Quantity,
-		Dispensed: tx.Dispensed,
+		TxID:          tx.TxID,
+		State:         tx.State,
+		Quantity:      tx.Quantity,
+		Dispensed:     tx.Dispensed,
+		CountReliable: tx.CountReliable,
 	})
 }
 

@@ -459,6 +459,11 @@ func (m Model) renderDispenseProgress() []string {
 		if d.Dispensed > 0 {
 			lines = append(lines, statusWarning.Render(fmt.Sprintf("  ⚠ Partial dispense: %d/%d tokens", d.Dispensed, d.Quantity)))
 		}
+		if d.CountUnreliable {
+			lines = append(lines, statusWarning.Render(
+				"  ⚠ Count is a LOWER BOUND — the device lost power mid-dispense"))
+			lines = append(lines, statusMuted.Render("    count the tray before reconciling"))
+		}
 		lines = append(lines, "")
 		lines = append(lines, fmt.Sprintf("  Press %s to retry", keyStyle.Render("ENTER")))
 	}
