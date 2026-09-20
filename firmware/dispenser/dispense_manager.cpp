@@ -3,7 +3,7 @@
 #include "dispense_manager.h"
 #include <string.h>
 
-DispenseManager::DispenseManager(FlashStorage& storage, HopperControl& hopper)
+DispenseManager::DispenseManager(IStorage& storage, IHopper& hopper)
   : flashStorage(storage), hopperControl(hopper) {
   memset(&active_tx, 0, sizeof(active_tx));
   active_tx.state = STATE_IDLE;
@@ -134,7 +134,7 @@ void DispenseManager::loop() {
     active_tx.state = STATE_DONE;
 
     // Clear active error on successful completion (self-healing)
-    hopperControl.errorHistory.clearActive();
+    hopperControl.clearActiveError();
 
     persistActiveTransaction();
     addToHistory(active_tx.tx_id, STATE_DONE, active_tx.quantity, active_tx.dispensed);

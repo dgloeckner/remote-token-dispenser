@@ -7,21 +7,25 @@
 #include "config.h"
 #include "error_decoder.h"
 #include "error_history.h"
+#include "interfaces.h"
 
-class HopperControl {
+class HopperControl : public IHopper {
 public:
   void begin();
-  void startMotor();
-  void stopMotor();
-  uint8_t getPulseCount();
-  void resetPulseCount();
+  void startMotor() override;
+  void stopMotor() override;
+  uint8_t getPulseCount() override;
+  void resetPulseCount() override;
   // Arm ISR-level stop: the coin-pulse ISR will write MOTOR_PIN LOW the
   // instant pulse_count reaches `count`, eliminating the up-to-10ms delay
   // between a pulse firing and the main loop() reacting.  Call this with the
   // desired quantity BEFORE startMotor().  stopMotor() clears it automatically.
-  void setMotorStopAt(uint8_t count);
-  bool checkJam();
-  bool isHopperLow();
+  void setMotorStopAt(uint8_t count) override;
+  bool checkJam() override;
+  bool isHopperLow() override;
+
+  // Self-healing: clears the active decoded hopper error (see IHopper).
+  void clearActiveError() override;
 
   // GPIO state accessors for health endpoint
   uint8_t getCoinPulseRaw();

@@ -1,50 +1,43 @@
-// Mock HopperControl for testing
+// Test double for HopperControl — implements the production IHopper interface.
+// It models the two hardware behaviours the manager depends on: the pulse
+// counter and the ISR-level motor stop armed via setMotorStopAt().
 #ifndef HOPPER_CONTROL_MOCK_H
 #define HOPPER_CONTROL_MOCK_H
 
 #include <stdint.h>
 
-// Minimal mocks for dependencies
-class ErrorDecoder {
-public:
-    void begin() {}
-    void update() {}
-};
+#include "interfaces.h"
 
-class ErrorHistory {
-public:
-    void begin() {}
-    void clearActive() {}
-    void* getActive() { return nullptr; }
-};
-
-class HopperControlMock {
+class HopperControlMock : public IHopper {
 private:
     uint8_t pulse_count;
     bool jam_detected;
     bool motor_running;
-    uint8_t isr_stop_at;  // Target count at which ISR should stop motor
+    uint8_t isr_stop_at;    // Target count at which the ISR stops the motor
+    int start_motor_calls;
+    int reset_pulse_calls;
+    int clear_error_calls;
 
 public:
-    ErrorDecoder errorDecoder;
-    ErrorHistory errorHistory;
-
-    HopperControlMock() : pulse_count(0), jam_detected(false), motor_running(false), isr_stop_at(0) {}
+    HopperControlMock()
+      : pulse_count(0), jam_detected(false), motor_running(false), isr_stop_at(0),
+        start_motor_calls(0), reset_pulse_calls(0), clear_error_calls(0) {}
 
     void begin() {}
 
-    void startMotor() {
+    void startMotor() override {
         motor_running = true;
+        start_motor_calls++;
     }
 
-    void stopMotor() {
+    void stopMotor() override {
         motor_running = false;
         isr_stop_at = 0;
     }
 
     // Arm ISR-level stop: motor GPIO is written LOW the moment pulse_count
     // reaches this target, without waiting for the main loop()
-    void setMotorStopAt(uint8_t count) {
+    void setMotorStopAt(uint8_t count) override {
         isr_stop_at = count;
     }
 
@@ -54,7 +47,7 @@ public:
 
     // Simulate a coin-pulse ISR firing (FALLING edge on COIN_PULSE_PIN).
     // Increments pulse_count and, if the count reaches isr_stop_at, stops
-    // the motor immediately — exactly what the real ISR will do after the fix.
+    // the motor immediately — exactly what the real ISR does.
     void simulatePulseISR() {
         pulse_count++;
         if (isr_stop_at > 0 && pulse_count >= isr_stop_at) {
@@ -63,28 +56,26 @@ public:
         }
     }
 
-    uint8_t getPulseCount() {
+    uint8_t getPulseCount() override {
         return pulse_count;
     }
 
-    void resetPulseCount() {
+    void resetPulseCount() override {
         pulse_count = 0;
+        reset_pulse_calls++;
     }
 
-    bool checkJam() {
+    bool checkJam() override {
         return jam_detected;
     }
 
-    bool isHopperLow() {
+    bool isHopperLow() override {
         return false;
     }
 
-    uint8_t getCoinPulseRaw() { return 0; }
-    bool isCoinPulseActive() { return false; }
-    uint8_t getErrorSignalRaw() { return 0; }
-    bool isErrorSignalActive() { return false; }
-    uint8_t getHopperLowRaw() { return 0; }
-    void updateErrorDecoder() {}
+    void clearActiveError() override {
+        clear_error_calls++;
+    }
 
     // Test helpers
     void setPulseCount(uint8_t count) {
@@ -98,6 +89,10 @@ public:
     bool isMotorRunning() const {
         return motor_running;
     }
+
+    int getStartMotorCalls() const { return start_motor_calls; }
+    int getResetPulseCalls() const { return reset_pulse_calls; }
+    int getClearErrorCalls() const { return clear_error_calls; }
 };
 
 #endif // HOPPER_CONTROL_MOCK_H

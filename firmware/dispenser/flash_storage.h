@@ -4,30 +4,19 @@
 #define FLASH_STORAGE_H
 
 #include <Arduino.h>
+#include "dispenser_types.h"
+#include "interfaces.h"
 
-// Transaction state enum
-enum TransactionState {
-  STATE_IDLE = 0,
-  STATE_DISPENSING = 1,
-  STATE_DONE = 2,
-  STATE_ERROR = 3
-};
+// TransactionState and PersistedTransaction live in dispenser_types.h so that
+// the native test build can use them without the ESP SDK.
 
-// Persisted transaction structure
-struct PersistedTransaction {
-  char tx_id[17];           // "a3f8c012" + null terminator
-  uint8_t quantity;         // 1-20 tokens
-  uint8_t dispensed;        // Actual count
-  TransactionState state;   // Current state
-};
-
-class FlashStorage {
+class FlashStorage : public IStorage {
 public:
-  void begin();
-  bool hasPersistedTransaction();
-  PersistedTransaction load();
-  void persist(const PersistedTransaction& tx);
-  void clear();
+  void begin() override;
+  bool hasPersistedTransaction() override;
+  PersistedTransaction load() override;
+  void persist(const PersistedTransaction& tx) override;
+  void clear() override;
 };
 
 #endif

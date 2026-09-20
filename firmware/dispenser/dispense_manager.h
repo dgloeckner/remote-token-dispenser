@@ -4,8 +4,8 @@
 #define DISPENSE_MANAGER_H
 
 #include <Arduino.h>
-#include "flash_storage.h"
-#include "hopper_control.h"
+#include "dispenser_types.h"
+#include "interfaces.h"
 
 #define RING_BUFFER_SIZE 8
 
@@ -19,7 +19,7 @@ struct Transaction {
 
 class DispenseManager {
 public:
-  DispenseManager(FlashStorage& storage, HopperControl& hopper);
+  DispenseManager(IStorage& storage, IHopper& hopper);
 
   void begin();
   void loop();  // Called from main loop for watchdog
@@ -42,8 +42,8 @@ public:
   uint32_t getDispensedTokens();
 
 private:
-  FlashStorage& flashStorage;
-  HopperControl& hopperControl;
+  IStorage& flashStorage;
+  IHopper& hopperControl;
 
   Transaction active_tx;
 

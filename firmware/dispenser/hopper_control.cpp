@@ -198,3 +198,8 @@ void HopperControl::updateErrorDecoder() {
     Serial.println(errorCodeToDescription(code));
   }
 }
+
+// Self-healing (IHopper): a completed dispense clears the active hopper error.
+void HopperControl::clearActiveError() {
+  errorHistory.clearActive();
+}
