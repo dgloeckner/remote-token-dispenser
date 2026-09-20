@@ -19,9 +19,11 @@ type fakeDevice struct {
 
 	apiKey string
 	// knobs for the negative tests
-	protocol    int
-	ignoreAuth  bool
-	rejectRetry bool // answer 409 to a retry of the active tx (the #2 bug)
+	protocol        int
+	ignoreAuth      bool
+	rejectRetry     bool // answer 409 to a retry of the active tx (the #2 bug)
+	acceptReusedQty bool // answer 200 to a known tx_id with another quantity
+	orphanOnReplay  bool // let an idempotent hit take the active tx with it
 
 	active  *fakeTx
 	history map[string]*fakeTx
@@ -111,10 +113,21 @@ func (f *fakeDevice) dispense(w http.ResponseWriter, r *http.Request) {
 			f.writeJSON(w, 409, map[string]string{"error": "busy", "active_tx_id": f.active.ID})
 			return
 		}
+		if f.active.Quantity != req.Quantity && !f.acceptReusedQty {
+			f.writeJSON(w, 409, map[string]string{"error": "tx_id reused"})
+			return
+		}
 		f.writeJSON(w, 200, f.respond(f.active))
 		return
 	}
 	if tx, ok := f.history[req.TxID]; ok {
+		if tx.Quantity != req.Quantity && !f.acceptReusedQty {
+			f.writeJSON(w, 409, map[string]string{"error": "tx_id reused"})
+			return
+		}
+		if f.orphanOnReplay {
+			f.active = tx // what the firmware did before #2
+		}
 		f.writeJSON(w, 200, f.respond(tx))
 		return
 	}

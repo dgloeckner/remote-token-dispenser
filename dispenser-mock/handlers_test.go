@@ -204,8 +204,9 @@ func TestDispenseReachesDoneAndReplayIsIdempotent(t *testing.T) {
 }
 
 // The protocol promises that a retry of the ACTIVE transaction gets its state
-// back, not 409 — the firmware does not do this yet (issue #2), which is
-// precisely the divergence the conformance suite exists to surface.
+// back, not 409. The firmware does this too since #2; the mock has always
+// implemented the promise, which is why the divergence only showed up once the
+// conformance suite ran against both.
 func TestRetryOfActiveTransactionIs200(t *testing.T) {
 	srv, _ := newTestServer(t)
 
@@ -218,6 +219,29 @@ func TestRetryOfActiveTransactionIs200(t *testing.T) {
 	}
 	if !strings.Contains(body, "tx-slow") {
 		t.Errorf("retry body does not name the transaction: %s", body)
+	}
+}
+
+// Same id, other quantity: not a retry but a client that contradicts itself.
+// Answering with the cached quantity would look like the confirmation of a
+// request nobody made (issue #2).
+func TestSameTxIDWithDifferentQuantityIs409(t *testing.T) {
+	srv, _ := newTestServer(t)
+
+	if status, _ := postDispense(t, srv, `{"tx_id":"tx-reuse","quantity":15}`); status != http.StatusOK {
+		t.Fatalf("first POST failed")
+	}
+
+	status, body := postDispense(t, srv, `{"tx_id":"tx-reuse","quantity":2}`)
+	if status != http.StatusConflict {
+		t.Fatalf("reused id with another quantity = %d, want 409 (body %s)", status, body)
+	}
+	var errResp ErrorResponse
+	if err := json.Unmarshal([]byte(body), &errResp); err != nil {
+		t.Fatalf("body is not JSON: %v", err)
+	}
+	if errResp.Error != "tx_id reused" {
+		t.Errorf("error = %q, want %q", errResp.Error, "tx_id reused")
 	}
 }
 

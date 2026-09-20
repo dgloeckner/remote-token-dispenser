@@ -102,8 +102,18 @@ func (m *MockDispenser) handleDispense(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Idempotency check: return existing transaction if found
+	// Idempotency check: return existing transaction if found — including the
+	// one that is dispensing right now, which is the retry the terminal makes
+	// when its 3 s timeout fires (see issue #2).
 	if existing := m.FindTransaction(req.TxID); existing != nil {
+		if existing.Quantity != req.Quantity {
+			// Same id, other quantity: the caller contradicted itself. Answering
+			// with the old quantity would look like a retry of a request nobody made.
+			log.Printf("POST /dispense tx_id=%q rejected: known id with quantity %d, was %d",
+				req.TxID, req.Quantity, existing.Quantity)
+			writeJSON(w, http.StatusConflict, ErrorResponse{Error: "tx_id reused"})
+			return
+		}
 		log.Printf("POST /dispense tx_id=%q idempotent hit, state=%s", req.TxID, existing.State)
 		writeJSON(w, http.StatusOK, DispenseResponse{
 			TxID:      existing.TxID,

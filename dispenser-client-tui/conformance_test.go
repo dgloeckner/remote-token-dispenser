@@ -49,7 +49,8 @@ func TestSuiteIsGreenAgainstConformingDevice(t *testing.T) {
 	}
 }
 
-// …and red against the two deviations this epic is about.
+// …and red against the deviations this epic is about. The case carries no
+// Note any more: #2 fixed the firmware, so it is no longer known-red anywhere.
 func TestSuiteCatchesActiveRetryRejection(t *testing.T) {
 	dev := newFakeDevice("k")
 	dev.rejectRetry = true // the #2 bug, as the firmware has it today
@@ -62,8 +63,33 @@ func TestSuiteCatchesActiveRetryRejection(t *testing.T) {
 	if got.Status != "fail" {
 		t.Errorf("post_retry_while_dispensing_is_200 = %s, want fail against a device that answers 409", got.Status)
 	}
-	if got.Note == "" {
-		t.Error("the case must carry a note naming the issue that fixes it")
+}
+
+func TestSuiteCatchesReusedTxIDAcceptance(t *testing.T) {
+	dev := newFakeDevice("k")
+	dev.acceptReusedQty = true // a device that answers the old quantity as if it matched
+	srv := dev.server()
+	defer srv.Close()
+
+	report := RunCases(newCtx(srv.URL, "k", TargetMock), ConformanceCases(), "different_quantity")
+
+	got := findCase(t, report, "post_same_id_different_quantity_is_409")
+	if got.Status != "fail" {
+		t.Errorf("post_same_id_different_quantity_is_409 = %s, want fail against a device that accepts it", got.Status)
+	}
+}
+
+func TestSuiteCatchesOrphanedActiveTransaction(t *testing.T) {
+	dev := newFakeDevice("k")
+	dev.orphanOnReplay = true // the second half of #2, as the firmware had it
+	srv := dev.server()
+	defer srv.Close()
+
+	report := RunCases(newCtx(srv.URL, "k", TargetMock), ConformanceCases(), "does_not_orphan_active")
+
+	got := findCase(t, report, "replay_old_tx_during_dispense_does_not_orphan_active")
+	if got.Status != "fail" {
+		t.Errorf("replay_old_tx_during_dispense_does_not_orphan_active = %s, want fail against a device that orphans it", got.Status)
 	}
 }
 

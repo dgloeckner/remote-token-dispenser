@@ -241,8 +241,6 @@ func ConformanceCases() []Case {
 		},
 		{
 			Name: "post_retry_while_dispensing_is_200",
-			Note: "RED against the firmware until #2: startDispense() looks only in the history ring, " +
-				"so a retry of the running transaction is answered 409 busy",
 			Run: func(c *Ctx) error {
 				txID := c.NextTxID("rt")
 				if _, res := c.Client.Dispense(txID, c.SlowQuantity()); res.Error != nil {
@@ -259,6 +257,68 @@ func ConformanceCases() []Case {
 				}
 				if !strings.Contains(got.Body, txID) {
 					return fmt.Errorf("retry answered a body without the tx_id: %s", got.Body)
+				}
+				return nil
+			},
+		},
+		{
+			Name: "post_same_id_different_quantity_is_409",
+			Run: func(c *Ctx) error {
+				txID := c.NextTxID("ru")
+				if _, res := c.Client.Dispense(txID, c.SlowQuantity()); res.Error != nil {
+					return fmt.Errorf("first POST failed: %v", res.Error)
+				}
+				defer func() { _, _ = c.waitForFinalState(txID, 60*time.Second) }()
+
+				got, err := c.postJSON(fmt.Sprintf(`{"tx_id":%q,"quantity":1}`, txID), true)
+				if err != nil {
+					return err
+				}
+				if err := wantStatus(got, 409); err != nil {
+					return fmt.Errorf("a known tx_id with another quantity is not a retry: %w", err)
+				}
+				if !strings.Contains(got.Body, "tx_id reused") {
+					return fmt.Errorf("409 body does not say tx_id reused: %s", got.Body)
+				}
+				return nil
+			},
+		},
+		{
+			Name: "replay_old_tx_during_dispense_does_not_orphan_active",
+			Run: func(c *Ctx) error {
+				// The half of #2 that nobody sees: an idempotent hit used to
+				// overwrite the active transaction, which switched the jam
+				// watchdog off while the motor was running.
+				old := c.NextTxID("ol")
+				if _, res := c.Client.Dispense(old, 1); res.Error != nil {
+					return fmt.Errorf("POST of the first tx failed: %v", res.Error)
+				}
+				if _, err := c.waitForFinalState(old, 30*time.Second); err != nil {
+					return err
+				}
+
+				running := c.NextTxID("rn")
+				if _, res := c.Client.Dispense(running, c.SlowQuantity()); res.Error != nil {
+					return fmt.Errorf("POST of the running tx failed: %v", res.Error)
+				}
+				if _, res := c.Client.Dispense(old, 1); res.Error != nil {
+					return fmt.Errorf("replay of the finished tx failed: %v", res.Error)
+				}
+
+				health, res := c.Client.Health()
+				if health == nil {
+					return fmt.Errorf("no health document: %v", res.Error)
+				}
+				if health.Dispenser != "dispensing" {
+					return fmt.Errorf("device reports %q while a transaction is running; "+
+						"the replay took the active transaction with it", health.Dispenser)
+				}
+				final, err := c.waitForFinalState(running, 60*time.Second)
+				if err != nil {
+					return err
+				}
+				if final.State != "done" {
+					return fmt.Errorf("the running transaction ended in %q, expected done", final.State)
 				}
 				return nil
 			},
