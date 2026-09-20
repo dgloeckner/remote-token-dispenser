@@ -14,6 +14,12 @@ var (
 )
 
 func main() {
+	// Subcommands come before the flag package sees anything: `conformance`
+	// is a headless protocol run, the bare command is the TUI.
+	if len(os.Args) > 1 && os.Args[1] == "conformance" {
+		os.Exit(runConformance(os.Args[2:]))
+	}
+
 	endpoint := flag.String("endpoint", "http://192.168.4.20", "Dispenser base URL")
 	apiKey := flag.String("api-key", "", "API key for dispenser (or TOKEN_DISPENSER_API_KEY env)")
 	timeout := flag.Duration("timeout", 3*time.Second, "HTTP request timeout")
@@ -24,6 +30,7 @@ func main() {
 🪙 Token Dispenser TUI — k9s-style testing dashboard
 
 Usage: token-tui [flags]
+       token-tui conformance [flags]   protocol conformance run (headless)
 
 Flags:
 `)
@@ -36,6 +43,8 @@ Environment:
 Examples:
   token-tui --endpoint http://192.168.4.20 --api-key mysecret
   TOKEN_DISPENSER_API_KEY=mysecret token-tui
+  token-tui conformance --endpoint http://127.0.0.1:8080 --api-key dev --target mock
+  token-tui conformance --endpoint http://192.168.4.20 --api-key mysecret --target simulator
 
 Keys:
   1/2/3/4    Switch tabs (Dashboard / Dispense / Log / Burst)

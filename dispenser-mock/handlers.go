@@ -46,6 +46,7 @@ func (m *MockDispenser) handleHealth(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := HealthResponse{
+		Protocol: ProtocolVersion,
 		Status:   "ok",
 		Uptime:   m.Uptime(),
 		Firmware: "mock-v1.0.0",
@@ -54,8 +55,8 @@ func (m *MockDispenser) handleHealth(w http.ResponseWriter, r *http.Request) {
 			IP:   "192.168.1.100",
 			SSID: "mock-network",
 		},
-		Dispenser: dispenserState,
-		GPIO: &GPIOInfo{},
+		Dispenser:    dispenserState,
+		GPIO:         &GPIOInfo{},
 		Metrics:      m.GetMetrics(),
 		Error:        errorInfo,
 		ErrorHistory: m.GetErrorHistory(),

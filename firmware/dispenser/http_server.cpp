@@ -60,6 +60,7 @@ const char* HttpServer::stateToString(TransactionState state) {
 void HttpServer::handleHealth(AsyncWebServerRequest *request) {
   JsonDocument doc;
 
+  doc["protocol"] = PROTOCOL_VERSION;
   doc["status"] = "ok";
   doc["uptime"] = millis() / 1000;
   doc["firmware"] = FIRMWARE_VERSION;

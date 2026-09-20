@@ -20,6 +20,11 @@
   #define SUBNET IPAddress(255, 255, 255, 0)
 #endif
 
+// Protocol version handshake (dispenser-protocol.md).
+// There are no devices in the field: protocol 2 replaces protocol 1 outright,
+// and a client refuses any other version instead of adapting to it.
+#define PROTOCOL_VERSION 2
+
 // API Authentication - CHANGE THIS IN config.local.h
 #ifndef API_KEY
   #define API_KEY "change-this-secret-key-here"

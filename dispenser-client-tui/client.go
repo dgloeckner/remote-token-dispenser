@@ -9,8 +9,14 @@ import (
 	"time"
 )
 
+// ProtocolVersion is the only protocol version this client speaks.
+// The handshake is deliberately strict: there are no devices in the field, so
+// a mismatch is a bug to fix, never something to adapt to at runtime.
+const ProtocolVersion = 2
+
 // HealthResponse matches GET /health from the dispenser protocol
 type HealthResponse struct {
+	Protocol     int           `json:"protocol"`
 	Status       string        `json:"status"`
 	Uptime       int           `json:"uptime"`
 	Firmware     string        `json:"firmware"`
@@ -159,6 +165,10 @@ func (c *DispenserClient) Health() (*HealthResponse, APIResult) {
 		return nil, APIResult{StatusCode: resp.StatusCode, Error: err, Latency: latency}
 	}
 
+	if err := CheckProtocol(health.Protocol); err != nil {
+		return &health, APIResult{StatusCode: 200, Error: err, Latency: latency}
+	}
+
 	return &health, APIResult{StatusCode: 200, Latency: latency}
 }
 
@@ -260,4 +270,16 @@ func (c *DispenserClient) Status(txID string) (*DispenseResponse, APIResult) {
 	}
 
 	return &dispResp, result
+}
+
+// CheckProtocol enforces the version handshake from dispenser-protocol.md.
+// A device that reports anything but ProtocolVersion is refused outright.
+func CheckProtocol(got int) error {
+	if got == ProtocolVersion {
+		return nil
+	}
+	if got == 0 {
+		return fmt.Errorf("device reports no protocol version; this client speaks protocol %d only", ProtocolVersion)
+	}
+	return fmt.Errorf("device speaks protocol %d, this client speaks protocol %d only", got, ProtocolVersion)
 }

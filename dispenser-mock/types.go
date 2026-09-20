@@ -2,8 +2,14 @@ package main
 
 import "time"
 
+// ProtocolVersion is the version handshake reported by GET /health.
+// It must match the version in dispenser-protocol.md and the firmware's
+// PROTOCOL_VERSION; a client refuses any other value.
+const ProtocolVersion = 2
+
 // HealthResponse matches GET /health from the dispenser protocol
 type HealthResponse struct {
+	Protocol     int           `json:"protocol"`
 	Status       string        `json:"status"`
 	Uptime       int           `json:"uptime"`
 	Firmware     string        `json:"firmware"`
