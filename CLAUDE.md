@@ -95,11 +95,11 @@ The Pi maintains the transaction source of truth in local SQLite:
 2. ESP8266 dispenses tokens and tracks progress via `dispensed` count
 3. Pi polls status and updates local record with actual outcome
 
-Transaction fields: `tx_id`, `user_id`, `quantity`, `dispensed`, `state`, `timestamp`
+Transaction fields: `tx_id`, `user_id`, `quantity`, `dispensed`, `count_reliable`, `state`, `timestamp`
 
 ## Crash Safety
 
-**ESP8266 persistence**: Writes `{tx_id, quantity, dispensed}` to flash on state transitions. On reboot, recovers partial dispense state.
+**ESP8266 persistence**: writes one checksummed record to flash on state transitions — the active transaction **and** the history ring, so a finished transaction is still found after a reboot. The live token count goes to **RTC user memory** as each token drops; it survives a watchdog reset, an exception and a brownout, and costs no flash wear. On reboot the firmware recovers the count from it (`count_reliable: true`), or, after a real power loss, reports the flash count as a lower bound with `count_reliable: false`. Never add a flash commit per token — that was considered and rejected (owner decision, 2026-09-20).
 
 **Pi recovery**: On reboot, queries local DB for incomplete transactions, polls ESP8266 for current state, reconciles and resumes or completes.
 
@@ -188,4 +188,4 @@ ESP8266 tracks exactly one active transaction. States:
 ### Error Handling
 - Hopper jam: partial dispense recorded with exact `dispensed` count
 - Network timeout: idempotent retry safe
-- Power loss: flash persistence enables recovery
+- Power loss: flash persistence enables recovery; `count_reliable: false` says the count is a lower bound

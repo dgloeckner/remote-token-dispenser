@@ -31,6 +31,12 @@ pio test -e native
   itself, not those in its subdirectories, so a definition parked next to its
   header is never built and the link ends in `undefined reference`. Defining
   it in the header instead only trades that for a duplicate symbol.
+- **A reboot is a new manager over the mocks that survived it.** The `reboot()`
+  helper in `test_dispense_manager.cpp` throws the DispenseManager away and
+  builds a new one on the same `FlashStorageMock` and `CountMemoryMock` — which
+  is what a reset looks like from the manager's side. Which reset it was is one
+  call: `counts->loseRtcMemory()` is a power loss, doing nothing is a watchdog
+  reset. Both cases matter (issue #3), so both are tested.
 - Tests whose name ends in `KNOWN_DEVIATION_issue_N` pin behaviour that the
   protocol says is wrong and that issue N will change. They assert what the
   firmware does *today* so CI stays honest; the issue that fixes the bug

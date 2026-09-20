@@ -840,27 +840,33 @@ sequenceDiagram
     participant Client
     participant ESP8266
     participant Flash as ESP8266 Flash
+    participant RTC as RTC user memory
     participant Hopper
 
-    Note over ESP8266: Dispensing tx "abc"<br/>quantity: 3<br/>dispensed: 2
+    Note over ESP8266: Dispensing tx "abc"<br/>quantity: 3
 
-    ESP8266->>Flash: Persist {tx: "abc", qty: 3, dispensed: 2}
+    ESP8266->>Flash: Persist record {active: "abc", qty: 3, dispensed: 0} + ring
     Flash-->>ESP8266: OK
 
-    Note over ESP8266: 💥 POWER LOSS
+    Hopper-->>ESP8266: token 1, token 2
+    ESP8266->>RTC: {tx: "abc", dispensed: 2} (per token, no flash erase)
+
+    Note over ESP8266: 💥 WATCHDOG RESET / BROWNOUT
 
     Note over ESP8266: ...reboot...
 
     ESP8266->>ESP8266: Boot sequence
-    ESP8266->>Flash: Read persisted state
-    Flash-->>ESP8266: {tx: "abc", qty: 3, dispensed: 2}
+    ESP8266->>Flash: Read persisted record
+    Flash-->>ESP8266: {active: "abc", qty: 3, dispensed: 0} + ring
+    ESP8266->>RTC: Read live count for "abc"
+    RTC-->>ESP8266: 2 (intact, same tx_id)
 
-    ESP8266->>ESP8266: Recover to error state<br/>(incomplete transaction)
-    Note over ESP8266: State: error<br/>tx "abc", dispensed=2
+    ESP8266->>ESP8266: Recover to error state<br/>with the exact count
+    Note over ESP8266: State: error<br/>tx "abc", dispensed=2, count_reliable=true
 
     Client->>ESP8266: GET /dispense/abc<br/>(periodic poll after timeout)
 
-    ESP8266-->>Client: 200 {state: "error", error: "reboot",<br/>quantity: 3, dispensed: 2}
+    ESP8266-->>Client: 200 {state: "error", error: "reboot",<br/>quantity: 3, dispensed: 2, count_reliable: true}
 
     Client->>Client: Record partial dispense
     Note over Client: Storage: state=partial<br/>dispensed=2
@@ -868,6 +874,13 @@ sequenceDiagram
     Client->>Client: Show error to user
     Note over Client: "Partial dispense: 2/3 tokens.<br/>Contact staff."
 ```
+
+**After a real power loss** the RTC block is gone too. The recovery then reports
+the count from flash as a **lower bound**, with `count_reliable: false`, instead
+of presenting it as a fact — see `dispenser-protocol.md` § Design Principles 4
+and 4a. The finished transaction stays in the **persisted** history ring either
+way, so a later `GET /dispense/{tx_id}` is a `200` and a `404` keeps its single
+meaning: the request never arrived.
 
 ### Scenario 2: Client Crashes Mid-Transaction
 

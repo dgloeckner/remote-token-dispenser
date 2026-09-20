@@ -71,15 +71,48 @@ it any more.
 The dispenser is a single physical device. Only one transaction can be active at a time. A request for **another** transaction receives `409 Conflict`; a request for the active one is the idempotent retry of principle 1 and receives `200`.
 
 ### 4. Crash-Safe State Persistence
-The ESP8266 persists transaction state to flash memory on every state transition:
+Two memories, because they answer two different questions.
+
+**Flash (EEPROM)** holds one record, written on every state transition: the
+active transaction *and* the ring of the last 8 finished ones, sealed with a
+magic, a layout version and a CRC-16. A record that fails any of the three is
+treated as empty, never as data.
+
 ```cpp
-{tx_id: "abc123", quantity: 3, dispensed: 2, state: "dispensing"}
+{magic, layout_version, crc16,
+ active: {tx_id, quantity, dispensed, state, count_reliable},
+ ring[8], ring_index}
 ```
 
+**RTC user memory** holds the live token count, rewritten as each token drops.
+It survives a watchdog reset, an exception and a brownout — the resets a motor
+starting on a shared supply actually causes — and costs no flash wear. A
+commit per token was considered and rejected (owner decision, 2026-09-20): one
+extra sector erase per token, to cover only the power-loss case that
+`count_reliable` already reports honestly.
+
 On reboot, the firmware:
-- Loads persisted state
-- If crashed during `dispensing` → marks as `error` with exact partial count
+- Loads the record; the ring comes back with it, so a **finished transaction
+  is still a `200` after a reboot** and a `404` means "this request never
+  arrived" again
+- If it crashed during `dispensing`, it marks the transaction `error` and
+  recovers the count:
+  - RTC block present and belonging to this `tx_id` → that is the count,
+    `count_reliable: true`
+  - RTC block gone (a real power loss) → the persisted count is a **lower
+    bound**, `count_reliable: false`
 - Clients can query final state via `GET /dispense/{tx_id}`
+
+### 4a. `count_reliable`: a count that says how sure it is
+`count_reliable` is **required on every transaction response**. There is no
+default for a reader to fall back on, on purpose: a missing field would let a
+client read "we do not know how many fell" as "we counted zero", which is the
+one reading that bills nothing while the tray is full.
+
+- `true` — `dispensed` is exact.
+- `false` — `dispensed` is a **lower bound**: at least that many tokens left
+  the hopper, possibly more. Bill the bound and put the difference in front of
+  a human; do not treat it as a completed reconciliation.
 
 ### 5. Dispense-First, Pay-After
 Tokens are **physically dispensed before payment processing**. This ensures:
@@ -129,6 +162,7 @@ The following endpoints do NOT require authentication:
 | `quantity` | integer | 1-20 tokens | `3` |
 | `state` | enum | `"idle"`, `"dispensing"`, `"done"`, `"error"` | `"dispensing"` |
 | `timestamp` | integer | Seconds since boot (uptime) | `84230` |
+| `count_reliable` | boolean | `false` = `dispensed` is a lower bound, not a fact | `true` |
 
 ---
 
@@ -307,7 +341,8 @@ Content-Type: application/json
   "tx_id": "a3f8c012",
   "state": "dispensing",
   "quantity": 3,
-  "dispensed": 0
+  "dispensed": 0,
+  "count_reliable": true
 }
 ```
 
@@ -317,7 +352,8 @@ Content-Type: application/json
   "tx_id": "a3f8c012",
   "state": "done",
   "quantity": 3,
-  "dispensed": 3
+  "dispensed": 3,
+  "count_reliable": true
 }
 ```
 
@@ -422,7 +458,19 @@ X-API-Key: your-secret-api-key-here
   "tx_id": "a3f8c012",
   "state": "dispensing",
   "quantity": 3,
-  "dispensed": 2
+  "dispensed": 2,
+  "count_reliable": true
+}
+```
+
+**Response (200 OK) - Recovered after a power loss:**
+```json
+{
+  "tx_id": "a3f8c012",
+  "state": "error",
+  "quantity": 5,
+  "dispensed": 0,
+  "count_reliable": false
 }
 ```
 
@@ -434,6 +482,7 @@ X-API-Key: your-secret-api-key-here
 | `state` | string | Current state: `"dispensing"`, `"done"`, `"error"` |
 | `quantity` | integer | Requested token count |
 | `dispensed` | integer | Actual tokens dispensed so far |
+| `count_reliable` | boolean | **Required.** `false` means `dispensed` is a lower bound (see Design Principle 4a) |
 
 **Response (400 Bad Request) - Invalid tx_id:**
 ```json
@@ -457,7 +506,8 @@ X-API-Key: your-secret-api-key-here
 ```
 
 Transaction not found means:
-- `tx_id` never existed
+- `tx_id` never existed — **including across a reboot**: the history ring is
+  persisted, so a reboot does not turn a finished transaction into a `404`
 - Transaction expired from history (ring buffer overflow after 8+ new transactions)
 
 **Usage:**
@@ -568,6 +618,12 @@ The table lives in `dispenser-client-tui/conformance_cases.go`. Adding to it:
   issue that will fix it, so a red line reads as *known* or *new* at a glance.
 - Known-red today: `post_while_error_is_409` (firmware accepts a dispense while
   a hardware error is active — issue #6). It is green against the mock.
+- The two resets of Design Principle 4 are covered from both sides: the mock
+  runs `crashed_tx_is_found_after_reboot` and `power_loss_reports_count_unreliable`
+  in CI (its scenarios for quantity 5 and 17), and on a real device the same
+  two cases are `reset_mid_dispense_reports_partial_count` (press RST) and
+  `power_loss_mid_dispense_reports_count_unreliable` (cut the power), which
+  need `--interactive`.
 
 Native unit tests cover the firmware logic that needs no network
 (`firmware/dispenser/test/`); the conformance suite covers everything that only
@@ -664,18 +720,35 @@ If (millis() - last_pulse_time > 5000ms):
 
 ---
 
-### ESP8266 Crash Mid-Dispense
+### ESP8266 Reset Mid-Dispense
 
-**Scenario:** Power loss to ESP8266 while motor running.
+**Scenario:** the ESP8266 resets while the motor is running. Which reset it was
+decides what the count is worth, so they are two scenarios, not one.
 
-**Recovery:**
+**A. Watchdog reset, exception, brownout — RTC memory survives**
 1. ESP8266 reboots
-2. Firmware loads persisted state from flash
-3. Detects `state == "dispensing"` on boot
-4. Marks as `error` state (unknown partial count)
-5. Client queries `GET /dispense/{tx_id}` → sees `error` with last known `dispensed` count
+2. Firmware loads the persisted record; the history ring comes back with it
+3. Detects `state == "dispensing"`
+4. Reads the live count from the RTC block, which belongs to this `tx_id`
+5. Marks the transaction `error` with that **exact** count and
+   `count_reliable: true`
 
-**Result:** Partial count recorded, transaction marked as failed.
+**Result:** every token that reached the tray is billed.
+
+**B. Real power loss — RTC memory is gone**
+1.–3. as above
+4. The RTC block is absent or belongs to another transaction
+5. Marks the transaction `error` with the count from flash — the zero written
+   at the start, or whatever the last transition stored — and
+   `count_reliable: false`
+
+**Result:** a lower bound that says it is one. The terminal bills the bound and
+puts the difference in front of a human. This is the case a flash commit per
+token would have covered; it was rejected in favour of reporting it honestly.
+
+**After either:** the transaction stays in the persisted ring, so
+`GET /dispense/{tx_id}` answers `200` after the reboot — and a `404` keeps its
+one meaning, "the request never arrived".
 
 ---
 
@@ -950,33 +1023,55 @@ $ curl http://192.168.4.20/health
 
 ### Ring Buffer
 
-The ESP8266 maintains a ring buffer of the last **8 transactions** for idempotency:
-
-```cpp
-struct HistoryEntry {
-  char tx_id[17];
-  TransactionState state;
-  uint8_t quantity;
-  uint8_t dispensed;
-};
-HistoryEntry history[8];
-```
-
-When the 9th transaction arrives, it overwrites the oldest entry. Clients should not reuse transaction IDs from more than 8 transactions ago. The ring buffer stores complete transaction data (state, quantity, dispensed count) to support full idempotency.
+The ESP8266 keeps the last **8 transactions** for idempotency, and keeps them
+**in flash**: the ring is part of the persisted record, so it survives a
+reboot. When the 9th transaction arrives it overwrites the oldest entry.
+Clients should not reuse transaction IDs from more than 8 transactions ago.
 
 ### Flash Persistence Format
 
 ```cpp
 struct PersistedTransaction {
-  uint8_t magic;           // 0xAB validation byte
   char tx_id[17];          // Null-terminated transaction ID
   uint8_t quantity;        // Requested count
   uint8_t dispensed;       // Actual count
-  TransactionState state;  // Current state
+  uint8_t state;           // TransactionState, as one byte
+  uint8_t count_reliable;  // 1 = dispensed is exact
+};
+
+struct PersistedRecord {
+  uint32_t magic;          // "F3TX"
+  uint16_t layout_version;
+  uint16_t crc16;          // over the record with this field zeroed
+  PersistedTransaction active;      // state IDLE = no active transaction
+  PersistedTransaction ring[8];
+  uint8_t ring_index;
+  uint8_t reserved[3];
 };
 ```
 
-Written to EEPROM address 0-64 on every state transition.
+Written to EEPROM address 0 on every state transition — **one commit, not one
+per token**. A successful dispense costs exactly two: the start and the finish.
+The record is no longer cleared on completion; the ring *is* the record.
+
+`state` is a `uint8_t` and not the enum: this struct is a wire format between
+two builds of the firmware, and the width of an enum is not promised by the
+language. Magic, layout version and CRC are all three checked on load, and a
+record that fails any of them is empty, never data.
+
+### RTC Count Block
+
+```cpp
+struct RtcCountBlock {
+  uint32_t magic;          // "F3RC"
+  char tx_id[20];
+  uint32_t dispensed;
+  uint32_t crc;
+};
+```
+
+Written to RTC user memory as each token drops. A block whose `tx_id` is not
+the one being recovered is ignored — it belongs to an earlier customer.
 
 ---
 
@@ -1015,6 +1110,16 @@ All inputs validated:
   that is dispensing returns its state (`200`) instead of `409 busy`, an
   idempotent hit no longer replaces the active transaction, and a known `tx_id`
   with a different `quantity` is refused with `409 tx_id reused`
+- **The count and the history survive a reset (#3):** the live token count is
+  kept in RTC user memory and recovered after a watchdog reset, an exception or
+  a brownout, so a reset mid-dispense no longer reports `dispensed: 0` while
+  the tray is full; a real power loss is reported as a lower bound with
+  `count_reliable: false`. `count_reliable` is now a **required field on every
+  transaction response**. The history ring is persisted with the active
+  transaction, so a finished transaction is still found after a reboot and a
+  `404` means "never arrived" again. The flash record carries a magic, a layout
+  version and a CRC-16, and a completed dispense costs two commits instead of
+  two plus an erase.
 - Known deviation of the firmware from this document: issue #6 (dispense while
   a hardware error is active); the suite reports it per case rather than
   hiding it
