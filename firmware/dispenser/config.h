@@ -98,7 +98,7 @@
 // The fallback keeps a plain checkout of the sketch compiling in the Arduino
 // IDE, which passes no flags.
 #ifndef FIRMWARE_VERSION
-  #define FIRMWARE_VERSION "1.2.0"
+  #define FIRMWARE_VERSION "1.3.0"
 #endif
 
 // Include local configuration (not tracked in git)

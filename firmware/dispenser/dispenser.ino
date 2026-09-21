@@ -8,12 +8,14 @@
 #include "hopper_control.h"
 #include "dispense_manager.h"
 #include "http_server.h"
+#include "wifi_supervisor.h"
 
 FlashStorage flashStorage;
 HopperControl hopperControl;
 RtcCountMemory rtcCountMemory;
 DispenseManager dispenseManager(flashStorage, hopperControl, rtcCountMemory);
-HttpServer httpServer(dispenseManager, hopperControl);
+WifiSupervisor wifiSupervisor;
+HttpServer httpServer(dispenseManager, hopperControl, wifiSupervisor);
 
 void setup() {
   // LOG_BAUD, not 9600: platformio.ini's monitor_speed has always said 115200,
@@ -25,6 +27,21 @@ void setup() {
   LOG_INFO("connecting to WiFi: %s", WIFI_SSID);
 
   WiFi.mode(WIFI_STA);
+  // Three SDK defaults this device cannot live with (issue #7):
+  //
+  // - Modem sleep is the default for WIFI_STA.  On an ESP8266 that answers
+  //   HTTP it is the usual cause of a request that takes seconds or times out
+  //   once and succeeds on retry — the pattern the terminal's retry logic was
+  //   written around.  The dispenser is mains-powered; there is nothing to
+  //   save here.
+  // - `persistent(false)`: the SDK otherwise writes the credentials to flash
+  //   on every begin(), which is a flash write per boot for data that comes
+  //   from config.local.h anyway.
+  // - `setAutoReconnect(true)` is stated rather than assumed: it is the first
+  //   line of defence, and the supervisor in loop() is the second.
+  WiFi.setSleepMode(WIFI_NONE_SLEEP);
+  WiFi.persistent(false);
+  WiFi.setAutoReconnect(true);
   WiFi.config(STATIC_IP, GATEWAY, SUBNET);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
@@ -37,8 +54,16 @@ void setup() {
   if (WiFi.status() == WL_CONNECTED) {
     LOG_INFO("WiFi connected, IP %s", WiFi.localIP().toString().c_str());
   } else {
-    LOG_ERROR("WiFi connection failed after %d attempts", attempts);
+    // Not fatal any more, and not final either: the HTTP server still starts
+    // (a device on a flaky AP that joins a second later should serve), but the
+    // supervisor below now restarts the board if the link is still down a
+    // minute from here.  Before #7 this line was the end of the story and the
+    // only way back was a walk to the boathouse.
+    LOG_ERROR("WiFi connection failed after %d attempts; the supervisor will "
+              "restart in %lus unless it joins", attempts, WIFI_RESTART_AFTER_MS / 1000);
   }
+
+  wifiSupervisor.begin(WiFi.status() == WL_CONNECTED, millis());
 
   flashStorage.begin();
 
@@ -70,6 +95,23 @@ void loop() {
 
   // Update error decoder (check timeouts, process new errors)
   hopperControl.updateErrorDecoder();
+
+  // The connectivity supervisor (issue #7).  The rule itself is unit-tested
+  // in WifiSupervisor; what is left here is the two SDK calls it needs.  It
+  // runs AFTER the dispense logic and never fires while the motor is on, so a
+  // restart can only ever happen between transactions.
+  //
+  // A restart clears the device fault, exactly as any boot does — that is the
+  // whole of owner decision 3 and not a hole to patch: a jam that is still
+  // there faults the next dispense again, having dispensed and billed nothing.
+  if (wifiSupervisor.update(WiFi.status() == WL_CONNECTED,
+                            dispenseManager.getDeviceState() == DEVICE_DISPENSING,
+                            millis())) {
+    LOG_ERROR("WiFi down for %lus with nothing dispensing: restarting",
+              wifiSupervisor.disconnectedFor(millis()) / 1000);
+    Serial.flush();
+    ESP.restart();
+  }
 
   // 10ms delay is safe: coin pulses (30ms) are counted via hardware interrupt
   // (asynchronous, not blocked by delay), and tokens arrive ~2.5s apart.

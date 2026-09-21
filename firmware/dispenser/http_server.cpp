@@ -9,8 +9,9 @@
 #include <ESP8266WiFi.h>
 #include <stdlib.h>
 
-HttpServer::HttpServer(DispenseManager& manager, HopperControl& hopper)
-  : dispenseManager(manager), hopperControl(hopper), server(80) {
+HttpServer::HttpServer(DispenseManager& manager, HopperControl& hopper,
+                       WifiSupervisor& wifi)
+  : dispenseManager(manager), hopperControl(hopper), wifiSupervisor(wifi), server(80) {
 }
 
 void HttpServer::begin() {
@@ -87,12 +88,22 @@ void HttpServer::handleHealth(AsyncWebServerRequest *request) {
   doc["fault_code"] = dispenseManager.getFaultCode();
   doc["uptime"] = millis() / 1000;
   doc["firmware"] = FIRMWARE_VERSION;
+  // What a bad day leaves behind (issue #7).  Before these three, a device
+  // that reset once a week produced exactly one piece of evidence — a small
+  // uptime — and nobody could tell a watchdog reset from a power cut, or a
+  // leak from a busy afternoon.
+  doc["heap_free"] = ESP.getFreeHeap();
+  doc["reset_reason"] = ESP.getResetReason();
 
   // WiFi information
   JsonObject wifi = doc.createNestedObject("wifi");
   wifi["rssi"] = WiFi.RSSI();
   wifi["ip"] = WiFi.localIP().toString();
   wifi["ssid"] = WiFi.SSID();
+  // Times the link came back since boot.  A device that reconnects ten times
+  // a night has a WiFi problem that RSSI alone never shows, and one that
+  // reconnects once an hour is about to become a support call.
+  wifi["reconnects"] = wifiSupervisor.reconnects();
 
   // No `gpio` block: raw pin levels are GET /debug now, and there is no
   // hopper_low anywhere any more — the empty sensor is a factory option this

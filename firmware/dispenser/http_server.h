@@ -7,17 +7,21 @@
 #include "dispense_manager.h"
 #include "hopper_control.h"
 #include "request_body.h"
+#include "wifi_supervisor.h"
 #include "config.h"
 
 class HttpServer {
 public:
-  HttpServer(DispenseManager& manager, HopperControl& hopper);
+  HttpServer(DispenseManager& manager, HopperControl& hopper, WifiSupervisor& wifi);
 
   void begin();
 
 private:
   DispenseManager& dispenseManager;
   HopperControl& hopperControl;
+  // Only for `wifi.reconnects` in the health document (issue #7): the count
+  // of times the link came back, which nothing else on the device remembers.
+  WifiSupervisor& wifiSupervisor;
   AsyncWebServer server;
 
   // Endpoint handlers

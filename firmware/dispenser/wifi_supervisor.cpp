@@ -1,9 +1,4 @@
 // firmware/dispenser/wifi_supervisor.cpp
-//
-// TODAY'S BEHAVIOUR, on purpose: the firmware has no recovery from a lost or
-// failed join and counts no reconnects, so this stub says "never restart" and
-// "zero reconnects".  The assertions in test/test_dispense_manager.cpp are red
-// against it; the next commit is the rule itself.
 
 #include "wifi_supervisor.h"
 
@@ -15,26 +10,45 @@ WifiSupervisor::WifiSupervisor(unsigned long restart_after_ms)
 }
 
 void WifiSupervisor::begin(bool connected, unsigned long now_ms) {
-  (void)connected;
-  (void)now_ms;
+  was_connected = connected;
+  down_since_ms = now_ms;
+  reconnect_count = 0;
 }
 
 bool WifiSupervisor::update(bool connected, bool dispensing, unsigned long now_ms) {
-  (void)connected;
-  (void)dispensing;
-  (void)now_ms;
-  return false;
+  if (connected != was_connected) {
+    if (connected) {
+      // Down to up: the SDK's auto-reconnect did its job, or the join that
+      // failed in setup() finally landed.  Both are reconnects as far as
+      // anybody reading /health is concerned.
+      reconnect_count++;
+    } else {
+      // Up to down: a fresh deadline, never the remainder of an older one.
+      down_since_ms = now_ms;
+    }
+    was_connected = connected;
+  }
+
+  if (was_connected) {
+    return false;
+  }
+  return shouldRestart(now_ms - down_since_ms, dispensing, restart_after);
 }
 
 bool WifiSupervisor::shouldRestart(unsigned long disconnected_ms, bool dispensing,
                                    unsigned long restart_after_ms) {
-  (void)disconnected_ms;
-  (void)dispensing;
-  (void)restart_after_ms;
-  return false;
+  if (dispensing) {
+    return false;
+  }
+  return disconnected_ms > restart_after_ms;
 }
 
 unsigned long WifiSupervisor::disconnectedFor(unsigned long now_ms) const {
-  (void)now_ms;
-  return 0;
+  if (was_connected) {
+    return 0;
+  }
+  // Unsigned subtraction, so the difference is still right across the ~49.7
+  // day millis() wraparound.  Anything that clamps or signs this hands the
+  // supervisor a 49-day outage and restarts a healthy device.
+  return now_ms - down_since_ms;
 }
