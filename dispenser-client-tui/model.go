@@ -71,10 +71,10 @@ type Model struct {
 	quitting bool
 
 	// Health data
-	health         *HealthResponse
-	healthErr      error
-	lastHealthAt   time.Time
-	connected      bool
+	health        *HealthResponse
+	healthErr     error
+	lastHealthAt  time.Time
+	connected     bool
 	latencySamples []float64 // rolling latency in ms
 
 	// Dispense state
