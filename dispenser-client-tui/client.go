@@ -135,10 +135,14 @@ type DispenseResponse struct {
 	Error     string `json:"error,omitempty"`
 }
 
-// ErrorResponse for 4xx/5xx
+// ErrorResponse for 4xx/5xx.  A 409 names WHICH 409 it is: `busy` with the
+// blocking transaction, `tx_id reused`, or `fault` with the fault and its
+// Azkoyen code (issue #6).
 type ErrorResponse struct {
 	Error      string `json:"error"`
 	ActiveTxID string `json:"active_tx_id,omitempty"`
+	Fault      string `json:"fault,omitempty"`
+	FaultCode  int    `json:"fault_code,omitempty"`
 }
 
 // DispenserClient wraps HTTP calls to the ESP8266
@@ -274,11 +278,24 @@ func (c *DispenserClient) Dispense(txID string, quantity int) (*DispenseResponse
 	result := APIResult{StatusCode: resp.StatusCode, Latency: latency}
 
 	if resp.StatusCode == 409 {
+		// A 409 is TWO different answers since issue #6 — "another transaction
+		// is running" and "the device is faulted" — and this read them both as
+		// busy, so a jammed machine was reported as an occupied one, with an
+		// empty tx_id where the name of the blocking transaction belongs.
 		var errResp ErrorResponse
 		json.Unmarshal(body, &errResp)
+		msg := fmt.Sprintf("busy: active tx %s", errResp.ActiveTxID)
+		if errResp.Error == "fault" {
+			msg = fmt.Sprintf("fault: %s", errResp.Fault)
+			if errResp.FaultCode != 0 {
+				msg = fmt.Sprintf("fault: %s (code %d)", errResp.Fault, errResp.FaultCode)
+			}
+		} else if errResp.Error == "tx_id reused" {
+			msg = "tx_id reused with another quantity"
+		}
 		return nil, APIResult{
 			StatusCode: 409,
-			Error:      fmt.Errorf("busy: active tx %s", errResp.ActiveTxID),
+			Error:      fmt.Errorf("%s", msg),
 			Latency:    latency,
 		}
 	}
