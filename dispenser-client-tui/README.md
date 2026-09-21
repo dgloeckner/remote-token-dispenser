@@ -35,10 +35,10 @@ go mod tidy
 go build -o token-tui .
 
 # Run
-./token-tui --endpoint http://192.168.4.20 --api-key your-secret-key
+./token-tui --endpoint http://192.168.4.20 --signing-key your-secret-key
 
 # Or use env vars
-export TOKEN_DISPENSER_API_KEY=your-secret-key
+export TOKEN_DISPENSER_SIGNING_KEY=your-secret-key
 export TOKEN_DISPENSER_ENDPOINT=http://192.168.4.20
 ./token-tui
 ```
@@ -93,10 +93,10 @@ that decides whether an implementation speaks `dispenser-protocol.md`:
 
 ```bash
 # against the Go mock (this is what CI runs)
-token-tui conformance --endpoint http://127.0.0.1:8080 --api-key dev --target mock
+token-tui conformance --endpoint http://127.0.0.1:8080 --signing-key dev --target mock
 
 # against a real ESP8266 with the hopper simulator
-token-tui conformance --endpoint http://192.168.4.20 --api-key mysecret \
+token-tui conformance --endpoint http://192.168.4.20 --signing-key mysecret \
   --target simulator --interactive --json report.json
 ```
 
@@ -117,7 +117,7 @@ nowhere else).
 
 ```bash
 # Cycle A of the epic, with the hopper simulator in fast mode ('f')
-token-tui conformance --endpoint http://192.168.4.20 --api-key mysecret \
+token-tui conformance --endpoint http://192.168.4.20 --signing-key mysecret \
   --target simulator --soak 200 --json report-A.json
 ```
 

@@ -24,9 +24,13 @@ Hopper DIP switch is set to POSITIVE mode instead of NEGATIVE mode.
 
 **Measure hopper control pin (7) during dispense:**
 ```bash
+# Requests are signed since issue #8; sign() is in firmware/README.md
+BODY='{"tx_id":"test123","quantity":1}'
+sign POST /dispense "$BODY"
+
 # Trigger dispense
 curl -X POST http://192.168.4.20/dispense \
-  -H "X-API-Key: your-secret-api-key-here" \
+  -H "X-Nonce: $NONCE" -H "X-Signature: $SIG" \
   -H "Content-Type: application/json" \
   -d '{"tx_id":"test123","quantity":1}'
 

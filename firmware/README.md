@@ -129,8 +129,9 @@ firmware/dispenser/
 #define WIFI_PASSWORD "YourPassword"
 #define STATIC_IP "192.168.4.20"
 
-// API Authentication
-#define API_KEY "change-this-secret-key"  // CHANGE THIS!
+// The shared signing secret (issue #8).  It NEVER travels: requests carry
+// HMAC-SHA256 over METHOD \n PATH \n BODY \n NONCE in X-Signature.
+#define SIGNING_KEY "change-this-secret-key"  // CHANGE THIS!
 
 // GPIO Pins (Wemos D1 Mini - using D-labels)
 // ⚠️ INVERTED LOGIC: Control LOW = motor ON, inputs LOW = active
@@ -236,35 +237,60 @@ piece of evidence — a small `uptime`.
 
 `state` and `fault` are the whole health verdict (issue #6): `state` is
 `idle | dispensing | fault`, `fault` is `none | jam | hopper_error`, and only
-a power cycle clears a fault. The raw pin levels are `GET /debug` (API key
-required). The full contract is `dispenser-protocol.md`.
+a power cycle clears a fault. The raw pin levels are `GET /debug` (signature
+required). Unsigned, `/health` answers only `protocol`, `state`, `fault` and
+`"authenticated": false` — see issue #8 and `dispenser-protocol.md`. The full contract is `dispenser-protocol.md`.
 
 ### 3. Test Authentication
 
-**Without API key (should fail):**
+Since issue #8 every protected request is **signed**. The secret never
+travels; a nonce does. This helper signs one request:
+
 ```bash
-curl -X POST http://192.168.4.20/dispense \
+KEY=your-secret-key-here
+DEV=http://192.168.4.20
+
+sign() {   # sign METHOD PATH [BODY] — sets $NONCE and $SIG
+  NONCE=$(curl -s "$DEV/nonce" | sed -n 's/.*"nonce":"\([0-9a-f]*\)".*/\1/p')
+  SIG=$(printf '%s\n%s\n%s\n%s' "$1" "$2" "$3" "$NONCE" \
+        | openssl dgst -sha256 -hmac "$KEY" -r | cut -d' ' -f1)
+}
+```
+
+`printf`, not `echo`: the canonical string has **no** trailing newline.
+
+**Unsigned (should fail):**
+```bash
+curl -X POST "$DEV/dispense" \
   -H "Content-Type: application/json" \
   -d '{"tx_id":"test123","quantity":1}'
 ```
 
-Expected: `401 Unauthorized`
+Expected: `401 {"error":"unauthorized","reason":"signature"}`
 
-**With API key (should work):**
+**Carrying the old `X-API-Key` (should also fail):** that header is not a
+credential any more and not a fallback — the request is simply unsigned.
+
+**Signed (should work):**
 ```bash
-curl -X POST http://192.168.4.20/dispense \
-  -H "X-API-Key: your-secret-key-here" \
-  -H "Content-Type: application/json" \
-  -d '{"tx_id":"test123","quantity":3}'
+BODY='{"tx_id":"test123","quantity":3}'
+sign POST /dispense "$BODY"
+curl -X POST "$DEV/dispense" \
+  -H "X-Nonce: $NONCE" -H "X-Signature: $SIG" \
+  -H "Content-Type: application/json" -d "$BODY"
 ```
 
-Expected: `200 OK` with dispensing status
+Expected: `200 OK` with dispensing status. Sending **the same request again**
+is `401 reason=nonce` — a POST spends its nonce, which is the replay defence.
 
 ### 4. Monitor Status
 
+A read does **not** spend its nonce, so the one from the POST keeps working
+for the polls behind it:
+
 ```bash
-curl -H "X-API-Key: your-secret-key-here" \
-  http://192.168.4.20/dispense/test123
+sign GET /dispense/test123
+curl -H "X-Nonce: $NONCE" -H "X-Signature: $SIG" "$DEV/dispense/test123"
 ```
 
 ---
@@ -352,13 +378,17 @@ See [ARCHITECTURE.md](../ARCHITECTURE.md) for complete API documentation.
 
 **Quick Reference:**
 
-| Endpoint | Method | Auth | Purpose |
-|----------|--------|------|---------|
-| `/health` | GET | No | Health status & metrics |
-| `/dispense` | POST | Yes | Start dispense transaction |
-| `/dispense/{tx_id}` | GET | Yes | Query transaction status |
+| Endpoint | Method | Signature | Purpose |
+|----------|--------|-----------|---------|
+| `/nonce` | GET | no (by necessity) | Hand out a single-use nonce, 30 s |
+| `/health` | GET | optional | Unsigned: `protocol`, `state`, `fault`. Signed: the full document |
+| `/debug` | GET | yes | Raw pin levels, for the bench |
+| `/dispense` | POST | yes, **spends the nonce** | Start a dispense transaction |
+| `/dispense/{tx_id}` | GET | yes | Query transaction status |
 
-**Authentication:** Include header `X-API-Key: your-secret-key-here`
+**Authentication:** `X-Nonce` plus
+`X-Signature: HMAC-SHA256(key, METHOD \n PATH \n BODY \n NONCE)`, lowercase
+hex. Full specification in `dispenser-protocol.md`.
 
 ---
 
@@ -395,7 +425,10 @@ Enable verbose output in code:
 
 ### Security Checklist
 
-- [ ] **Change API_KEY** in `config.h` before deployment
+- [ ] **Change SIGNING_KEY** in `config.local.h` before deployment — long and
+      random; it is never typed by a person and never appears on the wire
+- [ ] **Dedicated WPA2 SSID / VLAN with client isolation** (`hardware/README.md`
+      § *Network*) — an installation requirement, not a recommendation
 - [ ] Configure strong WiFi password
 - [ ] Use static IP for predictable access
 - [ ] Keep firmware updated

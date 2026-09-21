@@ -1,9 +1,11 @@
 # Token Dispenser HTTP API Reference
 
-**Protocol version:** 2 (reported as `protocol` by `GET /health`)
-**Version:** 2.0.0
+**Protocol version:** 3 (reported as `protocol` by `GET /health`)
+**Version:** 3.0.0
 **Base URL:** `http://<ESP8266_IP>` (default: `http://192.168.4.20`)
-**Authentication:** API Key via `X-API-Key` header
+**Authentication:** Request signing — `GET /nonce`, then `X-Nonce` and
+`X-Signature` (see [Authentication](#authentication)). **There is no
+`X-API-Key` any more, in any implementation.**
 
 Complete HTTP API specification for the ESP8266 token dispenser firmware.
 
@@ -24,6 +26,7 @@ anyone noticing. Two rules keep them honest:
 - [Authentication](#authentication)
 - [Data Types](#data-types)
 - [Endpoints](#endpoints)
+  - [GET /nonce](#get-nonce)
   - [GET /health](#get-health)
   - [GET /debug](#get-debug)
   - [POST /dispense](#post-dispense)
@@ -210,26 +213,123 @@ counting what was sold since the last refill, not from the device.
 
 ## Authentication
 
-### Protected Endpoints
-The following endpoints require API key authentication:
-- `POST /dispense`
-- `GET /dispense/{tx_id}`
+Every request but `GET /nonce` and an unsigned `GET /health` carries a
+signature. The shared secret **never travels**.
 
-**Authentication Header:**
-```http
-X-API-Key: your-secret-api-key-here
+### Why signing and not TLS
+
+Evaluated for this board and rejected (issue #8). A BearSSL handshake on an
+ESP8266EX costs 1–3 s and roughly 20 KB of a ~40 KB heap, it means replacing
+the async web server with a synchronous one that would occupy `loop()` while a
+motor runs, the terminal polls status every few hundred milliseconds, and a
+self-signed certificate has to be pinned anyway — the same key distribution as
+a shared secret. **Nothing in the payload is confidential.** What needs
+protecting is *authenticity* and *freshness*, and neither needs encryption.
+If TLS is ever wanted, the path is an ESP32-class board, which is a port, not
+a rewrite. Do not reopen this with a TLS patch for the ESP8266.
+
+### The exchange
+
+```
+1.  GET /nonce                        → {"nonce": "<32 hex>", "ttl": 30}
+2.  <the request>, carrying
+      X-Nonce:     <the nonce, verbatim>
+      X-Signature: <64 lowercase hex>
 ```
 
-**Unauthorized Response (401):**
+`X-Signature` is **HMAC-SHA256 over the canonical string**, hex-encoded in
+lower case:
+
+```
+METHOD \n PATH \n BODY \n NONCE
+```
+
+byte for byte:
+
+| Part | What exactly |
+|------|--------------|
+| `METHOD` | The HTTP method in **upper case**: `GET` or `POST`. |
+| `PATH` | The request path, starting with `/`, **without any query string** and without the scheme or host. `/dispense`, `/dispense/a3f8c012`, `/health`, `/debug`. No percent-encoding: `tx_id` is restricted to characters that need none. |
+| `BODY` | The request body **exactly as sent**, byte for byte. The **empty string** for a request without a body (every `GET`). |
+| `NONCE` | The 32 hex characters from `GET /nonce`, verbatim. |
+| separator | A single **LF** (`0x0A`) between the parts — three of them, and **none at the end**. |
+| key | The shared secret as its raw UTF-8 bytes (HMAC hashes a key longer than 64 bytes first, per RFC 2104). |
+
+Worked example, key `s3cr3t`, nonce `0123456789abcdef0123456789abcdef`:
+
+```
+POST\n/dispense\n{"tx_id":"abc123","quantity":3}\n0123456789abcdef0123456789abcdef
+```
+
+and for a status poll:
+
+```
+GET\n/dispense/abc123\n\n0123456789abcdef0123456789abcdef
+```
+
+Method and path are in there so a poll's signature cannot be lifted onto a
+`POST`; the body is in there so a captured request cannot be re-aimed at
+another quantity; the nonce is in there so it cannot be replayed at all.
+
+### Nonces
+
+- `GET /nonce` is **unauthenticated by necessity** — a client holds nothing to
+  sign with until it has one, and 128 random bits are worth nothing without the
+  key.
+- A nonce lives **30 s** (`ttl` in the response; read it, do not hard-code it).
+- A **mutating** request (`POST /dispense`) **spends** its nonce: the identical
+  request replayed is `401`.
+- A **read-only** request does **not** spend it. One `GET /nonce` therefore
+  covers a dispense and every status poll behind it, until the TTL runs out.
+  Replaying a read hands the attacker the reading he already watched go past.
+- At most **8** nonces are outstanding; a ninth evicts the oldest. A client on
+  the same segment can evict another's by asking for eight — the retry rule
+  below covers it, and anyone who can do that can also flood the device. The
+  dedicated network segment (see the installation requirement below) is what
+  guards against that, not the nonce pool.
+
+### The 401, and what a client does with it
+
 ```json
-{
-  "error": "unauthorized"
-}
+{"error": "unauthorized", "reason": "nonce"}
 ```
 
-### Public Endpoints
-The following endpoints do NOT require authentication:
-- `GET /health` - Used for monitoring and health checks
+| `reason` | Means | The client does |
+|----------|-------|-----------------|
+| `nonce` | Unknown, expired, or already spent on a mutating request. | `GET /nonce` and **retry the request once**. Safe: every mutating request is idempotent by `tx_id`. |
+| `signature` | Missing, malformed or wrong signature; missing headers; wrong key. | **Stop.** A retry changes nothing. Fix the configuration. |
+
+A client that does not read `reason` either loops on a misconfigured key or
+gives up on a nonce that merely expired. **Do not retry more than once** — the
+second failure is not a nonce problem.
+
+### Protected endpoints
+
+| Endpoint | Signature |
+|----------|-----------|
+| `GET /nonce` | none, by necessity |
+| `GET /health` | **optional** — unsigned returns the minimal document, signed the full one (see below) |
+| `GET /debug` | required |
+| `POST /dispense` | required, **spends the nonce** |
+| `GET /dispense/{tx_id}` | required |
+
+### What is gone
+
+**`X-API-Key` is removed outright**, not deprecated: no device was deployed
+when this landed, so there is no transition period, no build flag and no shim
+in the firmware, the mock or the TUI. A request carrying that header is simply
+an unsigned request and is refused like any other. The conformance case
+`post_with_the_old_api_key_header_is_401` is what keeps that true.
+
+### Installation requirement (not optional)
+
+Signing makes a captured request useless; it does not hide the traffic and it
+does not stop a flood. **The dispenser and the terminal belong on a dedicated
+WPA2 SSID / VLAN with client isolation, separate from the members' network.**
+This is written where an installer reads it: `hardware/README.md` §
+*Network*, and the clubbar `INSTALL.md`. Owner decision 6: the weakness this
+issue describes is public because nothing is in production, and this note
+stands as an install requirement.
 
 ---
 
@@ -249,27 +349,91 @@ The following endpoints do NOT require authentication:
 
 ## Endpoints
 
-### GET /health
+### GET /nonce
 
-Health status and metrics for monitoring.
+Hands out a single-use random value for the next signed request.
 
-**Authentication:** None required
-
-**Request:**
-```http
-GET /health HTTP/1.1
-Host: 192.168.4.20
-```
+**Authentication:** none, and there cannot be any — see
+[Authentication](#authentication).
 
 **Response (200 OK):**
 ```json
 {
-  "protocol": 2,
+  "nonce": "9f2c4a1b8e7d6053af12bc9047e3d5a8",
+  "ttl": 30
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `nonce` | string | **Required.** Exactly 32 lowercase hex characters (128 bits). |
+| `ttl` | integer | **Required.** Seconds the nonce stays usable. Read it; do not hard-code 30. |
+
+Two calls never return the same value. A device that hands out a constant is
+one whose replay defence defends nothing — conformance case
+`nonce_endpoint_hands_out_a_fresh_nonce`.
+
+---
+
+### GET /health
+
+Health status and metrics for monitoring. **Two documents off one URL**
+(issue #8): unsigned gives the three fields a liveness probe needs, signed
+gives the whole thing.
+
+**Authentication:** optional — and an unsigned call is answered `200`, not
+`401`. It is the call a monitor makes to tell *"the machine is there"* from
+*"the machine is gone"*, and a `401` answers neither.
+
+**Response (200 OK) — UNSIGNED, the minimal document:**
+```json
+{
+  "protocol": 3,
+  "state": "idle",
+  "fault": "none",
+  "authenticated": false
+}
+```
+
+Those four fields and no others. They answer the only two questions that do
+not need the key — *can it sell* (`state != "fault"`) and *does it need a
+human* (`fault != "none"`) — plus the version handshake, which has to be
+possible **before** a client can sign anything at all. None of them tells a
+listener anything he could not learn by walking up to the machine.
+
+`authenticated` is **stated, never inferred**: without it a client that forgot
+to sign cannot tell a reduced document from an old firmware that never had the
+fields.
+
+**What needs the key, and why each one:**
+
+| Field | Why it is on the authenticated side |
+|-------|--------------------------------------|
+| `fault_code` | A diagnosis, where `fault` above is already the verdict. |
+| `uptime`, `reset_reason`, `heap_free` | Together a reboot oracle: they let an observer watch a power cycle land and confirm that whatever he is doing to the device works. |
+| `firmware` | Version fingerprinting — the first thing anyone picking an exploit wants. |
+| `wifi` (`rssi`, `ip`, `ssid`, `reconnects`) | The leak issue #8 names outright: SSID and IP to anybody in range. |
+| `metrics` | Carries lifetime `dispensed_tokens`, the figure the backend bills against (dgloeckner/clubbar#952). Commercial data. |
+| `error_history` | Timestamped diagnosis of the machine's bad days. |
+
+**Request (signed):**
+```http
+GET /health HTTP/1.1
+Host: 192.168.4.20
+X-Nonce: 9f2c4a1b8e7d6053af12bc9047e3d5a8
+X-Signature: <HMAC-SHA256 over "GET\n/health\n\n9f2c…">
+```
+
+**Response (200 OK) — SIGNED, the full document:**
+```json
+{
+  "protocol": 3,
+  "authenticated": true,
   "state": "idle",
   "fault": "none",
   "fault_code": 0,
   "uptime": 84230,
-  "firmware": "1.3.0",
+  "firmware": "1.4.0",
   "heap_free": 27512,
   "reset_reason": "Power on",
   "wifi": {
@@ -297,12 +461,13 @@ Host: 192.168.4.20
 **Response (200 OK) — faulted:**
 ```json
 {
-  "protocol": 2,
+  "protocol": 3,
+  "authenticated": true,
   "state": "fault",
   "fault": "hopper_error",
   "fault_code": 3,
   "uptime": 84230,
-  "firmware": "1.3.0",
+  "firmware": "1.4.0",
   "heap_free": 27512,
   "reset_reason": "Power on",
   "wifi": {"rssi": -47, "ip": "192.168.188.243", "ssid": "Ponyhof", "reconnects": 2},
@@ -318,7 +483,8 @@ Host: 192.168.4.20
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `protocol` | integer | Protocol version; always `2`. A client that reads anything else refuses the device. |
+| `protocol` | integer | Protocol version; always `3`. A client that reads anything else refuses the device. Present in **both** documents. |
+| `authenticated` | boolean | **Required.** Which of the two documents this is. Present in **both**. |
 | `state` | string | **Required.** The device: `"idle"`, `"dispensing"` or `"fault"`. One field, not two. |
 | `fault` | string | **Required.** `"none"`, `"jam"` or `"hopper_error"` (Design Principle 6). |
 | `fault_code` | integer | **Required.** The Azkoyen code 1-7 behind a `hopper_error`, `0` otherwise. |
@@ -358,6 +524,8 @@ Host: 192.168.4.20
 - **the `gpio` block** — raw pin levels moved to `GET /debug`. A monitor
   cannot act on them and a member cannot read them.
 - **`hopper_low`** — see Design Principle 7.
+- **anything but `protocol`, `state`, `fault` and `authenticated` in the
+  unsigned document** — see the table above.
 
 **Usage:**
 Monitors poll this every 60 seconds:
@@ -381,7 +549,8 @@ against a list.
 The raw pin levels, for the bench and the TUI. Nothing here is a protocol
 promise about behaviour; it is an instrument.
 
-**Authentication:** Required (`X-API-Key` header)
+**Authentication:** Required — `X-Nonce` + `X-Signature` over
+`GET\n/debug\n\n<nonce>`.
 
 **Response (200 OK):**
 ```json
@@ -401,13 +570,15 @@ There is no `hopper_low` pin here either (Design Principle 7).
 
 Start a token dispense transaction.
 
-**Authentication:** Required (`X-API-Key` header)
+**Authentication:** Required, and this is the one request that **spends** its
+nonce — a replay of the identical bytes is `401 reason=nonce`.
 
 **Request:**
 ```http
 POST /dispense HTTP/1.1
 Host: 192.168.4.20
-X-API-Key: your-secret-api-key-here
+X-Nonce: 9f2c4a1b8e7d6053af12bc9047e3d5a8
+X-Signature: <HMAC-SHA256 over "POST\n/dispense\n{\"tx_id\":\"a3f8c012\",\"quantity\":3}\n9f2c…">
 Content-Type: application/json
 
 {
@@ -415,6 +586,13 @@ Content-Type: application/json
   "quantity": 3
 }
 ```
+
+The signature covers the body **exactly as sent**, so the JSON must be
+serialised once and both signed and transmitted from the same bytes. The
+device verifies only after it has assembled the whole body (a body may arrive
+in several TCP segments — Design Principle on request framing); a `413` and an
+incomplete stream are answered *before* the signature check, because those are
+the requests whose bytes the device deliberately did not keep.
 
 **Request Fields:**
 
@@ -591,13 +769,16 @@ requests whenever the network happens to split them.
 
 Query transaction status by transaction ID.
 
-**Authentication:** Required (`X-API-Key` header)
+**Authentication:** Required. A poll is read-only, so it does **not** spend
+its nonce — the same one serves every poll of a transaction until the TTL runs
+out, which is why one `GET /nonce` per dispense is enough.
 
 **Request:**
 ```http
 GET /dispense/a3f8c012 HTTP/1.1
 Host: 192.168.4.20
-X-API-Key: your-secret-api-key-here
+X-Nonce: 9f2c4a1b8e7d6053af12bc9047e3d5a8
+X-Signature: <HMAC-SHA256 over "GET\n/dispense/a3f8c012\n\n9f2c…">
 ```
 
 **URL Parameters:**
@@ -778,10 +959,10 @@ The suite that decides whether an implementation speaks this protocol:
 
 ```sh
 # the Go mock (runs in CI)
-token-tui conformance --endpoint http://127.0.0.1:8080 --api-key dev --target mock
+token-tui conformance --endpoint http://127.0.0.1:8080 --signing-key dev --target mock
 
 # a real ESP8266 with the hopper simulator (docs/hopper-simulator.md)
-token-tui conformance --endpoint http://192.168.4.20 --api-key … --target simulator \
+token-tui conformance --endpoint http://192.168.4.20 --signing-key … --target simulator \
   --interactive --json report.json
 ```
 
@@ -799,7 +980,7 @@ hundred dispenses*:
 
 ```sh
 # Cycle A of the epic, at the bench, with the hopper simulator in fast mode ('f')
-token-tui conformance --endpoint http://192.168.4.20 --api-key … \
+token-tui conformance --endpoint http://192.168.4.20 --signing-key … \
   --target simulator --soak 200 --json report-A.json
 ```
 
@@ -838,6 +1019,21 @@ The table lives in `dispenser-client-tui/conformance_cases.go`. Adding to it:
   `health_reports_ops_telemetry`: `heap_free`, `reset_reason` and
   `wifi.reconnects` are required fields, and the suite's own fake device has a
   knob (`omitOpsTelemetry`) that proves the case can fail.
+- **Request signing (issue #8) is eleven cases**, each with a knob on the
+  suite's own fake device and a suite test proving the case can fail:
+  `nonce_endpoint_hands_out_a_fresh_nonce` (a constant "nonce"),
+  `post_without_a_signature_is_401`, `post_with_the_old_api_key_header_is_401`
+  (a device still honouring the bearer header),
+  `post_signed_with_the_wrong_key_is_401`, `replayed_signed_post_is_401` (a
+  nonce that is never spent), `tampered_body_is_401`,
+  `signature_covers_method_and_path` (a device binding only the body),
+  `a_spent_nonce_still_polls` (one that spends the nonce on a read too),
+  `get_status_without_a_signature_is_401`,
+  `get_debug_without_a_signature_is_401`,
+  `health_without_a_signature_is_minimal` (one handing the whole document to
+  anybody) and `health_with_a_signature_is_whole`. The `reason` of a 401 is
+  asserted, not only its status: a 401 a client cannot act on is a 401 that
+  turns into a retry loop.
 - No case is known-red today. `post_while_error_is_409` was, against the
   firmware, from #1 until #6 fixed it. It is now `post_while_fault_is_409`,
   green in CI against the mock and the suite's own fake device; the firmware
@@ -868,7 +1064,8 @@ exists once the HTTP layer and the hardware are in play.
 | `400` | `invalid request format` | JSON type mismatch | Check field types |
 | `400` | `empty body` | POST without a body | Send the JSON body |
 | `400` | `incomplete body` | Body shorter than `Content-Length` | Send the whole body |
-| `401` | `unauthorized` | Missing or invalid API key | Add/fix `X-API-Key` header |
+| `401` | `unauthorized`, `reason: "signature"` | Missing, malformed or wrong signature | Fix the key or the canonical string. **Do not retry.** |
+| `401` | `unauthorized`, `reason: "nonce"` | Nonce unknown, expired, or already spent by a mutating request | `GET /nonce`, retry **once** |
 | `404` | `not found` | Unknown `tx_id` | Check tx_id, may have expired |
 | `409` | `busy` | Another transaction active | Wait and retry |
 | `409` | `tx_id reused` | Known `tx_id`, different `quantity` | Use a fresh `tx_id` |
@@ -1074,9 +1271,11 @@ while tokens are being dispensed.
 
 ```bash
 $ curl http://192.168.4.20/health
-{"protocol":2,"state":"fault","fault":"hopper_error","fault_code":5,"...":"..."}
+{"protocol":3,"authenticated":true,"state":"fault","fault":"hopper_error","fault_code":5,"...":"..."}
 
-$ curl -X POST http://192.168.4.20/dispense -H "X-API-Key: secret" \
+$ sign POST /dispense '{"tx_id":"next1","quantity":2}'
+$ curl -X POST http://192.168.4.20/dispense \
+  -H "X-Nonce: $NONCE" -H "X-Signature: $SIG" \
   -H "Content-Type: application/json" -d '{"tx_id":"next1","quantity":2}'
 409 Conflict
 {"error":"fault","fault":"hopper_error","fault_code":5}
@@ -1113,7 +1312,8 @@ Poll `GET /dispense/{tx_id}` every **250ms** until completion:
 
 ```bash
 while true; do
-  response=$(curl -H "X-API-Key: key" http://192.168.4.20/dispense/abc123)
+  response=$(curl -H "X-Nonce: $NONCE" -H "X-Signature: $SIG" \
+    http://192.168.4.20/dispense/abc123)
   state=$(echo $response | jq -r '.state')
 
   if [ "$state" == "done" ] || [ "$state" == "error" ]; then
@@ -1144,25 +1344,25 @@ done
 ```bash
 # 1. Start dispense
 $ curl -X POST http://192.168.4.20/dispense \
-  -H "X-API-Key: secret" \
+  -H "X-Nonce: $NONCE" -H "X-Signature: $SIG" \
   -H "Content-Type: application/json" \
   -d '{"tx_id":"abc123","quantity":3}'
 
 {"tx_id":"abc123","state":"dispensing","quantity":3,"dispensed":0}
 
 # 2. Poll status
-$ curl -H "X-API-Key: secret" http://192.168.4.20/dispense/abc123
+$ curl -H "X-Nonce: $NONCE" -H "X-Signature: $SIG" http://192.168.4.20/dispense/abc123
 {"tx_id":"abc123","state":"dispensing","quantity":3,"dispensed":1}
 
-$ curl -H "X-API-Key: secret" http://192.168.4.20/dispense/abc123
+$ curl -H "X-Nonce: $NONCE" -H "X-Signature: $SIG" http://192.168.4.20/dispense/abc123
 {"tx_id":"abc123","state":"dispensing","quantity":3,"dispensed":2}
 
-$ curl -H "X-API-Key: secret" http://192.168.4.20/dispense/abc123
+$ curl -H "X-Nonce: $NONCE" -H "X-Signature: $SIG" http://192.168.4.20/dispense/abc123
 {"tx_id":"abc123","state":"done","quantity":3,"dispensed":3}
 
 # 3. Idempotent retry (same tx_id)
 $ curl -X POST http://192.168.4.20/dispense \
-  -H "X-API-Key: secret" \
+  -H "X-Nonce: $NONCE" -H "X-Signature: $SIG" \
   -H "Content-Type: application/json" \
   -d '{"tx_id":"abc123","quantity":3}'
 
@@ -1171,7 +1371,7 @@ $ curl -X POST http://192.168.4.20/dispense \
 
 # 4. Retry while the transaction is still running
 $ curl -X POST http://192.168.4.20/dispense \
-  -H "X-API-Key: secret" \
+  -H "X-Nonce: $NONCE" -H "X-Signature: $SIG" \
   -H "Content-Type: application/json" \
   -d '{"tx_id":"abc123","quantity":3}'
 
@@ -1180,7 +1380,7 @@ $ curl -X POST http://192.168.4.20/dispense \
 
 # 5. Same tx_id, different quantity
 $ curl -X POST http://192.168.4.20/dispense \
-  -H "X-API-Key: secret" \
+  -H "X-Nonce: $NONCE" -H "X-Signature: $SIG" \
   -H "Content-Type: application/json" \
   -d '{"tx_id":"abc123","quantity":5}'
 
@@ -1193,14 +1393,14 @@ $ curl -X POST http://192.168.4.20/dispense \
 ```bash
 # Client 1: Start dispense
 $ curl -X POST http://192.168.4.20/dispense \
-  -H "X-API-Key: secret" \
+  -H "X-Nonce: $NONCE" -H "X-Signature: $SIG" \
   -d '{"tx_id":"tx1","quantity":5}'
 
 {"tx_id":"tx1","state":"dispensing","quantity":5,"dispensed":0}
 
 # Client 2: Try to dispense (immediately)
 $ curl -X POST http://192.168.4.20/dispense \
-  -H "X-API-Key: secret" \
+  -H "X-Nonce: $NONCE" -H "X-Signature: $SIG" \
   -d '{"tx_id":"tx2","quantity":2}'
 
 409 Conflict
@@ -1214,7 +1414,7 @@ $ curl -X POST http://192.168.4.20/dispense \
 ```bash
 # 1. Start dispense
 $ curl -X POST http://192.168.4.20/dispense \
-  -H "X-API-Key: secret" \
+  -H "X-Nonce: $NONCE" -H "X-Signature: $SIG" \
   -d '{"tx_id":"jam123","quantity":5}'
 
 {"tx_id":"jam123","state":"dispensing","quantity":5,"dispensed":0}
@@ -1222,7 +1422,7 @@ $ curl -X POST http://192.168.4.20/dispense \
 # 2. [Physical jam occurs after 2 tokens]
 
 # 3. Poll shows error
-$ curl -H "X-API-Key: secret" http://192.168.4.20/dispense/jam123
+$ curl -H "X-Nonce: $NONCE" -H "X-Signature: $SIG" http://192.168.4.20/dispense/jam123
 {"tx_id":"jam123","state":"error","quantity":5,"dispensed":2,"count_reliable":true,"error_code":0,"error_type":"JAM_TIMEOUT"}
 
 # 4. Check health (the device is faulted)
@@ -1316,12 +1516,49 @@ the one being recovered is ignored — it belongs to an earlier customer.
 
 ## Security Considerations
 
-### API Key Security
+### Signing the curl examples
 
-- API key transmitted in plain HTTP (no TLS)
-- Acceptable for **local network deployment only**
-- Do not expose ESP8266 to public internet
-- Change default API key before production use
+Every `curl` in this document assumes `sign` was run for **that exact
+request** first — the signature covers the method, the path and the body, so
+it cannot be reused between examples:
+
+```sh
+KEY=your-shared-signing-secret
+DEV=http://192.168.4.20
+
+sign() {   # sign METHOD PATH [BODY] — sets $NONCE and $SIG
+  NONCE=$(curl -s "$DEV/nonce" | sed -n 's/.*"nonce":"\([0-9a-f]*\)".*/\1/p')
+  SIG=$(printf '%s\n%s\n%s\n%s' "$1" "$2" "$3" "$NONCE" \
+        | openssl dgst -sha256 -hmac "$KEY" -r | cut -d' ' -f1)
+}
+
+sign GET /health
+curl -H "X-Nonce: $NONCE" -H "X-Signature: $SIG" "$DEV/health"
+```
+
+`printf` is used rather than `echo` on purpose: the canonical string ends
+**without** a trailing newline, and `echo` would add one and break every
+signature.
+
+### What signing does and does not buy
+
+- A sniffed request **cannot be replayed** (the nonce is spent) and **cannot
+  be re-aimed** at another quantity (the body is signed).
+- The shared secret **never travels**, so watching the WLAN does not yield it.
+- Traffic is **still in clear**: an observer sees which transactions happened
+  and how many tokens. Nothing in the payload is confidential, which is why
+  TLS was rejected for this board (see [Authentication](#authentication)).
+- Signing does **not** stop a flood, and a client on the same segment can
+  evict another's nonce. That is what the network requirement below is for.
+- Do not expose the ESP8266 to the public internet.
+
+### Network segment (installation requirement)
+
+The dispenser and the terminal belong on a **dedicated WPA2 SSID / VLAN with
+client isolation**, separate from the members' network. Owner decision 6: this
+weakness is described publicly because nothing is in production, and the note
+stands as an install requirement. It is written for installers in
+`hardware/README.md` § *Network* and in the clubbar `INSTALL.md`.
 
 ### Rate Limiting
 
@@ -1389,6 +1626,37 @@ All inputs validated:
   does** — that is unchanged by design (a jam that is still there faults the
   next dispense again, having dispensed and billed nothing).
 - **Soak runs (#7):** `token-tui conformance --soak N`, see *Conformance*.
+
+### Version 3.0.0 (2026-09-21) — protocol 3, BREAKING
+- **Request signing replaces the bearer key (#8):** `GET /nonce` hands out a
+  single-use 128-bit nonce with a 30 s life; every protected request carries
+  `X-Nonce` and `X-Signature: HMAC-SHA256(key, METHOD \n PATH \n BODY \n
+  NONCE)`, hex, lower case. The key never travels, a sniffed request cannot be
+  replayed (a POST spends its nonce), and a tampered body fails. A read does
+  **not** spend its nonce, so one `GET /nonce` covers a dispense and the status
+  polls behind it. Comparison is constant-time.
+- **`X-API-Key` is removed outright**, not deprecated: no device was deployed,
+  so there is no transition period, no build flag and no shim in the firmware,
+  the mock or the TUI. A request carrying it is an unsigned request.
+- **The protocol integer moves to 3, and that is the point of the bump:** a
+  protocol-2 client cannot talk to a protocol-3 device at all, so a handshake
+  left at 2 would promise an interoperability that does not exist.
+- **A 401 says which kind it is:** `reason: "nonce"` means fetch a fresh one
+  and retry ONCE (safe — every mutating request is idempotent by `tx_id`),
+  `reason: "signature"` means stop.
+- **`GET /health` is two documents off one URL:** unsigned returns `protocol`,
+  `state`, `fault` and `"authenticated": false` and nothing else; signed
+  returns the whole thing. Unsigned is answered `200`, not `401`, because it is
+  the liveness probe. `authenticated` is a new **required** field in both.
+- **HTTPS on the ESP8266 was evaluated and rejected**, with the numbers, in
+  [Authentication](#authentication). Do not reopen it with a TLS patch for
+  this board; the path is an ESP32-class port.
+- **The dedicated WPA2 SSID / VLAN with client isolation is an installation
+  requirement** (owner decision 6), written in `hardware/README.md` and the
+  clubbar `INSTALL.md`.
+- Firmware 1.4.0. The flash layout is untouched — persisted layout version
+  stays 3, and no signing state is persisted: nonces die with a reboot, which
+  is correct, since every nonce a client holds across one is worthless anyway.
 
 ### Version 1.1.0 (2026-02-14)
 - **Error decoding:** Added Azkoyen hardware error code detection (7 error types)

@@ -379,20 +379,39 @@ These modes exist for:
 
 ### Authentication
 
-**Dispense operations** (`POST /dispense`, `GET /dispense/{tx_id}`) require API key authentication:
+**Requests are signed** (issue #8). The shared secret never travels — until
+then `X-API-Key` carried it in clear in every request, so one listener on the
+WLAN owned the machine and a captured request replayed with a new `tx_id`
+dispensed again. That header is **removed**, with no fallback anywhere.
 
 ```http
-X-API-Key: your-secret-key-here
+GET /nonce                     → {"nonce": "<32 hex>", "ttl": 30}
+
+X-Nonce:     <the nonce>
+X-Signature: HMAC-SHA256(key, METHOD \n PATH \n BODY \n NONCE)   (64 lowercase hex)
 ```
+
+A `POST` **spends** its nonce, so a replay is refused; a read does not, so one
+nonce covers a dispense and the status polls behind it.
 
 **Unauthorized Response (401):**
 ```json
-{
-  "error": "unauthorized"
-}
+{"error": "unauthorized", "reason": "nonce"}
 ```
 
-**Health endpoint** (`GET /health`) does NOT require authentication - it's used for monitoring and diagnostics.
+`reason: "nonce"` → fetch a fresh one and retry **once** (safe: mutating
+requests are idempotent by `tx_id`). `reason: "signature"` → stop.
+
+**`GET /nonce`** needs no signature, by necessity. **`GET /health`** takes one
+optionally: unsigned it answers `protocol`, `state`, `fault` and
+`"authenticated": false` — enough for a liveness probe and nothing more;
+signed it answers the full document (SSID, IP, firmware, heap, reset reason,
+metrics, error history).
+
+HTTPS on the ESP8266 was evaluated and rejected, with the numbers, in
+`dispenser-protocol.md` § *Authentication*. The traffic stays readable; what
+is protected is authenticity and freshness. The network segment is the other
+half of this and is an installation requirement (`hardware/README.md`).
 
 ---
 

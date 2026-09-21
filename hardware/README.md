@@ -337,6 +337,41 @@ Before powering everything on:
 
 ---
 
+## 📶 Network: a dedicated segment, not the members' WLAN
+
+**This is an installation requirement, not a recommendation.** Do not put the
+dispenser on the club's ordinary network, and do not skip it because the
+firmware signs its requests.
+
+**What to build:**
+
+- A **separate WPA2(-PSK) SSID or VLAN** carrying nothing but the dispenser
+  and the terminal that drives it.
+- **Client isolation ON** on that SSID, so nothing else that joins it can
+  reach the dispenser at all.
+- **No route from the members' network** to that segment, and no port forward
+  from the internet to it — ever. The dispenser speaks plain HTTP.
+- A **static IP** for the dispenser (`STATIC_IP` in `config.local.h`), so the
+  terminal does not depend on a DHCP lease.
+- The **shared signing secret** goes into `config.local.h` on the ESP
+  (`SIGNING_KEY`) and into the terminal's configuration. It is long and random
+  — it is never typed by a person and never appears on the wire.
+
+**Why, in one paragraph.** Since firmware 1.4.0 every request is signed:
+whoever listens to this WLAN cannot learn the secret, cannot replay a captured
+dispense and cannot change the quantity in one. What signing does **not** do
+is hide the traffic or stop a flood — the payloads are readable, and anyone on
+the same segment can keep the device busy or use up the nonces it hands out.
+A dedicated, isolated segment is what removes "anyone on the same segment"
+from the picture. Before signing, the one control was a static key sent in
+clear in every request; that weakness is described publicly in
+dgloeckner/remote-token-dispenser#8 because nothing was in production, and
+this section is the standing condition that it stays uninteresting.
+
+**Tokens are money.** Treat this segment the way you would treat the cash box.
+
+---
+
 ## 🚦 When the dispenser stops: clear it, then pull the plug
 
 The device has exactly one way out of a fault, and it is the power switch.
@@ -534,12 +569,16 @@ Before deploying your token dispenser:
 - [ ] D1 (GPIO5) → PC817 #1 → Hopper Control pin (inverted: LOW = ON)
 - [ ] D7 (GPIO13) ← PC817 #2 ← Hopper Coin (active LOW)
 - [ ] D5 (GPIO14) ← PC817 #3 ← Hopper Error (active LOW)
-- [ ] D6 (GPIO12) ← PC817 #4 ← Hopper Empty (active LOW)
+- [ ] D6 (GPIO12) is FREE — the empty sensor is a factory option this hopper
+      does not have (issue #6); no PC817 #4, nothing wired to it
 - [ ] All connections visually inspected and tested with multimeter
 - [ ] Capacitor polarity verified (critical!)
 - [ ] ESP8266 firmware flashed and WiFi configured
 - [ ] Test dispense successful (motor runs, tokens dispense, pulses count)
-- [ ] API authentication configured (API key set)
+- [ ] Dedicated WPA2 SSID / VLAN with client isolation in place, no route from
+      the members' network (see *Network* above) — **required, not optional**
+- [ ] `SIGNING_KEY` set in `config.local.h` to a long random secret, and the
+      same value configured on the terminal (it is never transmitted)
 - [ ] System tested with 10+ dispenses (no jams, correct counts)
 - [ ] Enclosure secured and weatherproofed (if applicable)
 

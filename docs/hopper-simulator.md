@@ -36,7 +36,7 @@ that can find a leak, a nightly reset or a radio that fell asleep:
 f
 
 # on the workstation
-token-tui conformance --endpoint http://192.168.4.20 --api-key … \
+token-tui conformance --endpoint http://192.168.4.20 --signing-key … \
   --target simulator --soak 200 --json report-A.json
 ```
 
@@ -85,10 +85,10 @@ pio device monitor -b 115200
 
 ```sh
 # unattended: everything that does not need a physical act
-token-tui conformance --endpoint http://192.168.4.20 --api-key … --target simulator
+token-tui conformance --endpoint http://192.168.4.20 --signing-key … --target simulator
 
 # with the cases that prompt for RST, power or a simulator switch
-token-tui conformance --endpoint http://192.168.4.20 --api-key … \
+token-tui conformance --endpoint http://192.168.4.20 --signing-key … \
   --target simulator --interactive --json report.json
 ```
 

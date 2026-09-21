@@ -5,7 +5,7 @@ Mock HTTP server implementing the ESP8266 dispenser protocol for local developme
 ## Quick Start
 
 ```bash
-# Start with defaults (localhost:8080, api-key=dev)
+# Start with defaults (localhost:8080, signing-key=dev)
 go run .
 
 # Or build and run
@@ -13,7 +13,7 @@ go build
 ./dispenser-mock
 
 # Custom configuration
-./dispenser-mock --bind=:9090 --api-key=secret123
+./dispenser-mock --bind=:9090 --signing-key=secret123
 
 # List available test scenarios
 ./dispenser-mock --list-scenarios
@@ -27,7 +27,9 @@ go build
 
 **CLI Flags:**
 - `--bind` - Network address (default: `:8080`)
-- `--api-key` - Required API key (default: `dev`)
+- `--signing-key` - The shared signing secret (default: `dev`). It is never
+  transmitted: requests carry `X-Nonce` + `X-Signature` (issue #8). There is
+  no `--api-key` any more, not even as an alias.
 - `--list-scenarios` - Print scenario mapping and exit
 - `--protocol` - Protocol version to report in `GET /health` (default: `2`).
   Only the *claim* changes; the mock's behaviour does not. It exists so a
@@ -61,20 +63,20 @@ curl http://localhost:8080/health | jq
 **Start dispense:**
 ```bash
 curl -X POST http://localhost:8080/dispense \
-  -H "X-API-Key: dev" \
+  -H "X-Nonce: $NONCE" -H "X-Signature: $SIG" \
   -H "Content-Type: application/json" \
   -d '{"tx_id":"abc123","quantity":3}'
 ```
 
 **Poll status:**
 ```bash
-curl -H "X-API-Key: dev" http://localhost:8080/dispense/abc123
+curl -H "X-Nonce: $NONCE" -H "X-Signature: $SIG" http://localhost:8080/dispense/abc123
 ```
 
 **Test with TUI client:**
 ```bash
 cd ../dispenser-client-tui
-go run . --url=http://localhost:8080 --api-key=dev
+go run . --url=http://localhost:8080 --signing-key=dev
 ```
 
 ## Protocol

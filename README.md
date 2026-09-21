@@ -100,7 +100,7 @@ All of it runs on every push and pull request
 - 📊 **Real-time metrics** - Total dispenses, success rate, jam detection
 - 🚨 **Instant alerts** - Jam or low hopper status via health monitoring
 - 💾 **Crash recovery** - Exact token counts preserved across power cycles
-- 🔒 **Secure API** - API key authentication, no anonymous access
+- 🔒 **Signed requests** - the shared secret never crosses the air; a captured request cannot be replayed
 - 🌐 **Works offline** - Client device queues transactions, syncs when online
 
 ### For Developers
@@ -229,20 +229,35 @@ Connect ESP8266 to Azkoyen Hopper (see [hardware/README.md](hardware/README.md) 
 
 ### 3. Test API
 
+Every protected request is signed (issue #8): the key never travels, a nonce
+does.
+
 ```bash
-# Health check (no auth)
-curl http://192.168.4.20/health
+KEY=your-secret-key
+DEV=http://192.168.4.20
 
-# Dispense 3 tokens (requires API key)
-curl -X POST http://192.168.4.20/dispense \
-  -H "X-API-Key: your-secret-key" \
-  -H "Content-Type: application/json" \
-  -d '{"tx_id":"abc123","quantity":3}'
+sign() {   # sign METHOD PATH [BODY] — sets $NONCE and $SIG
+  NONCE=$(curl -s "$DEV/nonce" | sed -n 's/.*"nonce":"\([0-9a-f]*\)".*/\1/p')
+  SIG=$(printf '%s\n%s\n%s\n%s' "$1" "$2" "$3" "$NONCE" \
+        | openssl dgst -sha256 -hmac "$KEY" -r | cut -d' ' -f1)
+}
 
-# Check status
-curl -H "X-API-Key: your-secret-key" \
-  http://192.168.4.20/dispense/abc123
+# Liveness, unsigned: protocol, state, fault — and nothing else
+curl "$DEV/health"
+
+# Dispense 3 tokens
+BODY='{"tx_id":"abc123","quantity":3}'
+sign POST /dispense "$BODY"
+curl -X POST "$DEV/dispense" -H "X-Nonce: $NONCE" -H "X-Signature: $SIG" \
+  -H "Content-Type: application/json" -d "$BODY"
+
+# Check status (a read does not spend the nonce)
+sign GET /dispense/abc123
+curl -H "X-Nonce: $NONCE" -H "X-Signature: $SIG" "$DEV/dispense/abc123"
 ```
+
+The dispenser belongs on a dedicated, isolated WLAN segment — see
+`hardware/README.md` § *Network*. That is an installation requirement.
 
 ---
 
