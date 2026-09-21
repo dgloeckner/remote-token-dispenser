@@ -9,11 +9,13 @@ A k9s-style terminal dashboard for testing and monitoring the [Remote Token Disp
 ╭─────────────────────────╮  ╭────────────────────────────╮
 │ ⚡ Health               │  │ 📊 Metrics                 │
 │                         │  │                            │
-│ Status:     ● OK        │  │ Total Dispenses: 1247      │
-│ Dispenser:  idle        │  │ Success Rate:    95.4%     │
+│ State:      ● idle      │  │ Total Dispenses: 1247      │
+│ Fault:      none        │  │ Success Rate:    95.4%     │
 │ Uptime:     23h 27m     │  │ Jams:            3         │
-│ Firmware:   1.2.0       │  │ Partial:         2         │
-│ Hopper:     ● OK        │  │ Failures:        53        │
+│ Firmware:   1.3.0       │  │ Partial:         2         │
+│ Heap:       27512 B     │  │ Failures:        53        │
+│ Last reset: Power on    │  │                            │
+│ WiFi:       ▂▄▆ -47dBm  2 reconnects                    │
 ╰─────────────────────────╯  ╰────────────────────────────╯
 ╭─────────────────────────────────────────────────────────╮
 │ 📈 Latency (ms)                                        │
@@ -104,6 +106,20 @@ token-tui conformance --endpoint http://192.168.4.20 --api-key mysecret \
 | `--interactive` | also run cases that ask for a physical act (press RST, flip a switch) |
 | `--json PATH` | write a per-case report |
 | `--only SUBSTR` | run only the cases whose name contains SUBSTR |
+| `--soak N` | run a soak of N dispenses **instead of** the table (issue #7) |
+| `--soak-poll D` | how often a soak polls the running transaction (default 500ms) |
+
+A soak is the other half of the verdict: the table says the device speaks the
+protocol, the soak says it still does after two hundred dispenses — zero failed
+requests, free heap within 10 % of where it started, no reset in the middle,
+and a p95 POST latency under 300 ms (which is where modem sleep shows up and
+nowhere else).
+
+```bash
+# Cycle A of the epic, with the hopper simulator in fast mode ('f')
+token-tui conformance --endpoint http://192.168.4.20 --api-key mysecret \
+  --target simulator --soak 200 --json report-A.json
+```
 
 The exit code is the verdict. Cases are defined in `conformance_cases.go`;
 `conformance.go` is the runner. Both are covered by `go test` against a fake

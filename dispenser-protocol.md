@@ -269,11 +269,14 @@ Host: 192.168.4.20
   "fault": "none",
   "fault_code": 0,
   "uptime": 84230,
-  "firmware": "1.2.0",
+  "firmware": "1.3.0",
+  "heap_free": 27512,
+  "reset_reason": "Power on",
   "wifi": {
     "rssi": -47,
     "ip": "192.168.188.243",
-    "ssid": "Ponyhof"
+    "ssid": "Ponyhof",
+    "reconnects": 2
   },
   "metrics": {
     "total_dispenses": 1247,
@@ -299,8 +302,10 @@ Host: 192.168.4.20
   "fault": "hopper_error",
   "fault_code": 3,
   "uptime": 84230,
-  "firmware": "1.2.0",
-  "wifi": {"rssi": -47, "ip": "192.168.188.243", "ssid": "Ponyhof"},
+  "firmware": "1.3.0",
+  "heap_free": 27512,
+  "reset_reason": "Power on",
+  "wifi": {"rssi": -47, "ip": "192.168.188.243", "ssid": "Ponyhof", "reconnects": 2},
   "metrics": {"...": "..."},
   "error_history": [
     {"code": 3, "type": "JAM_PERMANENT", "timestamp": 82150},
@@ -319,7 +324,10 @@ Host: 192.168.4.20
 | `fault_code` | integer | **Required.** The Azkoyen code 1-7 behind a `hopper_error`, `0` otherwise. |
 | `uptime` | integer | Seconds since boot |
 | `firmware` | string | Firmware version |
-| `wifi` | object | WiFi connection info (`rssi`, `ip`, `ssid`) |
+| `heap_free` | integer | **Required.** Free heap in bytes. A leak is invisible in one reading and fatal over a season; a soak run compares it against its own start. |
+| `reset_reason` | string | **Required.** Why the device last booted, in the SDK's own words (`"Power on"`, `"External System"`, `"Software Watchdog"`, `"Exception"`, …). Free-form: a reader compares it against the previous value rather than parsing it. |
+| `wifi` | object | WiFi connection info (`rssi`, `ip`, `ssid`, `reconnects`) |
+| `wifi.reconnects` | integer | **Required.** Times the link came back since boot. A device reconnecting ten times a night has a problem RSSI alone never shows. |
 | `metrics` | object | Dispense metrics |
 | `metrics.total_dispenses` | integer | Total dispense attempts since boot |
 | `metrics.successful` | integer | Completed successfully |
@@ -356,6 +364,15 @@ Monitors poll this every 60 seconds:
 - Available: `state != "fault"`
 - Needs a human: `fault != "none"` — and the errand is `fault`/`fault_code`
 - Success rate: `successful / total_dispenses`
+- About to become a support call: `heap_free` falling between polls,
+  `reset_reason` changing without anybody pulling a plug, `wifi.reconnects`
+  climbing. None of the three is an alert on its own reading; each of them is
+  one across a day.
+
+**What a reader may NOT assume about `reset_reason`:** it is the device's own
+wording, not an enum, and a firmware that runs on another chip will word it
+differently. Compare it with the value from the previous poll; do not match it
+against a list.
 
 ---
 
@@ -774,6 +791,37 @@ cut power, flip a simulator switch) are skipped unless `--interactive` is
 given, and a case that leaves the device in a state only a power cycle clears
 runs last.
 
+### Soak runs
+
+The table answers *does this device speak the protocol*. The soak answers the
+question a single request never can — *does it still speak it after two
+hundred dispenses*:
+
+```sh
+# Cycle A of the epic, at the bench, with the hopper simulator in fast mode ('f')
+token-tui conformance --endpoint http://192.168.4.20 --api-key … \
+  --target simulator --soak 200 --json report-A.json
+```
+
+`--soak N` dispenses one token N times, polls the running transaction every
+`--soak-poll` (500 ms by default) and polls `/health` once per cycle. It
+asserts five things, each of them a failure mode that hides from a single
+request:
+
+| Assertion | What it catches |
+|-----------|-----------------|
+| `soak_all_requests_succeeded` | the one-in-two-hundred failure the terminal's retry logic hides |
+| `soak_heap_free_within_10_percent` | a leak |
+| `soak_uptime_is_monotonic` | a reset in the middle of the run |
+| `soak_reset_reason_unchanged` | and which kind of reset it was |
+| `soak_post_latency_p95_below_300ms` | modem sleep, which shows up here and nowhere else |
+
+It runs **instead of** the case table, not after it: the table ends with the
+destructive fault cases, and a faulted device answers `409` to every dispense
+after them. `--json` writes the numbers in a `soak` block beside the rows.
+CI soaks the Go mock 20 times, which proves the runner; the numbers only mean
+something against a real board.
+
 The table lives in `dispenser-client-tui/conformance_cases.go`. Adding to it:
 
 - **Assert the protocol, not an implementation.** If the firmware and the mock
@@ -786,6 +834,10 @@ The table lives in `dispenser-client-tui/conformance_cases.go`. Adding to it:
   `health_reports_overrun_tokens` in CI, and on a real device the hopper
   simulator's `b` and `c` commands drive `bounce_burst_counts_one_token_per_coin`
   and `coast_pulse_is_counted_as_an_overrun`, which need `--interactive`.
+- The operational telemetry of issue #7 is one case,
+  `health_reports_ops_telemetry`: `heap_free`, `reset_reason` and
+  `wifi.reconnects` are required fields, and the suite's own fake device has a
+  knob (`omitOpsTelemetry`) that proves the case can fail.
 - No case is known-red today. `post_while_error_is_409` was, against the
   firmware, from #1 until #6 fixed it. It is now `post_while_fault_is_409`,
   green in CI against the mock and the suite's own fake device; the firmware
@@ -1321,6 +1373,22 @@ All inputs validated:
   the protocol**: the empty sensor is a factory option this hopper does not
   have. Transaction responses now carry required `error_code` / `error_type`.
   Persisted layout version 3.
+
+### Version 2.1.0 (2026-09-21) — still protocol 2
+- **Operational telemetry (#7):** `GET /health` gains `heap_free`,
+  `reset_reason` and `wifi.reconnects`, all three required. A device that
+  reset once a week used to leave exactly one trace — a small `uptime` — and
+  nothing said whether it was a watchdog, an exception or a power cut.
+  Additive, so the protocol version stays 2.
+- **WiFi is supervised (#7):** modem sleep is off
+  (`WIFI_NONE_SLEEP`) — on an ESP8266 answering HTTP it is the usual cause of
+  a request that takes seconds or times out once and succeeds on retry.
+  A link that is down for longer than 60 s **and** no dispense running
+  restarts the device; never while the motor is on. A failed join at boot is
+  no longer final. **A restart clears the device fault, exactly as any boot
+  does** — that is unchanged by design (a jam that is still there faults the
+  next dispense again, having dispensed and billed nothing).
+- **Soak runs (#7):** `token-tui conformance --soak N`, see *Conformance*.
 
 ### Version 1.1.0 (2026-02-14)
 - **Error decoding:** Added Azkoyen hardware error code detection (7 error types)

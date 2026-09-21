@@ -67,11 +67,16 @@ PC817 module #1 (motor control, channel D1) requires resistor modification:
 
 Install via **Tools → Manage Libraries** in Arduino IDE:
 
-| Library | Author | Version | Purpose |
-|---------|--------|---------|---------|
-| **ESPAsyncWebServer** | me-no-dev | Latest | Async HTTP server |
-| **ESPAsyncTCP** | me-no-dev | Latest | Auto-installed with above |
-| **ArduinoJson** | Benoit Blanchon | 7.x (7.0.0+) | JSON parsing/generation |
+**Versions are pinned in `platformio.ini`, and "Latest" is not a version**
+(issue #7): `.pio/libdeps/esp8266` used to hold three different async-TCP forks
+and whichever ArduinoJson the day offered. Change a pin there, not here.
+
+| Library | Owner | Pinned version | Purpose |
+|---------|-------|----------------|---------|
+| **ESPAsyncWebServer** | esp32async | 3.12.1 | Async HTTP server |
+| **ESPAsyncTCP** | esp32async | 2.0.0 | Named although it is transitive — a range-resolved dependency is a floating one |
+| **ArduinoJson** | bblanchon | 7.4.3 | JSON parsing/generation |
+| *platform* | espressif8266 | 4.2.1 | …which is also the pin of the framework libraries below |
 
 **Built-in Libraries** (no installation needed):
 - ESP8266WiFi
@@ -107,7 +112,9 @@ firmware/dispenser/
 ├── hopper_control.cpp     # Motor + sensor GPIO
 ├── hopper_control.h
 ├── flash_storage.cpp      # Persistence (EEPROM/LittleFS)
-└── flash_storage.h
+├── flash_storage.h
+├── wifi_supervisor.cpp    # "restart a device nobody can reach" (issue #7)
+└── wifi_supervisor.h
 ```
 
 ---
@@ -210,8 +217,10 @@ Expected response:
   "fault": "none",
   "fault_code": 0,
   "uptime": 42,
-  "firmware": "1.2.0",
-  "wifi": {"rssi": -47, "ip": "192.168.4.20", "ssid": "…"},
+  "firmware": "1.3.0",
+  "heap_free": 27512,
+  "reset_reason": "Power on",
+  "wifi": {"rssi": -47, "ip": "192.168.4.20", "ssid": "…", "reconnects": 0},
   "metrics": {
     "total_dispenses": 0,
     "successful": 0,
@@ -220,6 +229,10 @@ Expected response:
   "error_history": []
 }
 ```
+
+`heap_free`, `reset_reason` and `wifi.reconnects` are what a bad day leaves
+behind (issue #7): before them, a device that reset once a week produced one
+piece of evidence — a small `uptime`.
 
 `state` and `fault` are the whole health verdict (issue #6): `state` is
 `idle | dispensing | fault`, `fault` is `none | jam | hopper_error`, and only
@@ -263,6 +276,14 @@ curl -H "X-API-Key: your-secret-key-here" \
 - Check SSID and password in `config.h`
 - Ensure 2.4GHz WiFi (ESP8266 doesn't support 5GHz)
 - Check Serial Monitor for connection errors
+- **The device restarts itself after a minute off the network** (issue #7),
+  and never while the motor is running. A board that reboots every minute on
+  the bench is telling you it cannot reach the AP — the serial line says
+  `WiFi down for 60s with nothing dispensing: restarting`. It is not a crash
+  loop; check `reset_reason` on the next `/health` and the credentials above.
+- Modem sleep is off (`WIFI_NONE_SLEEP`). If a request takes seconds or times
+  out once and succeeds on retry, check that this line survived — it is the
+  usual cause on an ESP8266 that answers HTTP.
 
 ### Upload Issues
 

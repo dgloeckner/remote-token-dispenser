@@ -177,6 +177,14 @@ Daemon config at `/etc/pos-daemon/config.toml`:
 - **Transaction reservation TTL**: 30s
 - **Per-token dispense timeout**: 5s
 - **Full dispense timeout**: 60s
+- **WiFi restart deadline**: 60s off the network **and** nothing dispensing →
+  `ESP.restart()` (issue #7, `wifi_supervisor.h`). Never while the motor is
+  on. The restart clears the device fault exactly as any boot does; that is
+  owner decision 3 and not a gap — the jam is still there and faults the next
+  dispense again, having dispensed and billed nothing. Modem sleep is off for
+  the same reason the supervisor exists: an ESP8266 that answers HTTP with
+  modem sleep on takes seconds for a request or times out once and succeeds on
+  retry.
 
 ### State Machine
 ESP8266 tracks exactly one active transaction. **Transaction** states:

@@ -26,6 +26,26 @@ Commands go over the serial monitor at **115200 baud**. They are single
 characters (plus a number where one is needed), so a prompt from the
 conformance suite can be followed literally.
 
+## Soak runs (Cycle A)
+
+Fast mode plus the soak runner is the epic's Cycle A, and it is the one test
+that can find a leak, a nightly reset or a radio that fell asleep:
+
+```sh
+# in the simulator's serial monitor
+f
+
+# on the workstation
+token-tui conformance --endpoint http://192.168.4.20 --api-key … \
+  --target simulator --soak 200 --json report-A.json
+```
+
+Roughly 200 × (300 ms + the 500 ms settling window + a poll), so about ten
+minutes. It runs instead of the case table — run the table first, then power
+the dispenser off and on, then soak: the table ends with the destructive fault
+cases, and a faulted device refuses every dispense after them. What the run
+asserts is in `dispenser-protocol.md` under *Conformance → Soak runs*.
+
 ## Wiring
 
 Three signal lines and a common ground, 3.3 V logic on both sides. The
