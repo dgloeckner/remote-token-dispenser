@@ -20,9 +20,28 @@
   #define SUBNET IPAddress(255, 255, 255, 0)
 #endif
 
-// API Authentication - CHANGE THIS IN config.local.h
-#ifndef API_KEY
-  #define API_KEY "change-this-secret-key-here"
+// Protocol version handshake (dispenser-protocol.md).
+// There are no devices in the field: protocol 2 replaces protocol 1 outright,
+// and a client refuses any other version instead of adapting to it.
+//
+// **Request signing is part of what protocol 2 IS**, not a change on top of
+// it (owner decision, 2026-09-21).  Protocol 2 is the clean break, and issues
+// #1 through #8 ship in it together: the fault model, the telemetry, the
+// supervisor and the signed request that replaced `X-API-Key` all land in one
+// release.  Nothing ever spoke an intermediate state, so a version a client
+// could never observe would buy nothing.  The three places that hold this
+// number move together: here, `ProtocolVersion` in dispenser-mock/types.go
+// and in dispenser-client-tui/client.go.
+#define PROTOCOL_VERSION 2
+
+// The shared signing secret.  CHANGE THIS IN config.local.h.
+//
+// It is called SIGNING_KEY and not API_KEY on purpose: since issue #8 it
+// NEVER travels.  Requests carry HMAC-SHA256(this key, METHOD \n PATH \n BODY
+// \n NONCE) in X-Signature, and a request that carries the key itself in an
+// X-API-Key header is simply an unsigned request — 401, like any other.
+#ifndef SIGNING_KEY
+  #define SIGNING_KEY "change-this-secret-key-here"
 #endif
 
 // GPIO Pins (Wemos D1 Mini ESP8266)
@@ -45,7 +64,12 @@
 #define MOTOR_PIN          D1    // GPIO5  - Motor control output (via PC817 #1)
 #define COIN_PULSE_PIN     D7    // GPIO13 - Coin pulse input (via PC817 #2)
 #define ERROR_SIGNAL_PIN   D5    // GPIO14 - Hopper error input (via PC817 #3)
-#define HOPPER_LOW_PIN     D6    // GPIO12 - Empty sensor input (via PC817 #4)
+// D6 (GPIO12) is FREE.  It carried the hopper's empty sensor, which is a
+// factory option the Hopper U-II in the boathouse does not have
+// (docs/azkoyen-hopper-protocol.md section 1): the line never produced a
+// signal, the pin sat on its pull-up and /health published "not empty" as if
+// it were a measurement.  Removed with the protocol field in issue #6.  A unit
+// that does have the sensor brings the pin back as a deliberate change.
 
 // Timing Constants
 #define JAM_TIMEOUT_MS     5000   // 5 seconds per token
@@ -58,7 +82,38 @@
 
 // Hardware Specs (Azkoyen Hopper U-II PULSES mode)
 #define PULSE_DURATION_MS  30     // Expected pulse duration
-#define FIRMWARE_VERSION   "1.1.0-DEBUG-error-decoding"
+
+// Pulse filtering and the settling window (issue #5).
+//
+// COIN_PULSE_MIN_GAP_MS — the smallest spacing between two edges that can both
+// be tokens.  The datasheet pins the numbers on either side of it: one coin is
+// a single LOW phase of 30-65 ms (PULSE_DURATION_MS above,
+// docs/azkoyen-hopper-protocol.md section 3.4), and the hopper dispenses
+// roughly one coin per second.  So two real tokens are never closer than the
+// pulse itself, and 20 ms sits below the shortest legal pulse with margin
+// while being a hundred times more than a bouncing optocoupler edge or an EMI
+// spike from the motor switching on the same supply needs.  Anything closer
+// than this to the last ACCEPTED edge is noise, and noise used to be a token:
+// each spurious edge shortened the dispense by one coin.
+//
+// DISPENSE_SETTLING_MS — how long a transaction keeps counting after the motor
+// has been told to stop.  The disc coasts, and a token already past the wheel
+// still falls; the ISR stop (commit a9f15af) cut the motor sooner but could
+// never make the last token unfall.  500 ms is four times the simulator's
+// coast delay (COAST_DELAY_MS = 120 ms in firmware/hopper-simulator/) and well
+// inside the 5 s jam timeout, so the window can never be mistaken for a jam.
+// A token that arrives in it is counted and reported, which is why `dispensed`
+// may exceed `quantity` (dispenser-protocol.md).
+#define COIN_PULSE_MIN_GAP_MS  20
+#define DISPENSE_SETTLING_MS  500
+
+// Set from the build (-DFIRMWARE_VERSION='"…"' in platformio.ini) so a release
+// cannot go out carrying a debug string the way 1.1.0-DEBUG-error-decoding did.
+// The fallback keeps a plain checkout of the sketch compiling in the Arduino
+// IDE, which passes no flags.
+#ifndef FIRMWARE_VERSION
+  #define FIRMWARE_VERSION "1.4.0"
+#endif
 
 // Include local configuration (not tracked in git)
 // Copy config.local.h.example to config.local.h and customize

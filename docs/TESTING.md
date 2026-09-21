@@ -5,6 +5,22 @@
 **Device:** Wemos D1 Mini (ESP8266)
 **IP Address:** 192.168.188.244
 
+> **This is the record of a test session on firmware 1.0.0**, kept for what it
+> found. The `/health` bodies quoted below are protocol 1 and no longer the
+> shape the device answers: `status`, `dispenser` and `hopper_low` are gone,
+> replaced by one `state` and one `fault` (issue #6). The contract is
+> `dispenser-protocol.md`; what is executable of this session now lives in
+> `token-tui conformance`.
+>
+> **The `X-API-Key` header every request below carries no longer exists**
+> (issue #8). In protocol 2 — firmware 1.4.0 — a request carries `X-Nonce`
+> and `X-Signature: HMAC-SHA256(key, METHOD \n PATH \n BODY \n NONCE)`, and
+> the key never travels; `GET /health` answers a three-field document to an
+> unsigned caller. The curls below are **not** rewritten, because this is the
+> record of a session that really used that header — rewriting it would make
+> it a forgery rather than a log. For a working example use
+> `firmware/README.md` § *Test Authentication*.
+
 ---
 
 ## Test Environment
@@ -12,7 +28,8 @@
 - **Hardware:** ESP8266 (Wemos D1 Mini) without physical hopper connected
 - **Network:** WiFi connected with static IP
 - **Testing Method:** HTTP API endpoints via curl
-- **Authentication:** X-API-Key header with configured API key
+- **Authentication:** X-API-Key header with configured API key *(protocol 1;
+  replaced by request signing in issue #8 — see the banner above)*
 
 ---
 
@@ -501,10 +518,11 @@ The following scenarios cannot be fully tested without the Azkoyen Hopper U-II c
 - **Expected:** FALLING edge interrupt triggers correctly
 - **Expected:** No pulse counting errors up to 20 tokens
 
-### 16. Hopper Low Sensor
-- **Requires:** Hopper with low token condition
-- **Expected:** hopper_low field in /health returns true
-- **Expected:** D8 pin reads LOW when sensor active
+### 16. Hopper Low Sensor — **dropped (issue #6)**
+The empty sensor is a factory option this Hopper U-II does not have. The line
+never produced a signal, the pin sat on its pull-up, and `/health` published
+"not empty" as if it were a measurement. `hopper_low` was removed from the
+protocol, the firmware and the pin list; there is nothing here to test.
 
 ### 17. Extended Reliability Test
 - **Requires:** 100+ consecutive dispense operations
@@ -519,7 +537,7 @@ The following scenarios cannot be fully tested without the Azkoyen Hopper U-II c
 
 | Scenario | HTTP Status | Response | Behavior |
 |----------|-------------|----------|----------|
-| No API key | 401 | `{"error":"unauthorized"}` | Reject immediately |
+| No API key | 401 | `{"error":"unauthorized"}` | Reject immediately *(today: no signature, and the 401 names a `reason`)* |
 | Invalid JSON | 400 | `{"error":"invalid json"}` | Parse error |
 | Missing tx_id | 400 | `{"error":"invalid tx_id or quantity"}` | Validation error |
 | Quantity out of range | 400 | `{"error":"invalid tx_id or quantity"}` | Validation error |
@@ -533,18 +551,29 @@ The following scenarios cannot be fully tested without the Azkoyen Hopper U-II c
 
 ## Security Verification
 
-### Authentication
+> **Superseded by issue #8.** What this session verified was that a bearer
+> key was *enforced*. What it could not verify is the thing that mattered:
+> that key travelled in clear in every request, so anyone within range of the
+> WLAN read it once and could dispense at will, and a captured request
+> replayed with a fresh `tx_id` dispensed again. The list below is kept for
+> the record; the current rules are in `dispenser-protocol.md`
+> § *Authentication*.
+
+### Authentication (protocol 1, historical)
 - ✅ Health endpoint accessible without auth (intentional for monitoring)
 - ✅ POST /dispense requires X-API-Key header
 - ✅ GET /dispense/{tx_id} requires X-API-Key header
 - ✅ Invalid API key returns 401 Unauthorized
 - ✅ Missing API key returns 401 Unauthorized
 
-### Configuration
-- ⚠️  **IMPORTANT:** Default API_KEY in config.h is "change-this-secret-key-here"
-- ⚠️  **ACTION REQUIRED:** Change API_KEY before production deployment
-- ⚠️  **ACTION REQUIRED:** Use strong, random API key (32+ characters)
-- ✅ API key transmitted in header (not URL - safer for logs)
+### Configuration (today)
+- ⚠️  **ACTION REQUIRED:** set `SIGNING_KEY` in `config.local.h` to a long
+  random secret (32+ characters) before deployment; the same value goes into
+  the terminal
+- ✅ The secret is **never transmitted** — a request carries a signature over
+  it, so it appears in no log, no capture and no proxy
+- ⚠️  **ACTION REQUIRED:** dedicated WPA2 SSID / VLAN with client isolation
+  (`hardware/README.md` § *Network*) — an installation requirement
 
 ---
 
@@ -600,7 +629,7 @@ Before testing, ensure:
 
 ### Immediate Actions
 1. ✅ Complete software integration testing (documented above)
-2. ⚠️  **Change API_KEY in config.h to strong secret**
+2. ⚠️  **Set SIGNING_KEY in `config.local.h` to a strong random secret**
 3. ⏸️  Connect Azkoyen Hopper U-II hardware
 4. ⏸️  Verify motor control wiring (D5 → level shifter → 12V motor)
 5. ⏸️  Verify coin pulse sensor wiring (hopper opto → D6)
@@ -610,13 +639,14 @@ Before testing, ensure:
 9. ⏸️  Run extended reliability test (100+ dispenses)
 
 ### Production Deployment
-- [ ] Generate strong random API key
-- [ ] Update config.h with production credentials
+- [ ] Generate a strong random signing secret
+- [ ] Update `config.local.h` with production credentials
+- [ ] Put the dispenser and terminal on their own isolated WLAN segment
 - [ ] Document static IP in network configuration
 - [ ] Backup config.h securely (contains secrets)
 - [ ] Test all endpoints in production environment
 - [ ] Monitor healthchecks.io integration (from Pi daemon)
-- [ ] Set up alerting for hopper_low condition
+- [ ] Set up alerting on `fault != "none"` (there is no hopper_low to alert on — issue #6)
 
 ---
 

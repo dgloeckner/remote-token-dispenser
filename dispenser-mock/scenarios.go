@@ -33,6 +33,10 @@ func GetScenarioForQuantity(quantity int) string {
 		return "error_power_fault"
 	case 15:
 		return "slow_dispense"
+	case 17:
+		return "power_loss_after_first"
+	case 18:
+		return "overrun_after_last"
 	default:
 		if quantity >= 16 && quantity <= 20 {
 			return "success"
@@ -50,6 +54,10 @@ func (m *MockDispenser) ExecuteScenario(tx *Transaction, scenario string) {
 		m.executeTimeoutPartial(tx)
 	case "crash_after_first":
 		m.executeCrashAfterFirst(tx)
+	case "power_loss_after_first":
+		m.executePowerLossAfterFirst(tx)
+	case "overrun_after_last":
+		m.executeOverrunAfterLast(tx)
 	case "partial_dispense":
 		m.executePartialDispense(tx)
 	case "load_delay":
@@ -134,9 +142,11 @@ func (m *MockDispenser) executeTimeoutPartial(tx *Transaction) {
 	case <-tx.StopChan:
 		return
 	case <-timeout.C:
-		// Enter error state
+		// The jam watchdog: the transaction fails AND the device faults.
 		m.mu.Lock()
 		tx.State = StateError
+		tx.ErrorType = TxErrorJamTimeout
+		m.raiseFaultLocked(FaultJam, 0)
 		m.metrics.Jams++
 		m.metrics.Partial++
 		m.metrics.Failures++
@@ -147,7 +157,15 @@ func (m *MockDispenser) executeTimeoutPartial(tx *Transaction) {
 	}
 }
 
-// executeCrashAfterFirst simulates crash (closes connection)
+// executeCrashAfterFirst simulates a watchdog reset / brownout: the connection
+// dies mid-response and the MCU restarts, but the RTC domain survives.
+//
+// What the device does on the way back up (issue #3): the flash record says
+// DISPENSING, the RTC block holds the live count, so the transaction is closed
+// as `error` with the EXACT count and count_reliable = true — and it stays in
+// the persisted history ring, so a later GET is a 200 and not a 404.  Before
+// #3 the mock threw the transaction away here, which is what made every
+// crashed checkout on the terminal a permanent "manual reconciliation" row.
 func (m *MockDispenser) executeCrashAfterFirst(tx *Transaction) {
 	m.mu.Lock()
 	m.metrics.TotalDispenses++
@@ -169,13 +187,97 @@ func (m *MockDispenser) executeCrashAfterFirst(tx *Transaction) {
 		m.mu.Unlock()
 	}
 
-	// Simulate ESP8266 restart after crash: brief delay, then lose all state.
-	// Real hardware: MCU resets, all RAM is lost. The terminal will receive 404
-	// on subsequent GET /dispense/{txId} calls, triggering manual reconciliation.
-	// Note: Connection is closed by the handler (hijack) before we reach here.
+	// The reboot itself: a couple of seconds of silence, then the recovered
+	// transaction.  Note: the connection is closed by the handler (hijack)
+	// before we reach here.
 	time.Sleep(2 * time.Second)
 	m.mu.Lock()
-	m.activeTx = nil // Clear without adding to history — restart loses all state
+	tx.State = StateError
+	// A recovered crash sets NO device fault (issue #6): nothing is wrong
+	// with the machine, and one watchdog reset used to take it out of service.
+	tx.ErrorType = TxErrorReset
+	tx.CountReliable = true // RTC memory came through the reset
+	m.metrics.Failures++
+	m.metrics.Partial++
+	m.activeTx = nil
+	m.addToHistoryLocked(tx)
+	m.mu.Unlock()
+}
+
+// executePowerLossAfterFirst is the same reset without the RTC domain: the
+// supply went away, the live count with it.  One token physically fell, but
+// the device cannot know that — all it has is the zero its flash record holds
+// from the start of the transaction.  It reports that lower bound and says the
+// count is not exact, instead of presenting the zero as a fact.
+func (m *MockDispenser) executePowerLossAfterFirst(tx *Transaction) {
+	m.mu.Lock()
+	m.metrics.TotalDispenses++
+	m.metrics.RequestedTokens += tx.Quantity
+	m.metrics.Crashes++
+	m.mu.Unlock()
+
+	timer := time.NewTimer(100 * time.Millisecond)
+	defer timer.Stop()
+
+	select {
+	case <-tx.StopChan:
+		return
+	case <-timer.C:
+	}
+
+	time.Sleep(1 * time.Second)
+	m.mu.Lock()
+	tx.State = StateError
+	tx.ErrorType = TxErrorReset
+	tx.Dispensed = 0 // the lower bound from flash, not the token in the tray
+	tx.CountReliable = false
+	m.metrics.Failures++
+	m.activeTx = nil
+	m.addToHistoryLocked(tx)
+	m.mu.Unlock()
+}
+
+// executeOverrunAfterLast dispenses the whole quantity and then one token more:
+// the one that was already past the wheel when the motor was cut.  The firmware
+// counts it during its settling window and reports it, so `dispensed` ends up
+// greater than `quantity` — legal, and what the terminal bills (issue #5).
+func (m *MockDispenser) executeOverrunAfterLast(tx *Transaction) {
+	m.mu.Lock()
+	m.metrics.TotalDispenses++
+	m.metrics.RequestedTokens += tx.Quantity
+	m.mu.Unlock()
+
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+
+	for i := 0; i < tx.Quantity; i++ {
+		select {
+		case <-tx.StopChan:
+			return
+		case <-ticker.C:
+			m.mu.Lock()
+			tx.Dispensed++
+			m.mu.Unlock()
+		}
+	}
+
+	// The settling window: the motor is off, the transaction is not done yet.
+	settling := time.NewTimer(200 * time.Millisecond)
+	defer settling.Stop()
+	select {
+	case <-tx.StopChan:
+		return
+	case <-settling.C:
+	}
+
+	m.mu.Lock()
+	tx.Dispensed++ // the coast token
+	tx.State = StateDone
+	m.metrics.Successful++
+	m.metrics.DispensedTokens += tx.Dispensed
+	m.metrics.OverrunTokens += tx.Dispensed - tx.Quantity
+	m.activeTx = nil
+	m.addToHistoryLocked(tx)
 	m.mu.Unlock()
 }
 
@@ -201,9 +303,11 @@ func (m *MockDispenser) executePartialDispense(tx *Transaction) {
 		}
 	}
 
-	// Enter error state
+	// Enter error state — and fault the device with it
 	m.mu.Lock()
 	tx.State = StateError
+	tx.ErrorType = TxErrorJamTimeout
+	m.raiseFaultLocked(FaultJam, 0)
 	m.metrics.Jams++
 	m.metrics.Partial++
 	m.metrics.Failures++
@@ -251,19 +355,16 @@ func (m *MockDispenser) executeLoadDelay(tx *Transaction) {
 	}
 }
 
-// executeHardwareError simulates Azkoyen error code
+// executeHardwareError simulates a decoded Azkoyen error.  Since issue #6 it
+// does what the firmware does: the error faults the DEVICE, and the fault
+// ends only with a power cycle — restarting the mock is that power cycle.
 func (m *MockDispenser) executeHardwareError(tx *Transaction, code int, errType, description string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// Set hardware error
-	m.hardwareError = &ErrorInfo{
-		Active:      true,
-		Code:        code,
-		Type:        errType,
-		Timestamp:   int(m.Uptime()),
-		Description: description,
-	}
+	_ = description // the description left /health with the `error` block
+
+	m.raiseFaultLocked(FaultHopperError, code)
 
 	// Add to error history
 	if len(m.errorHistory) >= 5 {
@@ -273,11 +374,12 @@ func (m *MockDispenser) executeHardwareError(tx *Transaction, code int, errType,
 		Code:      code,
 		Type:      errType,
 		Timestamp: int(m.Uptime()),
-		Cleared:   false,
 	})
 
-	// Mark transaction as error
+	// Mark transaction as error, with the hopper's own reason
 	tx.State = StateError
+	tx.ErrorCode = code
+	tx.ErrorType = errType
 	m.metrics.TotalDispenses++
 	m.metrics.RequestedTokens += tx.Quantity
 	m.metrics.Failures++

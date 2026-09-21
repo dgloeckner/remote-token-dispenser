@@ -159,7 +159,12 @@ The stock PC817 modules include onboard resistors R1 (1kΩ) and R2 (10kΩ), but 
 - **D1 (GPIO5)** → Control output (via PC817 optocoupler #1) - **⚠️ Active LOW: GPIO LOW = motor ON**
 - **D7 (GPIO13)** ← Coin pulse input (via PC817 optocoupler #2) - **Active LOW**
 - **D5 (GPIO14)** ← Error signal input (via PC817 optocoupler #3) - **Active LOW**
-- **D6 (GPIO12)** ← Empty sensor input (via PC817 optocoupler #4) - **Active LOW**
+- **D6 (GPIO12)** — **unused.** The hopper's empty sensor (connector pin 10) is
+  a factory option this unit does not have: the line never produced a signal,
+  so the pin sat on its pull-up and read "not empty" forever. The firmware
+  stopped reading it and `/health` stopped publishing it in issue #6. If a
+  hopper *with* the sensor is ever bought, the pin comes back as a deliberate
+  change, optocoupler #4 and all.
 - **GND** → Common ground (essential for all circuits!)
 
 ---
@@ -176,7 +181,7 @@ The stock PC817 modules include onboard resistors R1 (1kΩ) and R2 (10kΩ), but 
 - **D1 (GPIO5)** - Control output (via PC817 optocoupler #1) - **Active LOW**
 - **D7 (GPIO13)** - Coin pulse interrupt input (via PC817 optocoupler #2) - **Active LOW**
 - **D5 (GPIO14)** - Error signal input (via PC817 optocoupler #3) - **Active LOW**
-- **D6 (GPIO12)** - Empty sensor input (via PC817 optocoupler #4) - **Active LOW**
+- **D6 (GPIO12)** - free (the empty sensor is not fitted; see above)
 
 ---
 
@@ -329,6 +334,76 @@ Before powering everything on:
    - Motor should activate
    - Tokens should dispense
    - Pulse count should match dispensed tokens
+
+---
+
+## 📶 Network: a dedicated segment, not the members' WLAN
+
+**This is an installation requirement, not a recommendation.** Do not put the
+dispenser on the club's ordinary network, and do not skip it because the
+firmware signs its requests.
+
+**What to build:**
+
+- A **separate WPA2(-PSK) SSID or VLAN** carrying nothing but the dispenser
+  and the terminal that drives it.
+- **Client isolation ON** on that SSID, so nothing else that joins it can
+  reach the dispenser at all.
+- **No route from the members' network** to that segment, and no port forward
+  from the internet to it — ever. The dispenser speaks plain HTTP.
+- A **static IP** for the dispenser (`STATIC_IP` in `config.local.h`), so the
+  terminal does not depend on a DHCP lease.
+- The **shared signing secret** goes into `config.local.h` on the ESP
+  (`SIGNING_KEY`) and into the terminal's configuration. It is long and random
+  — it is never typed by a person and never appears on the wire.
+
+**Why, in one paragraph.** Since firmware 1.4.0 every request is signed:
+whoever listens to this WLAN cannot learn the secret, cannot replay a captured
+dispense and cannot change the quantity in one. What signing does **not** do
+is hide the traffic or stop a flood — the payloads are readable, and anyone on
+the same segment can keep the device busy or use up the nonces it hands out.
+A dedicated, isolated segment is what removes "anyone on the same segment"
+from the picture. Before signing, the one control was a static key sent in
+clear in every request; that weakness is described publicly in
+dgloeckner/remote-token-dispenser#8 because nothing was in production, and
+this section is the standing condition that it stays uninteresting.
+
+**Tokens are money.** Treat this segment the way you would treat the cash box.
+
+---
+
+## 🚦 When the dispenser stops: clear it, then pull the plug
+
+The device has exactly one way out of a fault, and it is the power switch.
+There is no reset button on the kiosk, none in the TUI and no endpoint for it
+(owner decision, 2026-09-20). `GET /health` names the state:
+
+```json
+{"state": "fault", "fault": "jam", "fault_code": 0}
+```
+
+**What staff do, in this order:**
+
+1. **Clear the jam.** Open the hopper, take out whatever is wedged in the exit.
+2. **Refill if it is empty.** An empty hopper ends as a jam and looks exactly
+   like one — the machine cannot tell you it is running out, because the
+   sensor that would say so is not fitted. The early warning comes from
+   counting what was sold since the last refill (dgloeckner/clubbar#955).
+3. **Pull the plug for 5 seconds**, then plug it back in.
+
+The device comes back idle and sells again. If the jam is still there, the
+next dispense runs into it and faults again — with nothing dispensed and
+nothing billed, so nobody loses money by trying.
+
+**Why no reset button:** a jam is a physical condition, and a button that
+clears the *report* of it without clearing the jam is a button that gets
+pressed. The plug cannot lie. The accepted cost is that a watchdog reset
+clears a fault too: the device forgets the jam is there, tries once more, and
+faults again, having billed nothing.
+
+**What is NOT a fault:** a reset in the middle of a dispense. The transaction
+is closed as an `error` with its exact count, but the machine is fine and
+stays sellable — nobody has to touch it.
 
 ---
 
@@ -494,12 +569,16 @@ Before deploying your token dispenser:
 - [ ] D1 (GPIO5) → PC817 #1 → Hopper Control pin (inverted: LOW = ON)
 - [ ] D7 (GPIO13) ← PC817 #2 ← Hopper Coin (active LOW)
 - [ ] D5 (GPIO14) ← PC817 #3 ← Hopper Error (active LOW)
-- [ ] D6 (GPIO12) ← PC817 #4 ← Hopper Empty (active LOW)
+- [ ] D6 (GPIO12) is FREE — the empty sensor is a factory option this hopper
+      does not have (issue #6); no PC817 #4, nothing wired to it
 - [ ] All connections visually inspected and tested with multimeter
 - [ ] Capacitor polarity verified (critical!)
 - [ ] ESP8266 firmware flashed and WiFi configured
 - [ ] Test dispense successful (motor runs, tokens dispense, pulses count)
-- [ ] API authentication configured (API key set)
+- [ ] Dedicated WPA2 SSID / VLAN with client isolation in place, no route from
+      the members' network (see *Network* above) — **required, not optional**
+- [ ] `SIGNING_KEY` set in `config.local.h` to a long random secret, and the
+      same value configured on the terminal (it is never transmitted)
 - [ ] System tested with 10+ dispenses (no jams, correct counts)
 - [ ] Enclosure secured and weatherproofed (if applicable)
 

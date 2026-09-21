@@ -9,11 +9,13 @@ A k9s-style terminal dashboard for testing and monitoring the [Remote Token Disp
 ╭─────────────────────────╮  ╭────────────────────────────╮
 │ ⚡ Health               │  │ 📊 Metrics                 │
 │                         │  │                            │
-│ Status:     ● OK        │  │ Total Dispenses: 1247      │
-│ Dispenser:  idle        │  │ Success Rate:    95.4%     │
+│ State:      ● idle      │  │ Total Dispenses: 1247      │
+│ Fault:      none        │  │ Success Rate:    95.4%     │
 │ Uptime:     23h 27m     │  │ Jams:            3         │
-│ Firmware:   1.2.0       │  │ Partial:         2         │
-│ Hopper:     ● OK        │  │ Failures:        53        │
+│ Firmware:   1.3.0       │  │ Partial:         2         │
+│ Heap:       27512 B     │  │ Failures:        53        │
+│ Last reset: Power on    │  │                            │
+│ WiFi:       ▂▄▆ -47dBm  2 reconnects                    │
 ╰─────────────────────────╯  ╰────────────────────────────╯
 ╭─────────────────────────────────────────────────────────╮
 │ 📈 Latency (ms)                                        │
@@ -33,10 +35,10 @@ go mod tidy
 go build -o token-tui .
 
 # Run
-./token-tui --endpoint http://192.168.4.20 --api-key your-secret-key
+./token-tui --endpoint http://192.168.4.20 --signing-key your-secret-key
 
 # Or use env vars
-export TOKEN_DISPENSER_API_KEY=your-secret-key
+export TOKEN_DISPENSER_SIGNING_KEY=your-secret-key
 export TOKEN_DISPENSER_ENDPOINT=http://192.168.4.20
 ./token-tui
 ```
@@ -45,7 +47,7 @@ export TOKEN_DISPENSER_ENDPOINT=http://192.168.4.20
 
 ### 1. Dashboard (Tab 1)
 - Real-time health monitoring with auto-refresh every 5s
-- ESP8266 status, uptime, firmware version, hopper status
+- Device `state` and `fault` (issue #6), uptime, firmware version
 - **WiFi signal strength with visual bars** (NEW)
 - Dispense metrics: success rate, jams, partial dispenses, failures
 - Latency sparkline with min/avg/max stats
@@ -83,6 +85,45 @@ export TOKEN_DISPENSER_ENDPOINT=http://192.168.4.20
 | `g/G`   | Jump to top/bottom of log        |
 | `C`     | Clear result / log               |
 | `H`     | Force health refresh (Test tab)  |
+
+## Conformance mode (headless)
+
+The same binary also runs the protocol conformance suite — the table of cases
+that decides whether an implementation speaks `dispenser-protocol.md`:
+
+```bash
+# against the Go mock (this is what CI runs)
+token-tui conformance --endpoint http://127.0.0.1:8080 --signing-key dev --target mock
+
+# against a real ESP8266 with the hopper simulator
+token-tui conformance --endpoint http://192.168.4.20 --signing-key mysecret \
+  --target simulator --interactive --json report.json
+```
+
+| Flag | Meaning |
+|------|---------|
+| `--target` | `mock`, `simulator` or `hopper` — decides which cases apply |
+| `--interactive` | also run cases that ask for a physical act (press RST, flip a switch) |
+| `--json PATH` | write a per-case report |
+| `--only SUBSTR` | run only the cases whose name contains SUBSTR |
+| `--soak N` | run a soak of N dispenses **instead of** the table (issue #7) |
+| `--soak-poll D` | how often a soak polls the running transaction (default 500ms) |
+
+A soak is the other half of the verdict: the table says the device speaks the
+protocol, the soak says it still does after two hundred dispenses — zero failed
+requests, free heap within 10 % of where it started, no reset in the middle,
+and a p95 POST latency under 300 ms (which is where modem sleep shows up and
+nowhere else).
+
+```bash
+# Cycle A of the epic, with the hopper simulator in fast mode ('f')
+token-tui conformance --endpoint http://192.168.4.20 --signing-key mysecret \
+  --target simulator --soak 200 --json report-A.json
+```
+
+The exit code is the verdict. Cases are defined in `conformance_cases.go`;
+`conformance.go` is the runner. Both are covered by `go test` against a fake
+device, so a case that can never fail is caught.
 
 ## Dependencies
 

@@ -1,48 +1,45 @@
 // firmware/dispenser/flash_storage.cpp
+//
+// One record, one commit.  There is no separate magic byte any more: magic,
+// layout version and checksum sit inside the record itself, so a half-written
+// commit is detected rather than read back as data (issue #3).
 
 #include "flash_storage.h"
 #include <EEPROM.h>
+#include <string.h>
+
+#include "crash_state.h"
 
 #define EEPROM_SIZE 512
-#define MAGIC_BYTE 0xAB  // Indicates valid data
-#define ADDR_MAGIC 0
-#define ADDR_DATA 1
+#define ADDR_RECORD 0
 
 void FlashStorage::begin() {
   EEPROM.begin(EEPROM_SIZE);
 }
 
-bool FlashStorage::hasPersistedTransaction() {
-  return EEPROM.read(ADDR_MAGIC) == MAGIC_BYTE;
-}
+bool FlashStorage::load(PersistedRecord& out) {
+  PersistedRecord stored;
+  memset(&stored, 0, sizeof(stored));
+  EEPROM.get(ADDR_RECORD, stored);
 
-PersistedTransaction FlashStorage::load() {
-  PersistedTransaction tx;
-
-  if (!hasPersistedTransaction()) {
-    // Return empty transaction
-    memset(&tx, 0, sizeof(tx));
-    tx.state = STATE_IDLE;
-    return tx;
+  if (!persistedRecordValid(stored)) {
+    return false;
   }
 
-  // Read from EEPROM
-  EEPROM.get(ADDR_DATA, tx);
-  return tx;
+  out = stored;
+  return true;
 }
 
-void FlashStorage::persist(const PersistedTransaction& tx) {
-  // Write magic byte
-  EEPROM.write(ADDR_MAGIC, MAGIC_BYTE);
-
-  // Write transaction data
-  EEPROM.put(ADDR_DATA, tx);
-
-  // Commit to flash
+void FlashStorage::save(const PersistedRecord& record) {
+  PersistedRecord sealed = record;
+  sealPersistedRecord(sealed);
+  EEPROM.put(ADDR_RECORD, sealed);
   EEPROM.commit();
 }
 
 void FlashStorage::clear() {
-  EEPROM.write(ADDR_MAGIC, 0x00);
+  // Destroying the magic is enough: load() then reports "nothing usable".
+  uint32_t dead = 0;
+  EEPROM.put(ADDR_RECORD, dead);
   EEPROM.commit();
 }

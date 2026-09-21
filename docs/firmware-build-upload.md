@@ -53,7 +53,7 @@ cd firmware/dispenser
 cp config.local.h.example config.local.h
 ```
 
-Edit `config.local.h` with your WiFi credentials and API key:
+Edit `config.local.h` with your WiFi credentials and the shared signing secret:
 
 ```cpp
 #define WIFI_SSID "YourNetworkName"
@@ -61,7 +61,9 @@ Edit `config.local.h` with your WiFi credentials and API key:
 #define STATIC_IP IPAddress(192, 168, 4, 20)
 #define GATEWAY IPAddress(192, 168, 4, 1)
 #define SUBNET IPAddress(255, 255, 255, 0)
-#define API_KEY "your-secret-api-key-here"
+// Never transmitted (issue #8): requests carry HMAC-SHA256 over
+// METHOD \n PATH \n BODY \n NONCE.  The terminal holds the same value.
+#define SIGNING_KEY "your-shared-signing-secret-here"
 ```
 
 ## Building

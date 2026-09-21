@@ -4,28 +4,45 @@
 // firmware/dispenser/http_server.cpp
 
 #include "http_server.h"
+#include "log.h"
 #include <ArduinoJson.h>
 #include <ESP8266WiFi.h>
+#include <stdlib.h>
 
-HttpServer::HttpServer(DispenseManager& manager, HopperControl& hopper)
-  : dispenseManager(manager), hopperControl(hopper), server(80) {
+HttpServer::HttpServer(DispenseManager& manager, HopperControl& hopper,
+                       WifiSupervisor& wifi)
+  : dispenseManager(manager), hopperControl(hopper), wifiSupervisor(wifi),
+    server(80), signer(SIGNING_KEY) {
 }
 
 void HttpServer::begin() {
-  // GET /health - NO AUTH
-  server.on("/health", HTTP_GET, [this](AsyncWebServerRequest *request) {
-    this->handleHealth(request);
+  // GET /nonce - NO AUTH, and it cannot have any: it is the first call of
+  // every signed exchange (issue #8).  What it hands out is 128 random bits
+  // with a 30 s life, which is worth nothing to whoever does not hold the key.
+  server.on("/nonce", HTTP_GET, [this](AsyncWebServerRequest *request) {
+    this->handleNonce(request);
   });
 
+  // GET /health - answers unsigned with the three fields a liveness probe
+  // needs, and the full document to a signed request (issue #8).  Not 401
+  // when unsigned: this is the one call a monitor makes to tell "the machine
+  // is there" from "the machine is gone", and a 401 answers neither.
+
   // POST /dispense - REQUIRES AUTH
+  //
+  // The body callback only collects bytes; the request handler answers.  That
+  // order is the fix for two bugs at once (issue #4): a POST with no body never
+  // reaches a body callback, so an empty lambda there left the caller waiting
+  // for its own timeout — and a body split across TCP segments reached the old
+  // handler as a fragment, which parsed as "400 invalid json" at random.
   server.on("/dispense", HTTP_POST,
-    [](AsyncWebServerRequest *request) {
-      // This is called after body is parsed
+    [this](AsyncWebServerRequest *request) {
+      this->handleDispensePost(request);
     },
     NULL,  // Upload handler
     [this](AsyncWebServerRequest *request, uint8_t *data, size_t len,
            size_t index, size_t total) {
-      this->handleDispensePost(request, data, len, index, total);
+      this->collectDispenseBody(request, data, len, index, total);
     }
   );
 
@@ -34,17 +51,84 @@ void HttpServer::begin() {
     this->handleDispenseGet(request);
   });
 
+  // GET /debug - REQUIRES AUTH.  Raw pin levels for the bench (issue #6).
+  server.on("/debug", HTTP_GET, [this](AsyncWebServerRequest *request) {
+    this->handleDebug(request);
+  });
+
+  // Nothing else is registered, and POST /reset in particular is not: a fault
+  // is ended by a power cycle and by nothing else (owner decision,
+  // 2026-09-20).  The async server answers 404 for it, which is the protocol.
+
   server.begin();
-  Serial.println("HTTP server started on port 80");
+  LOG_INFO("HTTP server started on port 80");
 }
 
-bool HttpServer::checkAuth(AsyncWebServerRequest *request) {
-  if (!request->hasHeader("X-API-Key")) {
-    return false;
+String HttpServer::signedPath(AsyncWebServerRequest *request) {
+  // The async server hands the query string back in url() on some builds, and
+  // the signature is defined over the path alone (dispenser-protocol.md), so
+  // it is cut off here rather than trusted to be absent.
+  String path = request->url();
+  int q = path.indexOf('?');
+  if (q != -1) {
+    path = path.substring(0, q);
+  }
+  return path;
+}
+
+bool HttpServer::requireSignature(AsyncWebServerRequest *request, bool mutating,
+                                  const char *body, size_t bodyLen) {
+  const char *nonce = NULL;
+  const char *signature = NULL;
+  String nonceValue;
+  String signatureValue;
+
+  if (request->hasHeader("X-Nonce")) {
+    nonceValue = request->header("X-Nonce");
+    nonce = nonceValue.c_str();
+  }
+  if (request->hasHeader("X-Signature")) {
+    signatureValue = request->header("X-Signature");
+    signature = signatureValue.c_str();
   }
 
-  String apiKey = request->header("X-API-Key");
-  return apiKey.equals(API_KEY);
+  String path = signedPath(request);
+  const char *method = mutating ? "POST" : "GET";
+
+  AuthResult result = signer.verify(millis(), method, path.c_str(),
+                                    body == NULL ? "" : body, bodyLen,
+                                    nonce, signature, mutating);
+  if (result == AUTH_OK) {
+    return true;
+  }
+
+  // The reason is the whole of the client contract on a 401: "nonce" means
+  // GET /nonce and retry ONCE (safe, because every mutating request is
+  // idempotent by tx_id); "signature" means the request is wrong and a retry
+  // changes nothing.  Without the distinction a terminal either loops on a
+  // misconfigured key or gives up on an expired nonce.
+  const char *reason = (result == AUTH_BAD_NONCE) ? "nonce" : "signature";
+  String payload = String("{\"error\":\"unauthorized\",\"reason\":\"") + reason + "\"}";
+  request->send(401, "application/json", payload);
+  return false;
+}
+
+void HttpServer::handleNonce(AsyncWebServerRequest *request) {
+  char nonce[NONCE_HEX_LEN + 1];
+  // RANDOM_REG32 is the ESP8266's hardware RNG (esp8266_peri.h, part of the
+  // pinned framework).  Four reads, 128 bits.  How good that entropy really
+  // is on a given board is a HARDWARE claim: nothing in the native test suite
+  // can see this register, and the tests feed the signer a counter instead.
+  signer.issueNonce(millis(), RANDOM_REG32, RANDOM_REG32, RANDOM_REG32,
+                    RANDOM_REG32, nonce);
+
+  JsonDocument doc;
+  doc["nonce"] = nonce;
+  doc["ttl"] = (uint32_t)(NONCE_TTL_MS / 1000);
+
+  String response;
+  serializeJson(doc, response);
+  request->send(200, "application/json", response);
 }
 
 const char* HttpServer::stateToString(TransactionState state) {
@@ -60,33 +144,90 @@ const char* HttpServer::stateToString(TransactionState state) {
 void HttpServer::handleHealth(AsyncWebServerRequest *request) {
   JsonDocument doc;
 
-  doc["status"] = "ok";
+  // A GET signs over an empty body.  No 401 is sent from here: an unsigned
+  // /health is a legitimate call, it just gets less.
+  String path = signedPath(request);
+  const char *nonce = NULL;
+  const char *signature = NULL;
+  String nonceValue, signatureValue;
+  if (request->hasHeader("X-Nonce")) {
+    nonceValue = request->header("X-Nonce");
+    nonce = nonceValue.c_str();
+  }
+  if (request->hasHeader("X-Signature")) {
+    signatureValue = request->header("X-Signature");
+    signature = signatureValue.c_str();
+  }
+  bool authenticated = signer.verify(millis(), "GET", path.c_str(), "", 0,
+                                     nonce, signature, false) == AUTH_OK;
+
+  // THE UNAUTHENTICATED DOCUMENT — these three fields and no more.
+  //
+  // They are what a caller needs to decide the only two questions that do not
+  // require the key: can this machine sell (`state != "fault"`), and does it
+  // need a human (`fault != "none"`)?  `protocol` is in there because the
+  // handshake has to happen BEFORE a client can sign anything at all — a
+  // device speaking another protocol must be refusable without credentials.
+  // None of the three tells a listener anything he could not learn by walking
+  // up to the machine and looking at it.
+  doc["protocol"] = PROTOCOL_VERSION;
+  doc["state"] = deviceStateToString(dispenseManager.getDeviceState());
+  doc["fault"] = faultToString(dispenseManager.getFault());
+  // Stated, never inferred.  Otherwise a client that forgot to sign cannot
+  // tell a reduced document from an old firmware that never had the fields.
+  doc["authenticated"] = authenticated;
+
+  if (!authenticated) {
+    String minimal;
+    serializeJson(doc, minimal);
+    request->send(200, "application/json", minimal);
+    return;
+  }
+
+  // Everything below needs the key, and each field is on this side for a
+  // reason, not by default:
+  //
+  // - `fault_code` is the Azkoyen code behind a hopper_error.  The word above
+  //   already answers "needs a human"; the number is a diagnosis.
+  // - `uptime`, `reset_reason` and `heap_free` are a reboot oracle together:
+  //   they let an observer watch a power cycle land and confirm that whatever
+  //   he is doing to the device is working.
+  // - `firmware` is version fingerprinting — the first thing anyone picking an
+  //   exploit wants.
+  // - `wifi{rssi, ip, ssid, reconnects}` is the leak the issue names outright.
+  // - `metrics` carries lifetime `dispensed_tokens`, which is the figure the
+  //   backend bills against (dgloeckner/clubbar#952): commercial data.
+  // - `error_history` is diagnosis with timestamps.
+  doc["fault_code"] = dispenseManager.getFaultCode();
+  // ONE state and ONE fault (issue #6).  The old document carried `status`
+  // (ok | degraded | error) next to `dispenser` (idle | dispensing | error),
+  // the terminal ORed the two together, and nothing decided which of them won
+  // when they disagreed.  `status` was hard-coded "ok" on top of that.
+  doc["state"] = deviceStateToString(dispenseManager.getDeviceState());
+  doc["fault"] = faultToString(dispenseManager.getFault());
+  doc["fault_code"] = dispenseManager.getFaultCode();
   doc["uptime"] = millis() / 1000;
   doc["firmware"] = FIRMWARE_VERSION;
+  // What a bad day leaves behind (issue #7).  Before these three, a device
+  // that reset once a week produced exactly one piece of evidence — a small
+  // uptime — and nobody could tell a watchdog reset from a power cut, or a
+  // leak from a busy afternoon.
+  doc["heap_free"] = ESP.getFreeHeap();
+  doc["reset_reason"] = ESP.getResetReason();
 
   // WiFi information
   JsonObject wifi = doc.createNestedObject("wifi");
   wifi["rssi"] = WiFi.RSSI();
   wifi["ip"] = WiFi.localIP().toString();
   wifi["ssid"] = WiFi.SSID();
+  // Times the link came back since boot.  A device that reconnects ten times
+  // a night has a WiFi problem that RSSI alone never shows, and one that
+  // reconnects once an hour is about to become a support call.
+  wifi["reconnects"] = wifiSupervisor.reconnects();
 
-  Transaction active = dispenseManager.getActiveTransaction();
-  doc["dispenser"] = stateToString(active.state);
-
-  // GPIO pin states
-  JsonObject gpio = doc.createNestedObject("gpio");
-
-  JsonObject coinPulse = gpio.createNestedObject("coin_pulse");
-  coinPulse["raw"] = hopperControl.getCoinPulseRaw();
-  coinPulse["active"] = hopperControl.isCoinPulseActive();
-
-  JsonObject errorSignal = gpio.createNestedObject("error_signal");
-  errorSignal["raw"] = hopperControl.getErrorSignalRaw();
-  errorSignal["active"] = hopperControl.isErrorSignalActive();
-
-  JsonObject hopperLow = gpio.createNestedObject("hopper_low");
-  hopperLow["raw"] = hopperControl.getHopperLowRaw();
-  hopperLow["active"] = hopperControl.isHopperLow();
+  // No `gpio` block: raw pin levels are GET /debug now, and there is no
+  // hopper_low anywhere any more — the empty sensor is a factory option this
+  // hopper does not have, so the line reported "not empty" forever.
 
   // Metrics
   JsonObject metrics = doc.createNestedObject("metrics");
@@ -106,22 +247,18 @@ void HttpServer::handleHealth(AsyncWebServerRequest *request) {
   // Token-level metrics
   metrics["requested_tokens"] = dispenseManager.getRequestedTokens();
   metrics["dispensed_tokens"] = dispenseManager.getDispensedTokens();
+  // Tokens past the requested quantity: the ones that fall while the disc
+  // coasts (issue #5).  A single transaction shows its own overrun in
+  // `dispensed`; this is the number anybody actually watches.
+  metrics["overrun_tokens"] = dispenseManager.getOverrunTokens();
+  // Falling edges the pulse filter rejected as noise.  A hopper whose sensor
+  // bounces is visible here before it is visible in a short dispense.
+  metrics["filtered_pulses"] = hopperControl.getFilteredPulseCount();
 
-  // Add error information
-  ErrorRecord* activeError = hopperControl.errorHistory.getActive();
-  if (activeError) {
-    JsonObject err = doc.createNestedObject("error");
-    err["active"] = true;
-    err["code"] = (int)activeError->code;
-    err["type"] = errorCodeToString(activeError->code);
-    err["timestamp"] = activeError->timestamp;
-    err["description"] = errorCodeToDescription(activeError->code);
-  } else {
-    JsonObject err = doc.createNestedObject("error");
-    err["active"] = false;
-  }
-
-  // Add error history (last 5 errors)
+  // The decoded hopper errors, newest first.  There is no separate `error`
+  // block any more: what an active error MEANS is the fault above, and the
+  // records have no `cleared` flag because nothing clears them short of a
+  // power cycle.
   JsonArray history = doc.createNestedArray("error_history");
   ErrorRecord records[5];
   int count;
@@ -132,7 +269,6 @@ void HttpServer::handleHealth(AsyncWebServerRequest *request) {
     e["code"] = (int)records[i].code;
     e["type"] = errorCodeToString(records[i].code);
     e["timestamp"] = records[i].timestamp;
-    e["cleared"] = records[i].cleared;
   }
 
   String response;
@@ -140,56 +276,126 @@ void HttpServer::handleHealth(AsyncWebServerRequest *request) {
   request->send(200, "application/json", response);
 }
 
-void HttpServer::handleDispensePost(AsyncWebServerRequest *request,
-                                    uint8_t *data, size_t len,
-                                    size_t index, size_t total) {
-  Serial.println("[HttpServer] POST /dispense received");
-  Serial.print("  Body length: ");
-  Serial.println(len);
-
-  // Check authentication
-  if (!checkAuth(request)) {
-    Serial.println("  ERROR: Authentication failed");
-    request->send(401, "application/json", "{\"error\":\"unauthorized\"}");
+void HttpServer::handleDebug(AsyncWebServerRequest *request) {
+  if (!requireSignature(request, false, "", 0)) {
     return;
   }
-  Serial.println("  Authentication OK");
 
-  // Validate Content-Type
+  JsonDocument doc;
+  JsonObject gpio = doc.createNestedObject("gpio");
+
+  JsonObject coinPulse = gpio.createNestedObject("coin_pulse");
+  coinPulse["raw"] = hopperControl.getCoinPulseRaw();
+  coinPulse["active"] = hopperControl.isCoinPulseActive();
+
+  JsonObject errorSignal = gpio.createNestedObject("error_signal");
+  errorSignal["raw"] = hopperControl.getErrorSignalRaw();
+  errorSignal["active"] = hopperControl.isErrorSignalActive();
+
+  String response;
+  serializeJson(doc, response);
+  request->send(200, "application/json", response);
+}
+
+void HttpServer::sendTransaction(AsyncWebServerRequest *request, const Transaction& tx) {
+  JsonDocument response;
+  response["tx_id"] = tx.tx_id;
+  response["state"] = stateToString(tx.state);
+  response["quantity"] = tx.quantity;
+  response["dispensed"] = tx.dispensed;
+  // Required on every transaction response: false means the count is a lower
+  // bound because the device lost power mid-dispense (dispenser-protocol.md).
+  response["count_reliable"] = tx.count_reliable;
+  // Also required, also on every response (issue #6): WHY it failed, if it
+  // did.  One flat "error" made a jam, an empty hopper and a dead sensor the
+  // same row on the terminal.
+  response["error_code"] = tx.error_code;
+  response["error_type"] = txErrorTypeToString(tx.error_kind, tx.error_code);
+
+  String responseStr;
+  serializeJson(response, responseStr);
+  request->send(200, "application/json", responseStr);
+}
+
+void HttpServer::collectDispenseBody(AsyncWebServerRequest *request,
+                                     uint8_t *data, size_t len,
+                                     size_t index, size_t total) {
+  // The body buffer hangs off the request, because several requests can be in
+  // flight at once and a single member would mix their bytes.  _tempObject is
+  // the slot the async server provides for exactly this; it frees it with the
+  // request, so it must come from malloc and not from new.
+  if (request->_tempObject == NULL) {
+    request->_tempObject = malloc(sizeof(RequestBody));
+    if (request->_tempObject == NULL) {
+      return;  // out of heap: the handler answers 413 on the empty buffer
+    }
+    ((RequestBody*)request->_tempObject)->reset();
+  }
+  ((RequestBody*)request->_tempObject)->append(data, len, index, total);
+}
+
+void HttpServer::handleDispensePost(AsyncWebServerRequest *request) {
+  // Everything below runs in the async TCP callback, so it must stay cheap:
+  // parse, decide, answer.  The flash commit and the motor start happen in
+  // loop(), where DispenseManager picks the request slot up (issue #4).
+  RequestBody* body = (RequestBody*)request->_tempObject;
+
+  // The framing comes FIRST, ahead of the signature, and only for the two
+  // cases where there is nothing to verify: the signature is computed over the
+  // body bytes, and these are the requests whose body the device deliberately
+  // did not keep (issue #8).  Neither answer tells an unauthenticated caller
+  // anything or moves a motor.
+  if (body != NULL && body->status() == BODY_TOO_LARGE) {
+    request->send(413, "application/json", "{\"error\":\"body too large\"}");
+    return;
+  }
+  if (body != NULL && !body->isEmpty() && body->status() != BODY_COMPLETE) {
+    // A stream with a gap, or one that stopped short of its announced length.
+    request->send(400, "application/json", "{\"error\":\"incomplete body\"}");
+    return;
+  }
+
+  // The signature covers the body, so it can only be checked once the body is
+  // in — which is exactly where this handler runs (issue #4).  A POST with no
+  // body signs over the empty string; it still has to be signed, and it still
+  // ends in 400 below.
+  if (!requireSignature(request, true,
+                        body == NULL ? "" : body->data(),
+                        body == NULL ? 0 : body->size())) {
+    return;
+  }
+
   if (!request->hasHeader("Content-Type") ||
       request->header("Content-Type").indexOf("application/json") == -1) {
-    request->send(415, "application/json", "{\"error\":\"content-type must be application/json\"}");
+    request->send(415, "application/json",
+                  "{\"error\":\"content-type must be application/json\"}");
     return;
   }
 
-  // Parse JSON body
-  JsonDocument doc;
-  DeserializationError error = deserializeJson(doc, data, len);
+  // No body callback ever ran: the request carried no body at all.  This is
+  // the case that used to hang.
+  if (body == NULL || body->isEmpty()) {
+    request->send(400, "application/json", "{\"error\":\"empty body\"}");
+    return;
+  }
 
+  JsonDocument doc;
+  DeserializationError error = deserializeJson(doc, body->data(), body->size());
   if (error) {
-    Serial.print("  ERROR: JSON parse failed: ");
-    Serial.println(error.c_str());
+    LOG_DEBUG("POST /dispense: JSON parse failed: %s", error.c_str());
     request->send(400, "application/json", "{\"error\":\"invalid json\"}");
     return;
   }
-  Serial.println("  JSON parsed successfully");
 
-  // Add type validation
   if (!doc.containsKey("tx_id") || !doc["tx_id"].is<const char*>() ||
       !doc.containsKey("quantity") || !doc["quantity"].is<uint8_t>()) {
-    Serial.println("  ERROR: Invalid request format");
     request->send(400, "application/json", "{\"error\":\"invalid request format\"}");
     return;
   }
 
   const char* tx_id = doc["tx_id"];
   uint8_t quantity = doc["quantity"];
-  Serial.print("  Parsed tx_id: ");
-  Serial.println(tx_id);
-  Serial.print("  Parsed quantity: ");
-  Serial.println(quantity);
 
-  // Add tx_id length validation
   size_t tx_id_len = strlen(tx_id);
   if (tx_id_len == 0 || tx_id_len > 16 || quantity == 0 || quantity > MAX_TOKENS) {
     request->send(400, "application/json",
@@ -197,15 +403,35 @@ void HttpServer::handleDispensePost(AsyncWebServerRequest *request,
     return;
   }
 
-  // Try to start dispense
-  Serial.println("  Calling dispenseManager.startDispense()...");
-  bool started = dispenseManager.startDispense(tx_id, quantity);
-  Serial.print("  startDispense returned: ");
-  Serial.println(started ? "true" : "false");
+  DispenseOutcome outcome = dispenseManager.requestDispense(tx_id, quantity);
 
-  if (!started && !dispenseManager.isIdle()) {
-    // Busy - return 409
-    Serial.println("  System is busy, returning 409");
+  if (outcome == DISPENSE_TX_ID_REUSED) {
+    // The caller contradicted itself: a tx_id it already used, with another
+    // quantity.  Answering with the old quantity would look like a successful
+    // retry of a request that was never made.
+    request->send(409, "application/json", "{\"error\":\"tx_id reused\"}");
+    return;
+  }
+
+  if (outcome == DISPENSE_FAULT) {
+    // The device needs a human.  It says which kind, because "clear the jam"
+    // and "the hopper reports a motor fault" are different errands — and it
+    // never says how to clear it from here, because there is no way: the
+    // instruction is to pull the plug (owner decision, 2026-09-20).
+    JsonDocument response;
+    response["error"] = "fault";
+    response["fault"] = faultToString(dispenseManager.getFault());
+    response["fault_code"] = dispenseManager.getFaultCode();
+
+    String responseStr;
+    serializeJson(response, responseStr);
+    request->send(409, "application/json", responseStr);
+    return;
+  }
+
+  if (outcome == DISPENSE_BUSY) {
+    // Busy always means ANOTHER transaction now — a retry of the running one
+    // is answered above with its current state (issue #2).
     Transaction active = dispenseManager.getActiveTransaction();
 
     JsonDocument response;
@@ -220,23 +446,13 @@ void HttpServer::handleDispensePost(AsyncWebServerRequest *request,
   }
 
   // Return current transaction state
-  Transaction tx = dispenseManager.getTransaction(tx_id);
-
-  JsonDocument response;
-  response["tx_id"] = tx.tx_id;
-  response["state"] = stateToString(tx.state);
-  response["quantity"] = tx.quantity;
-  response["dispensed"] = tx.dispensed;
-
-  String responseStr;
-  serializeJson(response, responseStr);
-  request->send(200, "application/json", responseStr);
+  sendTransaction(request, dispenseManager.getTransaction(tx_id));
 }
 
 void HttpServer::handleDispenseGet(AsyncWebServerRequest *request) {
-  // Check authentication
-  if (!checkAuth(request)) {
-    request->send(401, "application/json", "{\"error\":\"unauthorized\"}");
+  // A status poll is read-only, so it does not spend its nonce: the same one
+  // serves every poll of a transaction until it expires (issue #8).
+  if (!requireSignature(request, false, "", 0)) {
     return;
   }
 
@@ -266,13 +482,5 @@ void HttpServer::handleDispenseGet(AsyncWebServerRequest *request) {
     return;
   }
 
-  JsonDocument response;
-  response["tx_id"] = tx.tx_id;
-  response["state"] = stateToString(tx.state);
-  response["quantity"] = tx.quantity;
-  response["dispensed"] = tx.dispensed;
-
-  String responseStr;
-  serializeJson(response, responseStr);
-  request->send(200, "application/json", responseStr);
+  sendTransaction(request, tx);
 }

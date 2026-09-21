@@ -321,7 +321,15 @@ Use a jumper wire and manual timing:
 **Pros:** No extra hardware needed
 **Cons:** Timing is hard to get right manually
 
-### Method 2: Arduino Simulator
+### Method 2: Hopper simulator (preferred)
+
+A full hopper simulator for a second D1 mini lives in
+`firmware/hopper-simulator/` — it answers the motor line with coin pulses and
+can forge bounces, a coasting token, a jam and every error code.
+See [hopper-simulator.md](hopper-simulator.md); it supersedes the snippet
+below, which only forges the error line.
+
+### Method 3: Minimal error-pulse sketch
 
 Use a second Arduino/ESP8266 to generate precise test pulses:
 

@@ -1,5 +1,6 @@
 // firmware/dispenser/error_decoder.cpp
 
+#include "log.h"
 #include "error_decoder.h"
 
 ErrorDecoder::ErrorDecoder()
@@ -19,7 +20,7 @@ void ErrorDecoder::begin() {
   detectedCode = ERROR_NONE;
   newErrorReady = false;
 
-  Serial.println("[ErrorDecoder] Initialized - ready to decode error pulses");
+  LOG_DEBUG("error decoder ready");
 }
 
 void IRAM_ATTR ErrorDecoder::handlePinChange(bool pinState, unsigned long now) {

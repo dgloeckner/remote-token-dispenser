@@ -1,6 +1,8 @@
 // firmware/dispenser/hopper_control.cpp
 
 #include "hopper_control.h"
+#include "log.h"
+#include "pulse_filter.h"
 
 // Global instance pointer for ISR
 static HopperControl* hopperControlInstance = nullptr;
@@ -45,7 +47,17 @@ static volatile unsigned long last_pulse_time = 0;
 // the ISR itself once triggered.  0 = disabled (don't stop in ISR).
 static volatile uint8_t isr_stop_at = 0;
 
+// Which falling edges are coins (issue #5).  Everything closer than
+// COIN_PULSE_MIN_GAP_MS to the last accepted edge is a bouncing sensor or an
+// EMI spike from the motor, and counting it used to end the dispense one token
+// early — with nothing anywhere saying so.  The filter is a plain class in
+// IRAM; the decision stays inside the ISR, where the motor stop is.
+static PulseFilter coinPulseFilter((uint32_t)COIN_PULSE_MIN_GAP_MS * 1000UL);
+
 void IRAM_ATTR HopperControl::handleCoinPulse() {
+  if (!coinPulseFilter.accept(micros())) {
+    return;  // noise, not a coin: no count, and above all no motor stop
+  }
   pulse_count++;
   last_pulse_time = millis();
   // Stop motor immediately if target count reached, eliminating the up-to-10ms
@@ -60,32 +72,27 @@ void IRAM_ATTR HopperControl::handleCoinPulse() {
 }
 
 void HopperControl::begin() {
-  Serial.println("[HopperControl] Initializing...");
+  LOG_DEBUG("hopper: initializing");
 
   // Configure GPIO pins
   pinMode(MOTOR_PIN, OUTPUT);
   digitalWrite(MOTOR_PIN, LOW);  // Motor off at startup
   // Note: With D1→IN+ wiring, LOW = LED off = OUT high (~6V) = motor OFF (NEGATIVE mode)
-  Serial.print("[HopperControl] MOTOR_PIN (D1) configured as OUTPUT, set to LOW (motor OFF)");
-  Serial.print(" - Current state: ");
-  Serial.println(digitalRead(MOTOR_PIN));
+  LOG_DEBUG("hopper: MOTOR_PIN OUTPUT LOW (reads %d)", digitalRead(MOTOR_PIN));
 
   pinMode(COIN_PULSE_PIN, INPUT_PULLUP);
   pinMode(ERROR_SIGNAL_PIN, INPUT_PULLUP);
-  pinMode(HOPPER_LOW_PIN, INPUT_PULLUP);
+  // D6 is deliberately not configured: the hopper's empty sensor is a factory
+  // option our unit does not have, so the pin sat on its pull-up and said
+  // "not empty" forever.  /health published that as data until issue #6.
 
-  Serial.println("[HopperControl] Input pins configured with INPUT_PULLUP");
-  Serial.print("  COIN_PULSE_PIN (D7): ");
-  Serial.println(digitalRead(COIN_PULSE_PIN));
-  Serial.print("  ERROR_SIGNAL_PIN (D5): ");
-  Serial.println(digitalRead(ERROR_SIGNAL_PIN));
-  Serial.print("  HOPPER_LOW_PIN (D6): ");
-  Serial.println(digitalRead(HOPPER_LOW_PIN));
+  LOG_DEBUG("hopper: inputs INPUT_PULLUP, coin=%d error=%d",
+            digitalRead(COIN_PULSE_PIN), digitalRead(ERROR_SIGNAL_PIN));
 
   // Attach interrupt for coin pulse (FALLING edge)
   attachInterrupt(digitalPinToInterrupt(COIN_PULSE_PIN),
                   handleCoinPulse, FALLING);
-  Serial.println("[HopperControl] Interrupt attached to COIN_PULSE_PIN (FALLING edge)");
+  LOG_DEBUG("hopper: coin-pulse interrupt attached (FALLING)");
 
   // Initialize error decoder
   errorDecoder.begin();
@@ -96,26 +103,27 @@ void HopperControl::begin() {
   // Attach interrupt for error signal (CHANGE edge - both FALLING and RISING)
   attachInterrupt(digitalPinToInterrupt(ERROR_SIGNAL_PIN),
                   handleErrorPinChange, CHANGE);
-  Serial.println("[HopperControl] Interrupt attached to ERROR_SIGNAL_PIN (CHANGE edge)");
+  LOG_DEBUG("hopper: error-signal interrupt attached (CHANGE)");
 
   // Initialize pulse tracking
   pulse_count = 0;
+  coinPulseFilter.reset();
   isr_stop_at = 0;
+  decoded_error = 0;
   last_pulse_time = millis();
 
-  Serial.println("[HopperControl] Initialization complete");
+  LOG_INFO("hopper ready");
 }
 
 void HopperControl::startMotor() {
-  Serial.println("[HopperControl] *** STARTING MOTOR ***");
-  Serial.print("  Setting MOTOR_PIN (D1) to HIGH (motor ON)...");
+  // The pin first, the log after.  A blocking serial write between the two
+  // would be time the motor is not yet running — and on the stop path below it
+  // is time the motor is still running (issue #4).
   // GPIO HIGH → optocoupler LED ON → OUT LOW → motor ON (NEGATIVE mode)
   // Requires: R1 modified (330Ω parallel) for 13.3mA → saturation → OUT < 0.5V
   digitalWrite(MOTOR_PIN, HIGH);
-  Serial.print(" - Current state: ");
-  Serial.println(digitalRead(MOTOR_PIN));
   last_pulse_time = millis();  // Reset watchdog
-  Serial.println("[HopperControl] Motor started, watchdog reset");
+  LOG_INFO("motor ON (D1 reads %d)", digitalRead(MOTOR_PIN));
 }
 
 void HopperControl::setMotorStopAt(uint8_t count) {
@@ -129,13 +137,12 @@ void HopperControl::stopMotor() {
   noInterrupts();
   isr_stop_at = 0;
   interrupts();
-  Serial.println("[HopperControl] *** STOPPING MOTOR ***");
-  Serial.print("  Setting MOTOR_PIN (D1) to LOW (motor OFF)...");
+  // The pin write comes before every log call.  It used to come after two
+  // Serial.print lines, so on the jam path the motor kept turning for as long
+  // as the UART needed to drain them (issue #4).
   // GPIO LOW → optocoupler LED OFF → OUT HIGH (~6V) → motor OFF (NEGATIVE mode)
   digitalWrite(MOTOR_PIN, LOW);
-  Serial.print(" - Current state: ");
-  Serial.println(digitalRead(MOTOR_PIN));
-  Serial.println("[HopperControl] Motor stopped");
+  LOG_INFO("motor OFF (D1 reads %d)", digitalRead(MOTOR_PIN));
 }
 
 uint8_t HopperControl::getPulseCount() {
@@ -147,7 +154,16 @@ uint8_t HopperControl::getPulseCount() {
 
 void HopperControl::resetPulseCount() {
   pulse_count = 0;
+  // A new transaction starts with no history of edges, so its first pulse is
+  // never measured against the last one of the previous dispense.
+  coinPulseFilter.reset();
   last_pulse_time = millis();
+}
+
+// Edges the filter threw away since the last reset.  Diagnostics only: a
+// hopper whose sensor bounces says so here instead of quietly dispensing short.
+uint32_t HopperControl::getFilteredPulseCount() {
+  return coinPulseFilter.rejected();
 }
 
 bool HopperControl::checkJam() {
@@ -157,11 +173,6 @@ bool HopperControl::checkJam() {
   interrupts();
 
   return (millis() - last_time > JAM_TIMEOUT_MS);
-}
-
-bool HopperControl::isHopperLow() {
-  // Hopper low sensor is active LOW
-  return digitalRead(HOPPER_LOW_PIN) == LOW;
 }
 
 uint8_t HopperControl::getCoinPulseRaw() {
@@ -180,10 +191,6 @@ bool HopperControl::isErrorSignalActive() {
   return digitalRead(ERROR_SIGNAL_PIN) == LOW;
 }
 
-uint8_t HopperControl::getHopperLowRaw() {
-  return digitalRead(HOPPER_LOW_PIN) == LOW ? 0 : 1;
-}
-
 void HopperControl::updateErrorDecoder() {
   errorDecoder.update();
 
@@ -191,10 +198,21 @@ void HopperControl::updateErrorDecoder() {
     ErrorCode code = errorDecoder.getErrorCode();
     errorHistory.addError(code);
     errorDecoder.reset();
+    // Hand it to the manager, which is the only place that may stop a motor
+    // (issue #6).  Before this the error went into the history list and
+    // nowhere else, so the hopper reported "motor fault" while the firmware
+    // kept driving it until the 5 s jam timeout.
+    decoded_error = (uint8_t)code;
 
-    Serial.print("[HopperControl] Error detected: ");
-    Serial.print(errorCodeToString(code));
-    Serial.print(" - ");
-    Serial.println(errorCodeToDescription(code));
+    LOG_ERROR("hopper error %s - %s", errorCodeToString(code),
+              errorCodeToDescription(code));
   }
+}
+
+uint8_t HopperControl::takeDecodedError() {
+  noInterrupts();
+  uint8_t code = decoded_error;
+  decoded_error = 0;
+  interrupts();
+  return code;
 }

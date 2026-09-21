@@ -1,0 +1,555 @@
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync"
+	"time"
+)
+
+// fakeDevice is a minimal, protocol-2-conforming dispenser.  It exists so the
+// conformance suite itself is under test: a case that passes against everything
+// is not a case.  Deliberately independent of both the Go mock and the
+// firmware — those are what the suite judges.
+type fakeDevice struct {
+	mu sync.Mutex
+
+	signingKey string
+	nonces     *fakeNoncePool
+	// knobs for the negative tests
+	protocol          int
+	ignoreAuth        bool
+	rejectRetry       bool // answer 409 to a retry of the active tx (the #2 bug)
+	acceptReusedQty   bool // answer 200 to a known tx_id with another quantity
+	orphanOnReplay    bool // let an idempotent hit take the active tx with it
+	omitCountReliable bool // leave count_reliable out of the response (#3)
+	forgetCrashedTx   bool // lose the crashed transaction on reboot, as before #3
+	claimCountExact   bool // claim count_reliable=true even after a power loss
+
+	// Issue #4: what the async callback costs the caller.
+	emptyBodyDelay time.Duration // make an empty body wait instead of answering 400
+	truncateBody   int           // parse only the first N bytes, as a body callback
+	//                              that ignores index/total parses one chunk
+	postDelay time.Duration // do the work (flash erase, 500 bytes of serial) inline
+	noBodyCap bool          // accept a body of any size instead of answering 413
+
+	// Issue #5: what happens to a token that falls after the motor stop.
+	clampDispensed    bool // never report more than quantity, as the firmware did
+	omitOverrunMetric bool // leave metrics.overrun_tokens out of /health
+
+	// Issue #6: the fault model.
+	acceptWhileFaulted bool // take a new transaction although a fault is up
+	legacyHealthShape  bool // send protocol 1's status/dispenser pair instead
+	publishHopperLow   bool // publish the empty sensor that never worked
+	omitErrorCode      bool // leave error_code/error_type off transactions
+	faultAfterReset    bool // report a recovered crash as a device fault
+	servesReset        bool // offer a way out of a fault that is not a power cycle
+
+	// Issue #8: the signing scheme.
+	acceptAPIKey        bool // take the old X-API-Key header as a credential
+	reusableNonce       bool // never spend a nonce, so a replayed POST works
+	constantNonce       bool // hand out the same "nonce" every time
+	openHealth          bool // serve the FULL health document unsigned
+	unboundSignature    bool // verify only the body, so a signature travels paths
+	silentUnauthorized  bool // answer 401 without saying which reason it was
+	spendNonceOnRead    bool // spend the nonce on GETs too, so a poll needs a new one each time
+	noAuthenticatedFlag bool // never say which of the two health documents this is
+
+	// Issue #7: the operational telemetry, and a device that leaks.
+	omitOpsTelemetry bool // no heap_free, no reset_reason, no wifi.reconnects
+	leakHeap         bool // lose 2 % of the heap per dispense, as a leak does
+	resetAfter       int  // reset (uptime back to 1, another reset_reason) after N dispenses
+
+	heapFree    int
+	uptime      int
+	resetReason string
+	dispenses   int
+	active      *fakeTx
+	history     map[string]*fakeTx
+	fault       string
+	faultCode   int
+	overruns    int
+}
+
+type fakeTx struct {
+	ID        string
+	State     string
+	Quantity  int
+	Dispensed int
+	Reliable  bool
+	ErrorCode int
+	ErrorType string
+}
+
+// fakeMaxBody mirrors REQUEST_BODY_CAPACITY in the firmware.
+const fakeMaxBody = 256
+
+// fakeNoncePool is the fake device's memory of what it handed out.  A third
+// implementation of the rule (after the firmware's and the mock's) on purpose:
+// a suite whose only counterpart is the thing it judges judges nothing.
+type fakeNoncePool struct {
+	mu       sync.Mutex
+	issued   map[string]bool // nonce -> spent
+	counter  int
+	reusable bool
+	constant bool
+}
+
+func newFakeNoncePool() *fakeNoncePool {
+	return &fakeNoncePool{issued: map[string]bool{}}
+}
+
+func (p *fakeNoncePool) issue() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.constant {
+		p.issued["00000000000000000000000000000000"] = false
+		return "00000000000000000000000000000000"
+	}
+	p.counter++
+	n := fmt.Sprintf("%032x", p.counter)
+	p.issued[n] = false
+	return n
+}
+
+// check returns "" when the nonce is usable, or the 401 reason.
+func (p *fakeNoncePool) check(nonce string, mutating bool) string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	spent, ok := p.issued[nonce]
+	if !ok {
+		return "nonce"
+	}
+	if mutating && spent && !p.reusable {
+		return "nonce"
+	}
+	if mutating {
+		p.issued[nonce] = true
+	}
+	return ""
+}
+
+func newFakeDevice(signingKey string) *fakeDevice {
+	return &fakeDevice{signingKey: signingKey, protocol: ProtocolVersion, fault: "none",
+		heapFree: 30000, uptime: 42, resetReason: "Power on",
+		nonces: newFakeNoncePool(), history: map[string]*fakeTx{}}
+}
+
+func (f *fakeDevice) server() *httptest.Server {
+	f.nonces.reusable = f.reusableNonce
+	f.nonces.constant = f.constantNonce
+	mux := http.NewServeMux()
+	mux.HandleFunc("/nonce", func(w http.ResponseWriter, r *http.Request) {
+		f.writeJSON(w, 200, map[string]any{"nonce": f.nonces.issue(), "ttl": 30})
+	})
+	mux.HandleFunc("/health", f.health)
+	mux.HandleFunc("/dispense", f.dispense)
+	mux.HandleFunc("/dispense/", f.status)
+	mux.HandleFunc("/debug", f.debug)
+	if f.servesReset {
+		mux.HandleFunc("/reset", func(w http.ResponseWriter, r *http.Request) {
+			f.mu.Lock()
+			f.fault, f.faultCode = "none", 0
+			f.mu.Unlock()
+			f.writeJSON(w, 200, map[string]string{"state": "idle"})
+		})
+	}
+	return httptest.NewServer(mux)
+}
+
+func (f *fakeDevice) writeJSON(w http.ResponseWriter, code int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	_ = json.NewEncoder(w).Encode(v)
+}
+
+// verify is the fake device's half of issue #8.  Returns "" when the request
+// is authentic, otherwise the 401 reason the client acts on.
+func (f *fakeDevice) verify(r *http.Request, body string, mutating bool) string {
+	if f.ignoreAuth {
+		return ""
+	}
+	// The knob that says "this device still takes the old bearer key".  The
+	// header is gone from the protocol, so a device honouring it is a device
+	// an attacker can still own with one sniffed packet.
+	if f.acceptAPIKey && r.Header.Get("X-API-Key") == f.signingKey {
+		return ""
+	}
+	nonce := r.Header.Get("X-Nonce")
+	sig := r.Header.Get("X-Signature")
+	if nonce == "" || sig == "" {
+		return "signature"
+	}
+	path := r.URL.Path
+	method := r.Method
+	if f.unboundSignature {
+		// A device that leaves method and path out of the canonical string:
+		// a status poll's signature then opens /debug.
+		method, path = "", ""
+	}
+	if SignRequest(f.signingKey, method, path, body, nonce) != sig {
+		return "signature"
+	}
+	return f.nonces.check(nonce, mutating || f.spendNonceOnRead)
+}
+
+// refuse answers the 401 the way the protocol requires — with the reason.
+func (f *fakeDevice) refuse(w http.ResponseWriter, reason string) {
+	body := map[string]string{"error": "unauthorized"}
+	if !f.silentUnauthorized {
+		body["reason"] = reason
+	}
+	f.writeJSON(w, 401, body)
+}
+
+func (f *fakeDevice) authed(r *http.Request) bool {
+	return f.verify(r, "", false) == ""
+}
+
+func (f *fakeDevice) health(w http.ResponseWriter, r *http.Request) {
+	f.mu.Lock()
+	state := "idle"
+	if f.fault != "none" {
+		state = "fault"
+	} else if f.active != nil {
+		state = "dispensing"
+	}
+	fault, faultCode := f.fault, f.faultCode
+	proto := f.protocol
+	overruns := f.overruns
+	heap := f.heapFree
+	uptime := f.uptime
+	resetReason := f.resetReason
+	f.mu.Unlock()
+
+	metrics := map[string]int{"total_dispenses": 0}
+	if !f.omitOverrunMetric {
+		metrics["overrun_tokens"] = overruns
+	}
+
+	body := map[string]any{
+		"protocol":   proto,
+		"uptime":     uptime,
+		"firmware":   "fake-device",
+		"state":      state,
+		"fault":      fault,
+		"fault_code": faultCode,
+		"metrics":    metrics,
+	}
+	if !f.omitOpsTelemetry {
+		body["heap_free"] = heap
+		body["reset_reason"] = resetReason
+		body["wifi"] = map[string]any{
+			"rssi": -50, "ip": "127.0.0.1", "ssid": "fake", "reconnects": 0,
+		}
+	}
+	if f.legacyHealthShape {
+		// Protocol 1: two overlapping fields and no fault at all.
+		delete(body, "state")
+		delete(body, "fault")
+		delete(body, "fault_code")
+		body["status"] = "ok"
+		body["dispenser"] = state
+	}
+	if f.publishHopperLow {
+		body["gpio"] = map[string]any{
+			"hopper_low": map[string]any{"raw": 1, "active": false},
+		}
+	}
+
+	// TWO documents off one URL (issue #8).  Unsigned: is it there, can it
+	// sell, does it need a human.  `openHealth` is the device that hands the
+	// whole thing — SSID, IP, firmware version, billed token counts — to
+	// anybody who asks.
+	if f.verify(r, "", false) != "" && !f.openHealth {
+		minimal := map[string]any{
+			"protocol":      body["protocol"],
+			"state":         body["state"],
+			"fault":         body["fault"],
+			"authenticated": false,
+		}
+		if f.legacyHealthShape {
+			delete(minimal, "state")
+			delete(minimal, "fault")
+			minimal["status"] = "ok"
+			minimal["dispenser"] = state
+		}
+		if f.noAuthenticatedFlag {
+			delete(minimal, "authenticated")
+		}
+		f.writeJSON(w, 200, minimal)
+		return
+	}
+	if !f.noAuthenticatedFlag {
+		body["authenticated"] = true
+	}
+	f.writeJSON(w, 200, body)
+}
+
+func (f *fakeDevice) debug(w http.ResponseWriter, r *http.Request) {
+	if reason := f.verify(r, "", false); reason != "" {
+		f.refuse(w, reason)
+		return
+	}
+	f.writeJSON(w, 200, map[string]any{
+		"gpio": map[string]any{
+			"coin_pulse":   map[string]any{"raw": 1, "active": false},
+			"error_signal": map[string]any{"raw": 1, "active": false},
+		},
+	})
+}
+
+func (f *fakeDevice) dispense(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		f.writeJSON(w, 405, map[string]string{"error": "method not allowed"})
+		return
+	}
+	raw, err := io.ReadAll(r.Body)
+	if err != nil {
+		f.writeJSON(w, 400, map[string]string{"error": "invalid json"})
+		return
+	}
+	if len(raw) > fakeMaxBody && !f.noBodyCap {
+		f.writeJSON(w, 413, map[string]string{"error": "body too large"})
+		return
+	}
+	// The signature covers the body, so it is verified once the body is in.
+	if reason := f.verify(r, string(raw), true); reason != "" {
+		f.refuse(w, reason)
+		return
+	}
+	if !strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
+		f.writeJSON(w, 415, map[string]string{"error": "content-type must be application/json"})
+		return
+	}
+	if len(raw) == 0 {
+		// A device that answers this one late (or not at all) is the bug of
+		// issue #4: the request handler was an empty lambda.
+		time.Sleep(f.emptyBodyDelay)
+		f.writeJSON(w, 400, map[string]string{"error": "empty body"})
+		return
+	}
+	if f.truncateBody > 0 && f.truncateBody < len(raw) {
+		raw = raw[:f.truncateBody]
+	}
+	var req DispenseRequest
+	if err := json.Unmarshal(raw, &req); err != nil {
+		f.writeJSON(w, 400, map[string]string{"error": "invalid json"})
+		return
+	}
+	if len(req.TxID) == 0 || len(req.TxID) > 16 || req.Quantity < 1 || req.Quantity > 20 {
+		f.writeJSON(w, 400, map[string]string{"error": "invalid tx_id or quantity"})
+		return
+	}
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if f.active != nil && f.active.ID == req.TxID {
+		if f.rejectRetry {
+			f.writeJSON(w, 409, map[string]string{"error": "busy", "active_tx_id": f.active.ID})
+			return
+		}
+		if f.active.Quantity != req.Quantity && !f.acceptReusedQty {
+			f.writeJSON(w, 409, map[string]string{"error": "tx_id reused"})
+			return
+		}
+		f.writeJSON(w, 200, f.respond(f.active))
+		return
+	}
+	if tx, ok := f.history[req.TxID]; ok {
+		if tx.Quantity != req.Quantity && !f.acceptReusedQty {
+			f.writeJSON(w, 409, map[string]string{"error": "tx_id reused"})
+			return
+		}
+		if f.orphanOnReplay {
+			f.active = tx // what the firmware did before #2
+		}
+		f.writeJSON(w, 200, f.respond(tx))
+		return
+	}
+	if f.active != nil {
+		f.writeJSON(w, 409, map[string]string{"error": "busy", "active_tx_id": f.active.ID})
+		return
+	}
+	if f.fault != "none" && !f.acceptWhileFaulted {
+		f.writeJSON(w, 409, map[string]any{"error": "fault",
+			"fault": f.fault, "fault_code": f.faultCode})
+		return
+	}
+
+	// A device that loses a little heap per request (issue #7).  Two percent
+	// a dispense is below anything a single reading would show; over a soak
+	// run it is the difference between a machine that runs all season and one
+	// that reboots on a Saturday afternoon.
+	if f.leakHeap {
+		f.heapFree -= f.heapFree / 50
+	}
+	// A board that resets in the middle of a soak run: uptime starts over and
+	// the reset reason stops being "Power on".  Both are things no single
+	// request can show.
+	f.dispenses++
+	if f.resetAfter > 0 && f.dispenses > f.resetAfter {
+		f.uptime = 1
+		f.resetReason = "Software Watchdog"
+	} else {
+		f.uptime += 2
+	}
+
+	// The work the firmware used to do in the TCP callback, before the caller
+	// got its answer: a flash sector erase plus ~500 bytes at 9600 baud.
+	time.Sleep(f.postDelay)
+
+	tx := &fakeTx{ID: req.TxID, State: "dispensing", Quantity: req.Quantity, Reliable: true,
+		ErrorType: "NONE"}
+	f.active = tx
+
+	// The hopper-error scenario, mirroring the Go mock: a decoded error faults
+	// the device, and only a power cycle ends that (issue #6).
+	if req.Quantity == hopperErrorQuantity {
+		tx.State = "error"
+		tx.ErrorCode = 1
+		tx.ErrorType = "COIN_STUCK"
+		f.fault, f.faultCode = "hopper_error", 1
+		f.active = nil
+		f.history[tx.ID] = tx
+		f.writeJSON(w, 200, f.respond(tx))
+		return
+	}
+
+	// The two resets of issue #3, keyed by quantity the way the Go mock keys
+	// its scenarios: crashQuantity keeps the RTC count, powerLossQuantity does
+	// not.  Both leave a transaction behind that a reboot can still be asked
+	// about — that is what the terminal's 404 depends on.
+	// One token falls after the motor stop, the way the disc coasts (issue #5).
+	if req.Quantity == overrunQuantity {
+		go f.runWithCoastToken(tx)
+		f.writeJSON(w, 200, f.respond(tx))
+		return
+	}
+
+	if req.Quantity == crashQuantity || req.Quantity == powerLossQuantity {
+		go f.reboot(tx, req.Quantity == crashQuantity)
+		f.writeJSON(w, 200, f.respond(tx))
+		return
+	}
+
+	go f.run(tx)
+	f.writeJSON(w, 200, f.respond(tx))
+}
+
+// reboot drops one token and then resets, the way a brownout on motor start
+// does.  countSurvives says whether RTC memory came through it.
+func (f *fakeDevice) reboot(tx *fakeTx, countSurvives bool) {
+	time.Sleep(20 * time.Millisecond)
+	f.mu.Lock()
+	tx.Dispensed++
+	f.mu.Unlock()
+
+	time.Sleep(50 * time.Millisecond)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	tx.State = "error"
+	// A recovered crash is NOT a fault: nothing is wrong with the machine, and
+	// a device that faults here takes itself out of service over a watchdog
+	// reset (issue #6).
+	tx.ErrorType = "RESET"
+	if f.faultAfterReset {
+		f.fault, f.faultCode = "jam", 0
+	}
+	if countSurvives {
+		tx.Reliable = true
+	} else {
+		tx.Reliable = f.claimCountExact
+		tx.Dispensed = 0 // all that is left is the lower bound from flash
+	}
+	f.active = nil
+	if !f.forgetCrashedTx {
+		f.history[tx.ID] = tx
+	}
+}
+
+// runWithCoastToken dispenses the whole quantity and then, after the motor has
+// been stopped, one more: the token that was already past the wheel.  A device
+// that reports it is conforming; clampDispensed is the firmware before #5.
+func (f *fakeDevice) runWithCoastToken(tx *fakeTx) {
+	for i := 0; i < tx.Quantity; i++ {
+		time.Sleep(5 * time.Millisecond)
+		f.mu.Lock()
+		tx.Dispensed++
+		f.mu.Unlock()
+	}
+	time.Sleep(30 * time.Millisecond) // the settling window
+	f.mu.Lock()
+	if !f.clampDispensed {
+		tx.Dispensed++
+		f.overruns++
+	}
+	tx.State = "done"
+	tx.Reliable = true
+	f.history[tx.ID] = tx
+	f.active = nil
+	f.mu.Unlock()
+}
+
+// run dispenses one token every 20ms.
+func (f *fakeDevice) run(tx *fakeTx) {
+	for i := 0; i < tx.Quantity; i++ {
+		time.Sleep(20 * time.Millisecond)
+		f.mu.Lock()
+		tx.Dispensed++
+		f.mu.Unlock()
+	}
+	f.mu.Lock()
+	tx.State = "done"
+	tx.Reliable = true
+	f.history[tx.ID] = tx
+	f.active = nil
+	f.mu.Unlock()
+}
+
+func (f *fakeDevice) status(w http.ResponseWriter, r *http.Request) {
+	// Read-only: it does NOT spend the nonce, so the same one serves every
+	// poll of a transaction.
+	if reason := f.verify(r, "", false); reason != "" {
+		f.refuse(w, reason)
+		return
+	}
+	id := strings.TrimPrefix(r.URL.Path, "/dispense/")
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.active != nil && f.active.ID == id {
+		f.writeJSON(w, 200, f.respond(f.active))
+		return
+	}
+	if tx, ok := f.history[id]; ok {
+		f.writeJSON(w, 200, f.respond(tx))
+		return
+	}
+	f.writeJSON(w, 404, map[string]string{"error": "not found"})
+}
+
+// respond must be called with f.mu held.
+func (f *fakeDevice) respond(tx *fakeTx) map[string]any {
+	body := map[string]any{
+		"tx_id":     tx.ID,
+		"state":     tx.State,
+		"quantity":  tx.Quantity,
+		"dispensed": tx.Dispensed,
+	}
+	if !f.omitCountReliable {
+		body["count_reliable"] = tx.Reliable
+	}
+	if !f.omitErrorCode {
+		body["error_code"] = tx.ErrorCode
+		body["error_type"] = tx.ErrorType
+	}
+	return body
+}
+
+var _ = fmt.Sprintf

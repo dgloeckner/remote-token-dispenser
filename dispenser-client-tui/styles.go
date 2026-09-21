@@ -51,10 +51,6 @@ var (
 			Foreground(colorSuccess).
 			Bold(true)
 
-	statusDegraded = lipgloss.NewStyle().
-			Foreground(colorWarning).
-			Bold(true)
-
 	statusError = lipgloss.NewStyle().
 			Foreground(colorError).
 			Bold(true)

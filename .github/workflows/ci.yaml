@@ -1,0 +1,139 @@
+name: CI
+
+# Everything that can fail without hardware fails here.
+# What needs the ESP, the simulator or the hopper is the conformance suite's
+# --target simulator|hopper run, which a human starts (docs/hopper-simulator.md).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native-tests:
+    name: Firmware unit tests (native)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Cache PlatformIO
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio
+            ~/.cache/pip
+          key: pio-native-${{ hashFiles('firmware/dispenser/platformio.ini') }}
+      - run: pip install --upgrade platformio
+      # These tests link dispense_manager.cpp itself — see
+      # firmware/dispenser/test/README.md before adding a test double.
+      - run: pio test -e native
+        working-directory: firmware/dispenser
+
+  firmware-build:
+    name: Firmware build (esp8266)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Cache PlatformIO
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio
+            ~/.cache/pip
+          key: pio-esp8266-${{ hashFiles('firmware/dispenser/platformio.ini', 'firmware/hopper-simulator/platformio.ini') }}
+      - run: pip install --upgrade platformio
+      - name: Build dispenser firmware
+        run: pio run -e esp8266
+        working-directory: firmware/dispenser
+      - name: Build hopper simulator
+        run: pio run -e simulator
+        working-directory: firmware/hopper-simulator
+
+  go:
+    name: Go (${{ matrix.module }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module: [dispenser-mock, dispenser-client-tui]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache-dependency-path: ${{ matrix.module }}/go.mod
+      - run: go vet ./...
+        working-directory: ${{ matrix.module }}
+      - run: go test ./...
+        working-directory: ${{ matrix.module }}
+
+  conformance-mock:
+    name: Conformance suite (target mock)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache-dependency-path: dispenser-client-tui/go.mod
+      # Two separate Go modules, so each one is built from its own directory.
+      - name: Build mock and TUI
+        run: |
+          (cd dispenser-mock && go build -o "$RUNNER_TEMP/dispenser-mock" .)
+          (cd dispenser-client-tui && go build -o "$RUNNER_TEMP/token-tui" .)
+      - name: Start the mock
+        run: |
+          "$RUNNER_TEMP/dispenser-mock" --bind 127.0.0.1:8080 --signing-key ci-key \
+            > "$RUNNER_TEMP/mock.log" 2>&1 &
+          for _ in $(seq 1 50); do
+            curl -sf http://127.0.0.1:8080/health > /dev/null && exit 0
+            sleep 0.2
+          done
+          echo "mock did not come up"; cat "$RUNNER_TEMP/mock.log"; exit 1
+      # The same binary and the same cases run against a real ESP:
+      #   token-tui conformance --endpoint http://<esp> --signing-key … --target simulator
+      - name: Run the conformance suite
+        run: |
+          "$RUNNER_TEMP/token-tui" conformance \
+            --endpoint http://127.0.0.1:8080 --signing-key ci-key \
+            --target mock --json "$RUNNER_TEMP/conformance-mock.json"
+      # A short soak, against a FRESH mock: the run above ends with the
+      # destructive fault cases, and a faulted device answers 409 to every
+      # dispense after them.  Twenty cycles prove the runner, not the device —
+      # the numbers only mean something on a real board, which is Cycle A of
+      # the epic (--target simulator --soak 200, see dispenser-protocol.md).
+      - name: Soak the mock (the runner of issue #7)
+        run: |
+          "$RUNNER_TEMP/dispenser-mock" --bind 127.0.0.1:8081 --signing-key ci-key \
+            > "$RUNNER_TEMP/mock-soak.log" 2>&1 &
+          for _ in $(seq 1 50); do
+            curl -sf http://127.0.0.1:8081/health > /dev/null && break
+            sleep 0.2
+          done
+          "$RUNNER_TEMP/token-tui" conformance \
+            --endpoint http://127.0.0.1:8081 --signing-key ci-key \
+            --target mock --soak 20 --soak-poll 100ms \
+            --json "$RUNNER_TEMP/soak-mock.json"
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: conformance-mock
+          path: |
+            ${{ runner.temp }}/conformance-mock.json
+            ${{ runner.temp }}/soak-mock.json
+          if-no-files-found: warn

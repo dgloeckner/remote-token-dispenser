@@ -379,20 +379,39 @@ These modes exist for:
 
 ### Authentication
 
-**Dispense operations** (`POST /dispense`, `GET /dispense/{tx_id}`) require API key authentication:
+**Requests are signed** (issue #8). The shared secret never travels — until
+then `X-API-Key` carried it in clear in every request, so one listener on the
+WLAN owned the machine and a captured request replayed with a new `tx_id`
+dispensed again. That header is **removed**, with no fallback anywhere.
 
 ```http
-X-API-Key: your-secret-key-here
+GET /nonce                     → {"nonce": "<32 hex>", "ttl": 30}
+
+X-Nonce:     <the nonce>
+X-Signature: HMAC-SHA256(key, METHOD \n PATH \n BODY \n NONCE)   (64 lowercase hex)
 ```
+
+A `POST` **spends** its nonce, so a replay is refused; a read does not, so one
+nonce covers a dispense and the status polls behind it.
 
 **Unauthorized Response (401):**
 ```json
-{
-  "error": "unauthorized"
-}
+{"error": "unauthorized", "reason": "nonce"}
 ```
 
-**Health endpoint** (`GET /health`) does NOT require authentication - it's used for monitoring and diagnostics.
+`reason: "nonce"` → fetch a fresh one and retry **once** (safe: mutating
+requests are idempotent by `tx_id`). `reason: "signature"` → stop.
+
+**`GET /nonce`** needs no signature, by necessity. **`GET /health`** takes one
+optionally: unsigned it answers `protocol`, `state`, `fault` and
+`"authenticated": false` — enough for a liveness probe and nothing more;
+signed it answers the full document (SSID, IP, firmware, heap, reset reason,
+metrics, error history).
+
+HTTPS on the ESP8266 was evaluated and rejected, with the numbers, in
+`dispenser-protocol.md` § *Authentication*. The traffic stays readable; what
+is protected is authenticity and freshness. The network segment is the other
+half of this and is an installation requirement (`hardware/README.md`).
 
 ---
 
@@ -840,27 +859,33 @@ sequenceDiagram
     participant Client
     participant ESP8266
     participant Flash as ESP8266 Flash
+    participant RTC as RTC user memory
     participant Hopper
 
-    Note over ESP8266: Dispensing tx "abc"<br/>quantity: 3<br/>dispensed: 2
+    Note over ESP8266: Dispensing tx "abc"<br/>quantity: 3
 
-    ESP8266->>Flash: Persist {tx: "abc", qty: 3, dispensed: 2}
+    ESP8266->>Flash: Persist record {active: "abc", qty: 3, dispensed: 0} + ring
     Flash-->>ESP8266: OK
 
-    Note over ESP8266: 💥 POWER LOSS
+    Hopper-->>ESP8266: token 1, token 2
+    ESP8266->>RTC: {tx: "abc", dispensed: 2} (per token, no flash erase)
+
+    Note over ESP8266: 💥 WATCHDOG RESET / BROWNOUT
 
     Note over ESP8266: ...reboot...
 
     ESP8266->>ESP8266: Boot sequence
-    ESP8266->>Flash: Read persisted state
-    Flash-->>ESP8266: {tx: "abc", qty: 3, dispensed: 2}
+    ESP8266->>Flash: Read persisted record
+    Flash-->>ESP8266: {active: "abc", qty: 3, dispensed: 0} + ring
+    ESP8266->>RTC: Read live count for "abc"
+    RTC-->>ESP8266: 2 (intact, same tx_id)
 
-    ESP8266->>ESP8266: Recover to error state<br/>(incomplete transaction)
-    Note over ESP8266: State: error<br/>tx "abc", dispensed=2
+    ESP8266->>ESP8266: Recover to error state<br/>with the exact count
+    Note over ESP8266: State: error<br/>tx "abc", dispensed=2, count_reliable=true
 
     Client->>ESP8266: GET /dispense/abc<br/>(periodic poll after timeout)
 
-    ESP8266-->>Client: 200 {state: "error", error: "reboot",<br/>quantity: 3, dispensed: 2}
+    ESP8266-->>Client: 200 {state: "error", error: "reboot",<br/>quantity: 3, dispensed: 2, count_reliable: true}
 
     Client->>Client: Record partial dispense
     Note over Client: Storage: state=partial<br/>dispensed=2
@@ -868,6 +893,13 @@ sequenceDiagram
     Client->>Client: Show error to user
     Note over Client: "Partial dispense: 2/3 tokens.<br/>Contact staff."
 ```
+
+**After a real power loss** the RTC block is gone too. The recovery then reports
+the count from flash as a **lower bound**, with `count_reliable: false`, instead
+of presenting it as a fact — see `dispenser-protocol.md` § Design Principles 4
+and 4a. The finished transaction stays in the **persisted** history ring either
+way, so a later `GET /dispense/{tx_id}` is a `200` and a `404` keeps its single
+meaning: the request never arrived.
 
 ### Scenario 2: Client Crashes Mid-Transaction
 

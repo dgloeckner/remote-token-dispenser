@@ -67,11 +67,16 @@ PC817 module #1 (motor control, channel D1) requires resistor modification:
 
 Install via **Tools → Manage Libraries** in Arduino IDE:
 
-| Library | Author | Version | Purpose |
-|---------|--------|---------|---------|
-| **ESPAsyncWebServer** | me-no-dev | Latest | Async HTTP server |
-| **ESPAsyncTCP** | me-no-dev | Latest | Auto-installed with above |
-| **ArduinoJson** | Benoit Blanchon | 7.x (7.0.0+) | JSON parsing/generation |
+**Versions are pinned in `platformio.ini`, and "Latest" is not a version**
+(issue #7): `.pio/libdeps/esp8266` used to hold three different async-TCP forks
+and whichever ArduinoJson the day offered. Change a pin there, not here.
+
+| Library | Owner | Pinned version | Purpose |
+|---------|-------|----------------|---------|
+| **ESPAsyncWebServer** | esp32async | 3.12.1 | Async HTTP server |
+| **ESPAsyncTCP** | esp32async | 2.0.0 | Named although it is transitive — a range-resolved dependency is a floating one |
+| **ArduinoJson** | bblanchon | 7.4.3 | JSON parsing/generation |
+| *platform* | espressif8266 | 4.2.1 | …which is also the pin of the framework libraries below |
 
 **Built-in Libraries** (no installation needed):
 - ESP8266WiFi
@@ -107,7 +112,9 @@ firmware/dispenser/
 ├── hopper_control.cpp     # Motor + sensor GPIO
 ├── hopper_control.h
 ├── flash_storage.cpp      # Persistence (EEPROM/LittleFS)
-└── flash_storage.h
+├── flash_storage.h
+├── wifi_supervisor.cpp    # "restart a device nobody can reach" (issue #7)
+└── wifi_supervisor.h
 ```
 
 ---
@@ -122,15 +129,17 @@ firmware/dispenser/
 #define WIFI_PASSWORD "YourPassword"
 #define STATIC_IP "192.168.4.20"
 
-// API Authentication
-#define API_KEY "change-this-secret-key"  // CHANGE THIS!
+// The shared signing secret (issue #8).  It NEVER travels: requests carry
+// HMAC-SHA256 over METHOD \n PATH \n BODY \n NONCE in X-Signature.
+#define SIGNING_KEY "change-this-secret-key"  // CHANGE THIS!
 
 // GPIO Pins (Wemos D1 Mini - using D-labels)
 // ⚠️ INVERTED LOGIC: Control LOW = motor ON, inputs LOW = active
 #define MOTOR_PIN          D1    // GPIO5 - Control output via PC817 #1
 #define COIN_PULSE_PIN     D7    // GPIO13 - Coin pulse input via PC817 #2
 #define ERROR_SIGNAL_PIN   D5    // GPIO14 - Error signal input via PC817 #3
-#define HOPPER_LOW_PIN     D6    // GPIO12 - Empty sensor input via PC817 #4
+// D6 (GPIO12) is free: the hopper's empty sensor is a factory option this
+// unit does not have, so the pin reported "not empty" forever (issue #6).
 ```
 
 ### 2. Verify Pin Connections
@@ -204,45 +213,84 @@ curl http://192.168.4.20/health
 Expected response:
 ```json
 {
-  "status": "ok",
+  "protocol": 2,
+  "state": "idle",
+  "fault": "none",
+  "fault_code": 0,
   "uptime": 42,
-  "firmware": "1.0.0",
-  "dispenser": "idle",
-  "hopper_low": false,
+  "firmware": "1.3.0",
+  "heap_free": 27512,
+  "reset_reason": "Power on",
+  "wifi": {"rssi": -47, "ip": "192.168.4.20", "ssid": "…", "reconnects": 0},
   "metrics": {
     "total_dispenses": 0,
     "successful": 0,
     "jams": 0
-  }
+  },
+  "error_history": []
 }
 ```
 
+`heap_free`, `reset_reason` and `wifi.reconnects` are what a bad day leaves
+behind (issue #7): before them, a device that reset once a week produced one
+piece of evidence — a small `uptime`.
+
+`state` and `fault` are the whole health verdict (issue #6): `state` is
+`idle | dispensing | fault`, `fault` is `none | jam | hopper_error`, and only
+a power cycle clears a fault. The raw pin levels are `GET /debug` (signature
+required). Unsigned, `/health` answers only `protocol`, `state`, `fault` and
+`"authenticated": false` — see issue #8 and `dispenser-protocol.md`. The full contract is `dispenser-protocol.md`.
+
 ### 3. Test Authentication
 
-**Without API key (should fail):**
+Since issue #8 every protected request is **signed**. The secret never
+travels; a nonce does. This helper signs one request:
+
 ```bash
-curl -X POST http://192.168.4.20/dispense \
+KEY=your-secret-key-here
+DEV=http://192.168.4.20
+
+sign() {   # sign METHOD PATH [BODY] — sets $NONCE and $SIG
+  NONCE=$(curl -s "$DEV/nonce" | sed -n 's/.*"nonce":"\([0-9a-f]*\)".*/\1/p')
+  SIG=$(printf '%s\n%s\n%s\n%s' "$1" "$2" "$3" "$NONCE" \
+        | openssl dgst -sha256 -hmac "$KEY" -r | cut -d' ' -f1)
+}
+```
+
+`printf`, not `echo`: the canonical string has **no** trailing newline.
+
+**Unsigned (should fail):**
+```bash
+curl -X POST "$DEV/dispense" \
   -H "Content-Type: application/json" \
   -d '{"tx_id":"test123","quantity":1}'
 ```
 
-Expected: `401 Unauthorized`
+Expected: `401 {"error":"unauthorized","reason":"signature"}`
 
-**With API key (should work):**
+**Carrying the old `X-API-Key` (should also fail):** that header is not a
+credential any more and not a fallback — the request is simply unsigned.
+
+**Signed (should work):**
 ```bash
-curl -X POST http://192.168.4.20/dispense \
-  -H "X-API-Key: your-secret-key-here" \
-  -H "Content-Type: application/json" \
-  -d '{"tx_id":"test123","quantity":3}'
+BODY='{"tx_id":"test123","quantity":3}'
+sign POST /dispense "$BODY"
+curl -X POST "$DEV/dispense" \
+  -H "X-Nonce: $NONCE" -H "X-Signature: $SIG" \
+  -H "Content-Type: application/json" -d "$BODY"
 ```
 
-Expected: `200 OK` with dispensing status
+Expected: `200 OK` with dispensing status. Sending **the same request again**
+is `401 reason=nonce` — a POST spends its nonce, which is the replay defence.
 
 ### 4. Monitor Status
 
+A read does **not** spend its nonce, so the one from the POST keeps working
+for the polls behind it:
+
 ```bash
-curl -H "X-API-Key: your-secret-key-here" \
-  http://192.168.4.20/dispense/test123
+sign GET /dispense/test123
+curl -H "X-Nonce: $NONCE" -H "X-Signature: $SIG" "$DEV/dispense/test123"
 ```
 
 ---
@@ -254,6 +302,14 @@ curl -H "X-API-Key: your-secret-key-here" \
 - Check SSID and password in `config.h`
 - Ensure 2.4GHz WiFi (ESP8266 doesn't support 5GHz)
 - Check Serial Monitor for connection errors
+- **The device restarts itself after a minute off the network** (issue #7),
+  and never while the motor is running. A board that reboots every minute on
+  the bench is telling you it cannot reach the AP — the serial line says
+  `WiFi down for 60s with nothing dispensing: restarting`. It is not a crash
+  loop; check `reset_reason` on the next `/health` and the credentials above.
+- Modem sleep is off (`WIFI_NONE_SLEEP`). If a request takes seconds or times
+  out once and succeeds on retry, check that this line survived — it is the
+  usual cause on an ESP8266 that answers HTTP.
 
 ### Upload Issues
 
@@ -322,13 +378,17 @@ See [ARCHITECTURE.md](../ARCHITECTURE.md) for complete API documentation.
 
 **Quick Reference:**
 
-| Endpoint | Method | Auth | Purpose |
-|----------|--------|------|---------|
-| `/health` | GET | No | Health status & metrics |
-| `/dispense` | POST | Yes | Start dispense transaction |
-| `/dispense/{tx_id}` | GET | Yes | Query transaction status |
+| Endpoint | Method | Signature | Purpose |
+|----------|--------|-----------|---------|
+| `/nonce` | GET | no (by necessity) | Hand out a single-use nonce, 30 s |
+| `/health` | GET | optional | Unsigned: `protocol`, `state`, `fault`. Signed: the full document |
+| `/debug` | GET | yes | Raw pin levels, for the bench |
+| `/dispense` | POST | yes, **spends the nonce** | Start a dispense transaction |
+| `/dispense/{tx_id}` | GET | yes | Query transaction status |
 
-**Authentication:** Include header `X-API-Key: your-secret-key-here`
+**Authentication:** `X-Nonce` plus
+`X-Signature: HMAC-SHA256(key, METHOD \n PATH \n BODY \n NONCE)`, lowercase
+hex. Full specification in `dispenser-protocol.md`.
 
 ---
 
@@ -365,7 +425,10 @@ Enable verbose output in code:
 
 ### Security Checklist
 
-- [ ] **Change API_KEY** in `config.h` before deployment
+- [ ] **Change SIGNING_KEY** in `config.local.h` before deployment — long and
+      random; it is never typed by a person and never appears on the wire
+- [ ] **Dedicated WPA2 SSID / VLAN with client isolation** (`hardware/README.md`
+      § *Network*) — an installation requirement, not a recommendation
 - [ ] Configure strong WiFi password
 - [ ] Use static IP for predictable access
 - [ ] Keep firmware updated

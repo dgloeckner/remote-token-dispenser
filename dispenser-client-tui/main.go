@@ -14,8 +14,18 @@ var (
 )
 
 func main() {
+	// Subcommands come before the flag package sees anything: `conformance`
+	// is a headless protocol run, the bare command is the TUI.
+	if len(os.Args) > 1 && os.Args[1] == "conformance" {
+		os.Exit(runConformance(os.Args[2:]))
+	}
+
 	endpoint := flag.String("endpoint", "http://192.168.4.20", "Dispenser base URL")
-	apiKey := flag.String("api-key", "", "API key for dispenser (or TOKEN_DISPENSER_API_KEY env)")
+	// The shared signing secret (issue #8).  It never leaves this process:
+	// requests carry HMAC-SHA256 over METHOD \n PATH \n BODY \n NONCE.  There
+	// is deliberately no --api-key alias — no device is deployed, so keeping
+	// one would only keep the old habit alive.
+	signingKey := flag.String("signing-key", "", "Shared signing secret (or TOKEN_DISPENSER_SIGNING_KEY env). Never transmitted.")
 	timeout := flag.Duration("timeout", 3*time.Second, "HTTP request timeout")
 	showVersion := flag.Bool("version", false, "Show version")
 
@@ -24,18 +34,21 @@ func main() {
 🪙 Token Dispenser TUI — k9s-style testing dashboard
 
 Usage: token-tui [flags]
+       token-tui conformance [flags]   protocol conformance run (headless)
 
 Flags:
 `)
 		flag.PrintDefaults()
 		fmt.Fprintf(os.Stderr, `
 Environment:
-  TOKEN_DISPENSER_API_KEY   API key (alternative to --api-key)
+  TOKEN_DISPENSER_SIGNING_KEY  Signing secret (alternative to --signing-key)
   TOKEN_DISPENSER_ENDPOINT  Endpoint URL (alternative to --endpoint)
 
 Examples:
-  token-tui --endpoint http://192.168.4.20 --api-key mysecret
-  TOKEN_DISPENSER_API_KEY=mysecret token-tui
+  token-tui --endpoint http://192.168.4.20 --signing-key mysecret
+  TOKEN_DISPENSER_SIGNING_KEY=mysecret token-tui
+  token-tui conformance --endpoint http://127.0.0.1:8080 --signing-key dev --target mock
+  token-tui conformance --endpoint http://192.168.4.20 --signing-key mysecret --target simulator
 
 Keys:
   1/2/3/4    Switch tabs (Dashboard / Dispense / Log / Burst)
@@ -53,14 +66,15 @@ Keys:
 		os.Exit(0)
 	}
 
-	// Resolve API key
-	key := *apiKey
+	// Resolve the signing key
+	key := *signingKey
 	if key == "" {
-		key = os.Getenv("TOKEN_DISPENSER_API_KEY")
+		key = os.Getenv("TOKEN_DISPENSER_SIGNING_KEY")
 	}
 	if key == "" {
-		fmt.Fprintf(os.Stderr, "⚠  No API key provided. Use --api-key or TOKEN_DISPENSER_API_KEY env.\n")
-		fmt.Fprintf(os.Stderr, "   Health checks will work, but dispense operations will fail (401).\n\n")
+		fmt.Fprintf(os.Stderr, "⚠  No signing key provided. Use --signing-key or TOKEN_DISPENSER_SIGNING_KEY env.\n")
+		fmt.Fprintf(os.Stderr, "   Everything but the minimal GET /health will fail (401): since issue #8\n")
+		fmt.Fprintf(os.Stderr, "   every request is signed, and an unsigned one is refused.\n\n")
 	}
 
 	// Resolve endpoint

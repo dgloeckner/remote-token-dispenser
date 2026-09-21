@@ -13,7 +13,9 @@
 #define GATEWAY IPAddress(192, 168, 188, 1)
 #define SUBNET IPAddress(255, 255, 255, 0)
 
-// API Authentication
-#define API_KEY "your-secret-api-key-here"
+// The shared signing secret (issue #8).  It never leaves the two devices:
+// requests carry a signature computed with it, never the key itself.  The
+// same value goes into the terminal's configuration.
+#define SIGNING_KEY "your-shared-signing-secret-here"
 
 #endif
