@@ -96,7 +96,7 @@ jobs:
           (cd dispenser-client-tui && go build -o "$RUNNER_TEMP/token-tui" .)
       - name: Start the mock
         run: |
-          "$RUNNER_TEMP/dispenser-mock" --bind 127.0.0.1:8080 --api-key ci-key \
+          "$RUNNER_TEMP/dispenser-mock" --bind 127.0.0.1:8080 --signing-key ci-key \
             > "$RUNNER_TEMP/mock.log" 2>&1 &
           for _ in $(seq 1 50); do
             curl -sf http://127.0.0.1:8080/health > /dev/null && exit 0
@@ -104,11 +104,11 @@ jobs:
           done
           echo "mock did not come up"; cat "$RUNNER_TEMP/mock.log"; exit 1
       # The same binary and the same cases run against a real ESP:
-      #   token-tui conformance --endpoint http://<esp> --api-key … --target simulator
+      #   token-tui conformance --endpoint http://<esp> --signing-key … --target simulator
       - name: Run the conformance suite
         run: |
           "$RUNNER_TEMP/token-tui" conformance \
-            --endpoint http://127.0.0.1:8080 --api-key ci-key \
+            --endpoint http://127.0.0.1:8080 --signing-key ci-key \
             --target mock --json "$RUNNER_TEMP/conformance-mock.json"
       # A short soak, against a FRESH mock: the run above ends with the
       # destructive fault cases, and a faulted device answers 409 to every
@@ -117,14 +117,14 @@ jobs:
       # the epic (--target simulator --soak 200, see dispenser-protocol.md).
       - name: Soak the mock (the runner of issue #7)
         run: |
-          "$RUNNER_TEMP/dispenser-mock" --bind 127.0.0.1:8081 --api-key ci-key \
+          "$RUNNER_TEMP/dispenser-mock" --bind 127.0.0.1:8081 --signing-key ci-key \
             > "$RUNNER_TEMP/mock-soak.log" 2>&1 &
           for _ in $(seq 1 50); do
             curl -sf http://127.0.0.1:8081/health > /dev/null && break
             sleep 0.2
           done
           "$RUNNER_TEMP/token-tui" conformance \
-            --endpoint http://127.0.0.1:8081 --api-key ci-key \
+            --endpoint http://127.0.0.1:8081 --signing-key ci-key \
             --target mock --soak 20 --soak-poll 100ms \
             --json "$RUNNER_TEMP/soak-mock.json"
 

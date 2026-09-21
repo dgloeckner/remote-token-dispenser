@@ -21,13 +21,26 @@
 #endif
 
 // Protocol version handshake (dispenser-protocol.md).
-// There are no devices in the field: protocol 2 replaces protocol 1 outright,
-// and a client refuses any other version instead of adapting to it.
-#define PROTOCOL_VERSION 2
+// There are no devices in the field: a client refuses any other version
+// instead of adapting to it.
+//
+// 3, not 2, and this is a BREAKING change stated as one (issue #8):
+// `X-API-Key` is gone and every protected request must carry a signature, so
+// a protocol-2 client cannot talk to this device at all — it would send a
+// header the device ignores and read 401 forever.  A handshake that stayed at
+// 2 would promise an interoperability that does not exist.  The three places
+// that hold this number move together: here, `ProtocolVersion` in
+// dispenser-mock/types.go and in dispenser-client-tui/client.go.
+#define PROTOCOL_VERSION 3
 
-// API Authentication - CHANGE THIS IN config.local.h
-#ifndef API_KEY
-  #define API_KEY "change-this-secret-key-here"
+// The shared signing secret.  CHANGE THIS IN config.local.h.
+//
+// It is called SIGNING_KEY and not API_KEY on purpose: since issue #8 it
+// NEVER travels.  Requests carry HMAC-SHA256(this key, METHOD \n PATH \n BODY
+// \n NONCE) in X-Signature, and a request that carries the key itself in an
+// X-API-Key header is simply an unsigned request — 401, like any other.
+#ifndef SIGNING_KEY
+  #define SIGNING_KEY "change-this-secret-key-here"
 #endif
 
 // GPIO Pins (Wemos D1 Mini ESP8266)
@@ -98,7 +111,7 @@
 // The fallback keeps a plain checkout of the sketch compiling in the Arduino
 // IDE, which passes no flags.
 #ifndef FIRMWARE_VERSION
-  #define FIRMWARE_VERSION "1.3.0"
+  #define FIRMWARE_VERSION "1.4.0"
 #endif
 
 // Include local configuration (not tracked in git)

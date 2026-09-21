@@ -52,11 +52,42 @@ func do(t *testing.T, srv *httptest.Server, method, path, body string, headers m
 	return resp.StatusCode, string(blob)
 }
 
+// fetchNonce asks the mock for a nonce, the way every client must since #8.
+func fetchNonce(t *testing.T, srv *httptest.Server) string {
+	t.Helper()
+	status, body := do(t, srv, http.MethodGet, "/nonce", "", nil)
+	if status != http.StatusOK {
+		t.Fatalf("GET /nonce = %d", status)
+	}
+	var n NonceResponse
+	if err := json.Unmarshal([]byte(body), &n); err != nil {
+		t.Fatalf("/nonce is not JSON: %v", err)
+	}
+	if len(n.Nonce) != NonceHexLen {
+		t.Fatalf("/nonce handed out %q, want %d hex characters", n.Nonce, NonceHexLen)
+	}
+	return n.Nonce
+}
+
+// doSigned signs the request the way the protocol requires: a fresh nonce,
+// then HMAC-SHA256 over METHOD \n PATH \n BODY \n NONCE.  There is no
+// X-API-Key anywhere in this file any more, and that is the point of #8.
+func doSigned(t *testing.T, srv *httptest.Server, method, path, body string, headers map[string]string) (int, string) {
+	t.Helper()
+	nonce := fetchNonce(t, srv)
+	h := map[string]string{}
+	for k, v := range headers {
+		h[k] = v
+	}
+	h["X-Nonce"] = nonce
+	h["X-Signature"] = SignRequest("test-key", method, path, body, nonce)
+	return do(t, srv, method, path, body, h)
+}
+
 func postDispense(t *testing.T, srv *httptest.Server, body string) (int, string) {
 	t.Helper()
-	return do(t, srv, http.MethodPost, "/dispense", body, map[string]string{
+	return doSigned(t, srv, http.MethodPost, "/dispense", body, map[string]string{
 		"Content-Type": "application/json",
-		"X-API-Key":    "test-key",
 	})
 }
 
@@ -65,7 +96,11 @@ func postDispense(t *testing.T, srv *httptest.Server, body string) (int, string)
 func TestHealthReportsProtocolVersion(t *testing.T) {
 	srv, _ := newTestServer(t)
 
-	status, body := do(t, srv, http.MethodGet, "/health", "", nil)
+	// Signed, because `firmware` below is on the authenticated side of the
+	// document since #8.  That the VERSION itself is readable without a
+	// signature — it has to be, or no client could complete the handshake
+	// before it signs — is TestHealthIsMinimalWithoutASignature's business.
+	status, body := doSigned(t, srv, http.MethodGet, "/health", "", nil)
 	if status != http.StatusOK {
 		t.Fatalf("GET /health = %d, want 200", status)
 	}
@@ -127,8 +162,7 @@ func TestDebugNeedsTheKeyAndCarriesThePins(t *testing.T) {
 	if status, _ := do(t, srv, http.MethodGet, "/debug", "", nil); status != http.StatusUnauthorized {
 		t.Errorf("GET /debug without a key = %d, want 401", status)
 	}
-	status, body := do(t, srv, http.MethodGet, "/debug", "",
-		map[string]string{"X-API-Key": "test-key"})
+	status, body := doSigned(t, srv, http.MethodGet, "/debug", "", nil)
 	if status != http.StatusOK {
 		t.Fatalf("GET /debug = %d, want 200", status)
 	}
@@ -145,8 +179,8 @@ func TestDebugNeedsTheKeyAndCarriesThePins(t *testing.T) {
 // would grow a button for it.
 func TestNoResetRoute(t *testing.T) {
 	srv, _ := newTestServer(t)
-	status, _ := do(t, srv, http.MethodPost, "/reset", "",
-		map[string]string{"X-API-Key": "test-key", "Content-Type": "application/json"})
+	status, _ := doSigned(t, srv, http.MethodPost, "/reset", "",
+		map[string]string{"Content-Type": "application/json"})
 	if status == http.StatusOK || status == http.StatusNoContent {
 		t.Errorf("POST /reset = %d: the device has a way out of a fault that is not a power cycle", status)
 	}
@@ -162,25 +196,163 @@ func TestHealthNeedsNoAPIKey(t *testing.T) {
 func TestAuthentication(t *testing.T) {
 	srv, _ := newTestServer(t)
 
+	// The nonce these cases mis-sign with is a real one: an unknown nonce and
+	// a wrong signature must be two different 401s, and only a live nonce can
+	// produce the second.
+	live := fetchNonce(t, srv)
+	const body = `{"tx_id":"a","quantity":1}`
+
 	cases := []struct {
-		name    string
-		method  string
-		path    string
-		body    string
-		headers map[string]string
+		name       string
+		method     string
+		path       string
+		body       string
+		headers    map[string]string
+		wantReason string
 	}{
-		{"post without key", http.MethodPost, "/dispense", `{"tx_id":"a","quantity":1}`,
-			map[string]string{"Content-Type": "application/json"}},
-		{"post with wrong key", http.MethodPost, "/dispense", `{"tx_id":"a","quantity":1}`,
-			map[string]string{"Content-Type": "application/json", "X-API-Key": "nope"}},
-		{"status without key", http.MethodGet, "/dispense/a", "", nil},
+		{"post with no signature at all", http.MethodPost, "/dispense", body,
+			map[string]string{"Content-Type": "application/json"}, "signature"},
+		{"post carrying the old X-API-Key", http.MethodPost, "/dispense", body,
+			// The header of protocol 2.  It is not a credential any more and
+			// not a fallback either: this request is simply unsigned.
+			map[string]string{"Content-Type": "application/json", "X-API-Key": "test-key"}, "signature"},
+		{"post signed with the wrong key", http.MethodPost, "/dispense", body,
+			map[string]string{"Content-Type": "application/json", "X-Nonce": live,
+				"X-Signature": SignRequest("not-the-key", http.MethodPost, "/dispense", body, live)}, "signature"},
+		{"post with a nonce nobody issued", http.MethodPost, "/dispense", body,
+			map[string]string{"Content-Type": "application/json",
+				"X-Nonce":     strings.Repeat("f", NonceHexLen),
+				"X-Signature": SignRequest("test-key", http.MethodPost, "/dispense", body, strings.Repeat("f", NonceHexLen))}, "nonce"},
+		{"status without a signature", http.MethodGet, "/dispense/a", "", nil, "signature"},
+		{"debug without a signature", http.MethodGet, "/debug", "", nil, "signature"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if status, body := do(t, srv, tc.method, tc.path, tc.body, tc.headers); status != http.StatusUnauthorized {
-				t.Errorf("status = %d, want 401 (body %s)", status, body)
+			status, got := do(t, srv, tc.method, tc.path, tc.body, tc.headers)
+			if status != http.StatusUnauthorized {
+				t.Fatalf("status = %d, want 401 (body %s)", status, got)
+			}
+			var resp ErrorResponse
+			if err := json.Unmarshal([]byte(got), &resp); err != nil {
+				t.Fatalf("401 body is not JSON: %v", err)
+			}
+			// The reason is the whole of the client contract: "nonce" means
+			// fetch a fresh one and retry once, "signature" means stop.
+			if resp.Reason != tc.wantReason {
+				t.Errorf("401 reason = %q, want %q", resp.Reason, tc.wantReason)
 			}
 		})
+	}
+}
+
+// The replay this issue exists to stop: the identical signed POST, twice.
+func TestReplayedSignedPostIs401(t *testing.T) {
+	srv, _ := newTestServer(t)
+	nonce := fetchNonce(t, srv)
+	body := `{"tx_id":"replay01","quantity":1}`
+	headers := map[string]string{
+		"Content-Type": "application/json",
+		"X-Nonce":      nonce,
+		"X-Signature":  SignRequest("test-key", http.MethodPost, "/dispense", body, nonce),
+	}
+
+	if status, got := do(t, srv, http.MethodPost, "/dispense", body, headers); status != http.StatusOK {
+		t.Fatalf("first signed POST = %d, want 200 (body %s)", status, got)
+	}
+	status, got := do(t, srv, http.MethodPost, "/dispense", body, headers)
+	if status != http.StatusUnauthorized {
+		t.Fatalf("replayed POST = %d, want 401 (body %s)", status, got)
+	}
+	var resp ErrorResponse
+	_ = json.Unmarshal([]byte(got), &resp)
+	if resp.Reason != "nonce" {
+		t.Errorf("replay reason = %q, want %q", resp.Reason, "nonce")
+	}
+}
+
+// A body changed after signing — a captured request re-aimed at more tokens.
+func TestTamperedBodyIs401(t *testing.T) {
+	srv, _ := newTestServer(t)
+	nonce := fetchNonce(t, srv)
+	signedBody := `{"tx_id":"tamper01","quantity":1}`
+	sentBody := `{"tx_id":"tamper01","quantity":9}`
+
+	status, got := do(t, srv, http.MethodPost, "/dispense", sentBody, map[string]string{
+		"Content-Type": "application/json",
+		"X-Nonce":      nonce,
+		"X-Signature":  SignRequest("test-key", http.MethodPost, "/dispense", signedBody, nonce),
+	})
+	if status != http.StatusUnauthorized {
+		t.Fatalf("tampered body = %d, want 401 (body %s)", status, got)
+	}
+}
+
+// A POST spends its nonce for MUTATING use only: the status polls behind it
+// keep working off the same one, which is what "one GET /nonce per
+// transaction" means.
+func TestASpentNonceStillPolls(t *testing.T) {
+	srv, _ := newTestServer(t)
+	nonce := fetchNonce(t, srv)
+	body := `{"tx_id":"spent001","quantity":1}`
+
+	if status, got := do(t, srv, http.MethodPost, "/dispense", body, map[string]string{
+		"Content-Type": "application/json",
+		"X-Nonce":      nonce,
+		"X-Signature":  SignRequest("test-key", http.MethodPost, "/dispense", body, nonce),
+	}); status != http.StatusOK {
+		t.Fatalf("signed POST = %d (body %s)", status, got)
+	}
+
+	for i := 0; i < 3; i++ {
+		status, got := do(t, srv, http.MethodGet, "/dispense/spent001", "", map[string]string{
+			"X-Nonce":     nonce,
+			"X-Signature": SignRequest("test-key", http.MethodGet, "/dispense/spent001", "", nonce),
+		})
+		if status != http.StatusOK {
+			t.Fatalf("poll %d on the spent nonce = %d, want 200 (body %s)", i, status, got)
+		}
+	}
+}
+
+// GET /health answers TWO documents off one URL (issue #8).
+func TestHealthIsMinimalWithoutASignature(t *testing.T) {
+	srv, _ := newTestServer(t)
+
+	status, body := do(t, srv, http.MethodGet, "/health", "", nil)
+	if status != http.StatusOK {
+		t.Fatalf("unsigned GET /health = %d, want 200 — it is a liveness probe, not a protected route", status)
+	}
+	var minimal MinimalHealthResponse
+	if err := json.Unmarshal([]byte(body), &minimal); err != nil {
+		t.Fatalf("health is not JSON: %v", err)
+	}
+	if minimal.Protocol != ProtocolVersion || minimal.State == "" || minimal.Fault == "" {
+		t.Errorf("the unsigned document is missing one of its three fields: %s", body)
+	}
+	if minimal.Authenticated {
+		t.Errorf("the unsigned document claims to be authenticated: %s", body)
+	}
+	// Everything that needs the key must be absent, not zeroed.
+	for _, field := range []string{"wifi", "ssid", "metrics", "heap_free", "reset_reason",
+		"firmware", "uptime", "error_history", "fault_code"} {
+		if strings.Contains(body, `"`+field+`"`) {
+			t.Errorf("the unsigned /health leaks %q: %s", field, body)
+		}
+	}
+
+	status, body = doSigned(t, srv, http.MethodGet, "/health", "", nil)
+	if status != http.StatusOK {
+		t.Fatalf("signed GET /health = %d", status)
+	}
+	var full HealthResponse
+	if err := json.Unmarshal([]byte(body), &full); err != nil {
+		t.Fatalf("signed health is not JSON: %v", err)
+	}
+	if !full.Authenticated {
+		t.Errorf("the signed document does not say so: %s", body)
+	}
+	if full.WiFi == nil || full.Firmware == "" || full.ResetReason == "" {
+		t.Errorf("the signed document is missing fields: %s", body)
 	}
 }
 
@@ -209,8 +381,8 @@ func TestDispenseValidation(t *testing.T) {
 
 func TestDispenseRequiresJSONContentType(t *testing.T) {
 	srv, _ := newTestServer(t)
-	status, body := do(t, srv, http.MethodPost, "/dispense", `{"tx_id":"ct","quantity":1}`,
-		map[string]string{"Content-Type": "text/plain", "X-API-Key": "test-key"})
+	status, body := doSigned(t, srv, http.MethodPost, "/dispense", `{"tx_id":"ct","quantity":1}`,
+		map[string]string{"Content-Type": "text/plain"})
 	if status != http.StatusUnsupportedMediaType {
 		t.Errorf("status = %d, want 415 (body %s)", status, body)
 	}
@@ -218,8 +390,7 @@ func TestDispenseRequiresJSONContentType(t *testing.T) {
 
 func TestUnknownTransactionIs404(t *testing.T) {
 	srv, _ := newTestServer(t)
-	status, _ := do(t, srv, http.MethodGet, "/dispense/nosuchtx", "",
-		map[string]string{"X-API-Key": "test-key"})
+	status, _ := doSigned(t, srv, http.MethodGet, "/dispense/nosuchtx", "", nil)
 	if status != http.StatusNotFound {
 		t.Errorf("status = %d, want 404", status)
 	}
@@ -231,8 +402,7 @@ func waitForFinal(t *testing.T, srv *httptest.Server, txID string) DispenseRespo
 	deadline := time.Now().Add(10 * time.Second)
 	var last DispenseResponse
 	for time.Now().Before(deadline) {
-		status, body := do(t, srv, http.MethodGet, "/dispense/"+txID, "",
-			map[string]string{"X-API-Key": "test-key"})
+		status, body := doSigned(t, srv, http.MethodGet, "/dispense/"+txID, "", nil)
 		if status != http.StatusOK {
 			t.Fatalf("GET /dispense/%s = %d", txID, status)
 		}
@@ -362,8 +532,7 @@ func TestDispenseWhileFaultedIs409(t *testing.T) {
 	if status, body := postDispense(t, srv, `{"tx_id":"tx-err","quantity":8}`); status != http.StatusOK {
 		t.Errorf("idempotent retry while faulted = %d, want 200 (body %s)", status, body)
 	}
-	if status, body := do(t, srv, http.MethodGet, "/dispense/tx-err", "",
-		map[string]string{"X-API-Key": "test-key"}); status != http.StatusOK {
+	if status, body := doSigned(t, srv, http.MethodGet, "/dispense/tx-err", "", nil); status != http.StatusOK {
 		t.Errorf("GET of the failed transaction while faulted = %d, want 200 (body %s)", status, body)
 	}
 }
@@ -379,8 +548,7 @@ func TestFailedTransactionCarriesItsErrorType(t *testing.T) {
 	deadline := time.Now().Add(2 * time.Second)
 	var resp DispenseResponse
 	for time.Now().Before(deadline) {
-		_, body := do(t, srv, http.MethodGet, "/dispense/tx-why", "",
-			map[string]string{"X-API-Key": "test-key"})
+		_, body := doSigned(t, srv, http.MethodGet, "/dispense/tx-why", "", nil)
 		if err := json.Unmarshal([]byte(body), &resp); err != nil {
 			t.Fatalf("status is not JSON: %v", err)
 		}
@@ -433,8 +601,8 @@ func TestScenarioMapping(t *testing.T) {
 
 func TestPostWithoutBodyIs400(t *testing.T) {
 	srv, _ := newTestServer(t)
-	status, body := do(t, srv, "POST", "/dispense", "",
-		map[string]string{"Content-Type": "application/json", "X-API-Key": "test-key"})
+	status, body := doSigned(t, srv, "POST", "/dispense", "",
+		map[string]string{"Content-Type": "application/json"})
 	if status != http.StatusBadRequest {
 		t.Fatalf("empty body: status %d, want 400 (body: %s)", status, body)
 	}
@@ -444,8 +612,8 @@ func TestPostWithOversizedBodyIs413(t *testing.T) {
 	srv, _ := newTestServer(t)
 	padding := strings.Repeat("x", MaxRequestBody)
 	body := `{"tx_id":"big1","quantity":1,"pad":"` + padding + `"}`
-	status, got := do(t, srv, "POST", "/dispense", body,
-		map[string]string{"Content-Type": "application/json", "X-API-Key": "test-key"})
+	status, got := doSigned(t, srv, "POST", "/dispense", body,
+		map[string]string{"Content-Type": "application/json"})
 	if status != http.StatusRequestEntityTooLarge {
 		t.Fatalf("oversized body: status %d, want 413 (body: %s)", status, got)
 	}
@@ -458,8 +626,8 @@ func TestPostAtTheBodyCapIsStillAccepted(t *testing.T) {
 	if len(body) != MaxRequestBody {
 		t.Fatalf("test built a %d byte body, wanted exactly %d", len(body), MaxRequestBody)
 	}
-	status, got := do(t, srv, "POST", "/dispense", body,
-		map[string]string{"Content-Type": "application/json", "X-API-Key": "test-key"})
+	status, got := doSigned(t, srv, "POST", "/dispense", body,
+		map[string]string{"Content-Type": "application/json"})
 	if status != http.StatusOK {
 		t.Fatalf("body of exactly the cap: status %d, want 200 (body: %s)", status, got)
 	}

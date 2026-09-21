@@ -145,9 +145,9 @@ func TestSuiteCatchesProtocolMismatch(t *testing.T) {
 
 	report := RunCases(newCtx(srv.URL, "k", TargetMock), ConformanceCases(), "health_protocol")
 
-	got := findCase(t, report, "health_protocol_is_2")
+	got := findCase(t, report, "health_protocol_is_3")
 	if got.Status != "fail" {
-		t.Errorf("health_protocol_is_2 = %s, want fail against protocol 1", got.Status)
+		t.Errorf("health_protocol_is_3 = %s, want fail against protocol 1", got.Status)
 	}
 }
 
@@ -157,11 +157,11 @@ func TestSuiteCatchesMissingAuthentication(t *testing.T) {
 	srv := dev.server()
 	defer srv.Close()
 
-	report := RunCases(newCtx(srv.URL, "k", TargetMock), ConformanceCases(), "without_api_key")
+	report := RunCases(newCtx(srv.URL, "k", TargetMock), ConformanceCases(), "without_a_signature")
 
-	for _, name := range []string{"post_without_api_key_is_401", "get_status_without_api_key_is_401"} {
+	for _, name := range []string{"post_without_a_signature_is_401", "get_status_without_a_signature_is_401"} {
 		if got := findCase(t, report, name); got.Status != "fail" {
-			t.Errorf("%s = %s, want fail against a device that ignores the key", name, got.Status)
+			t.Errorf("%s = %s, want fail against a device that serves anyone", name, got.Status)
 		}
 	}
 }
@@ -548,5 +548,123 @@ func TestSoakRefusesADeviceWithoutTelemetry(t *testing.T) {
 	if got.Status != "fail" {
 		t.Errorf("soak_device_answers_health = %s, want fail: without heap_free and "+
 			"reset_reason the run has nothing to compare against", got.Status)
+	}
+}
+
+// --- issue #8: the suite's own cases for request signing ---------------------
+//
+// One test per new CI case, each against a fake device with exactly the defect
+// the case is meant to catch.  A case that passes against everything is not a
+// case — that rule is why these exist and why they are not optional.
+
+func TestSuiteCatchesADeviceThatStillTakesTheAPIKey(t *testing.T) {
+	dev := newFakeDevice("k")
+	dev.acceptAPIKey = true // protocol 2's bearer header, still honoured
+	srv := dev.server()
+	defer srv.Close()
+
+	report := RunCases(newCtx(srv.URL, "k", TargetMock), ConformanceCases(), "old_api_key")
+	got := findCase(t, report, "post_with_the_old_api_key_header_is_401")
+	if got.Status != "fail" {
+		t.Errorf("post_with_the_old_api_key_header_is_401 = %s, want fail against a device "+
+			"that still accepts the header the WLAN can read", got.Status)
+	}
+}
+
+func TestSuiteCatchesAReplayableNonce(t *testing.T) {
+	dev := newFakeDevice("k")
+	dev.reusableNonce = true // never spent, so the identical POST works twice
+	srv := dev.server()
+	defer srv.Close()
+
+	report := RunCases(newCtx(srv.URL, "k", TargetMock), ConformanceCases(), "replayed_signed_post")
+	got := findCase(t, report, "replayed_signed_post_is_401")
+	if got.Status != "fail" {
+		t.Errorf("replayed_signed_post_is_401 = %s, want fail against a device that "+
+			"dispenses twice for one captured request", got.Status)
+	}
+}
+
+func TestSuiteCatchesAConstantNonce(t *testing.T) {
+	dev := newFakeDevice("k")
+	dev.constantNonce = true // a "nonce" that is the same every time is a constant
+	srv := dev.server()
+	defer srv.Close()
+
+	report := RunCases(newCtx(srv.URL, "k", TargetMock), ConformanceCases(), "nonce_endpoint")
+	got := findCase(t, report, "nonce_endpoint_hands_out_a_fresh_nonce")
+	if got.Status != "fail" {
+		t.Errorf("nonce_endpoint_hands_out_a_fresh_nonce = %s, want fail against a device "+
+			"handing out one fixed value", got.Status)
+	}
+}
+
+func TestSuiteCatchesASignatureThatTravelsBetweenPaths(t *testing.T) {
+	dev := newFakeDevice("k")
+	dev.unboundSignature = true // method and path left out of the canonical string
+	srv := dev.server()
+	defer srv.Close()
+
+	report := RunCases(newCtx(srv.URL, "k", TargetMock), ConformanceCases(), "covers_method_and_path")
+	got := findCase(t, report, "signature_covers_method_and_path")
+	if got.Status != "fail" {
+		t.Errorf("signature_covers_method_and_path = %s, want fail against a device "+
+			"that signs only the body", got.Status)
+	}
+}
+
+func TestSuiteCatchesANonceSpentByAPoll(t *testing.T) {
+	dev := newFakeDevice("k")
+	dev.spendNonceOnRead = true // every status poll would need its own nonce
+	srv := dev.server()
+	defer srv.Close()
+
+	report := RunCases(newCtx(srv.URL, "k", TargetMock), ConformanceCases(), "spent_nonce_still_polls")
+	got := findCase(t, report, "a_spent_nonce_still_polls")
+	if got.Status != "fail" {
+		t.Errorf("a_spent_nonce_still_polls = %s, want fail against a device that spends "+
+			"the nonce on a read", got.Status)
+	}
+}
+
+func TestSuiteCatchesAnOpenHealthDocument(t *testing.T) {
+	dev := newFakeDevice("k")
+	dev.openHealth = true // SSID, IP, firmware and the billed counts to anyone
+	srv := dev.server()
+	defer srv.Close()
+
+	report := RunCases(newCtx(srv.URL, "k", TargetMock), ConformanceCases(), "health_without_a_signature")
+	got := findCase(t, report, "health_without_a_signature_is_minimal")
+	if got.Status != "fail" {
+		t.Errorf("health_without_a_signature_is_minimal = %s, want fail against a device "+
+			"that hands the whole document to anybody who asks", got.Status)
+	}
+}
+
+func TestSuiteCatchesAHealthThatDoesNotSayWhichDocumentItIs(t *testing.T) {
+	dev := newFakeDevice("k")
+	dev.noAuthenticatedFlag = true
+	srv := dev.server()
+	defer srv.Close()
+
+	report := RunCases(newCtx(srv.URL, "k", TargetMock), ConformanceCases(), "health_with")
+	got := findCase(t, report, "health_with_a_signature_is_whole")
+	if got.Status != "fail" {
+		t.Errorf("health_with_a_signature_is_whole = %s, want fail against a device that "+
+			"never says whether the document is the reduced one", got.Status)
+	}
+}
+
+func TestSuiteCatchesA401WithoutAReason(t *testing.T) {
+	dev := newFakeDevice("k")
+	dev.silentUnauthorized = true // "unauthorized", and nothing a client can act on
+	srv := dev.server()
+	defer srv.Close()
+
+	report := RunCases(newCtx(srv.URL, "k", TargetMock), ConformanceCases(), "post_without_a_signature")
+	got := findCase(t, report, "post_without_a_signature_is_401")
+	if got.Status != "fail" {
+		t.Errorf("post_without_a_signature_is_401 = %s, want fail against a 401 that does "+
+			"not say whether to retry", got.Status)
 	}
 }

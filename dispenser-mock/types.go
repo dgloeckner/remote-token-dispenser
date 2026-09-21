@@ -10,7 +10,12 @@ import "time"
 // does.  That is the only way to exercise a terminal's handshake against a
 // device speaking the old version: there are none left in the field, and a
 // client that quietly adapts to one is the bug the handshake exists to catch.
-const ProtocolVersion = 2
+//
+// 3 since issue #8, and that is a BREAKING bump stated as one: `X-API-Key` is
+// gone and every protected request must carry X-Nonce / X-Signature, so a
+// protocol-2 client cannot talk to this device at all.  A handshake left at 2
+// would promise an interoperability that does not exist.
+const ProtocolVersion = 3
 
 // Fault values, the device-level condition of issue #6.
 const (
@@ -35,6 +40,11 @@ const (
 type HealthResponse struct {
 	Protocol int    `json:"protocol"`
 	State    string `json:"state"`
+	// Authenticated says which of the two documents this is (issue #8).
+	// Stated rather than inferred: a client that forgot to sign must be able
+	// to tell a reduced document from an old firmware that never had the
+	// fields.
+	Authenticated bool `json:"authenticated"`
 	// Fault is the device-level condition: none | jam | hopper_error.  It
 	// outlives the transaction it broke and is cleared by a reboot only.
 	Fault string `json:"fault"`
@@ -53,6 +63,29 @@ type HealthResponse struct {
 	WiFi         *WiFiInfo     `json:"wifi,omitempty"`
 	Metrics      Metrics       `json:"metrics"`
 	ErrorHistory []ErrorRecord `json:"error_history"`
+}
+
+// MinimalHealthResponse is what GET /health answers WITHOUT a signature
+// (issue #8): is the machine there, can it sell (`state != "fault"`), does it
+// need a human (`fault != "none"`) — and the protocol version, because the
+// handshake has to be possible before a client can sign anything at all.
+//
+// Everything else needs the key.  `fault_code` is a diagnosis where `fault` is
+// already the verdict; `uptime`/`reset_reason`/`heap_free` are a reboot oracle
+// together; `firmware` is version fingerprinting; `wifi` leaks SSID and IP;
+// `metrics` carries the lifetime `dispensed_tokens` the backend bills against
+// (dgloeckner/clubbar#952); `error_history` is timestamped diagnosis.
+type MinimalHealthResponse struct {
+	Protocol      int    `json:"protocol"`
+	State         string `json:"state"`
+	Fault         string `json:"fault"`
+	Authenticated bool   `json:"authenticated"`
+}
+
+// NonceResponse is GET /nonce.
+type NonceResponse struct {
+	Nonce string `json:"nonce"`
+	TTL   int    `json:"ttl"`
 }
 
 // DebugResponse matches GET /debug: the raw pin levels, which left /health in
@@ -149,7 +182,12 @@ type DispenseResponse struct {
 // the terminal can tell "clear the jam" from "the hopper reports a motor
 // fault" — and never how to clear it, because there is no way but the plug.
 type ErrorResponse struct {
-	Error       string `json:"error"`
+	Error string `json:"error"`
+	// Reason narrows a 401 (issue #8): "nonce" means fetch a fresh one from
+	// GET /nonce and retry ONCE — safe, because every mutating request is
+	// idempotent by tx_id.  "signature" means the request is wrong and a
+	// retry changes nothing.
+	Reason      string `json:"reason,omitempty"`
 	ActiveTxID  string `json:"active_tx_id,omitempty"`
 	ActiveState string `json:"active_state,omitempty"`
 	Fault       string `json:"fault,omitempty"`

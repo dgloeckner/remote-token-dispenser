@@ -8,8 +8,12 @@ import (
 )
 
 var (
-	bind          = flag.String("bind", ":8080", "Network address to bind to")
-	apiKey        = flag.String("api-key", "dev", "Required API key for authentication")
+	bind = flag.String("bind", ":8080", "Network address to bind to")
+	// The shared signing secret (issue #8).  It never travels: requests carry
+	// HMAC-SHA256 over METHOD \n PATH \n BODY \n NONCE in X-Signature.  There
+	// is deliberately NO --api-key any more, not even as an alias — no device
+	// is deployed, so a shim would only keep the old habit alive.
+	signingKey    = flag.String("signing-key", "dev", "Shared signing secret (never transmitted)")
 	listScenarios = flag.Bool("list-scenarios", false, "Print scenario mapping table and exit")
 	// The protocol version the mock CLAIMS in GET /health.  Nothing else
 	// changes with it: the point is a device a conforming client must refuse
@@ -28,7 +32,7 @@ func main() {
 	}
 
 	// Create mock dispenser
-	mock := NewMockDispenserWithProtocol(*apiKey, *protocol)
+	mock := NewMockDispenserWithProtocol(*signingKey, *protocol)
 
 	// Setup routes
 	mux := http.NewServeMux()
@@ -36,7 +40,7 @@ func main() {
 
 	// Start server
 	log.Printf("Mock dispenser listening on %s", *bind)
-	log.Printf("API Key: %s", *apiKey)
+	log.Printf("Signing key: %s (never transmitted; requests carry X-Nonce + X-Signature)", *signingKey)
 	if *protocol != ProtocolVersion {
 		log.Printf("Reporting protocol %d (this build speaks %d): every conforming "+
 			"client must refuse this device", *protocol, ProtocolVersion)
@@ -77,9 +81,16 @@ func printScenarios() {
 	fmt.Println("SPECIAL:")
 	fmt.Println("  15      Slow dispense (500ms/token)")
 	fmt.Println()
-	fmt.Println("Example: curl -X POST http://localhost:8080/dispense \\")
-	fmt.Println("  -H \"X-API-Key: dev\" \\")
-	fmt.Println("  -H \"Content-Type: application/json\" \\")
-	fmt.Println("  -d '{\"tx_id\":\"test1\",\"quantity\":4}'")
+	fmt.Println("Every request but GET /nonce and an unsigned GET /health is signed:")
+	fmt.Println("  NONCE=$(curl -s http://localhost:8080/nonce | sed -n 's/.*\"nonce\":\"\\([0-9a-f]*\\)\".*/\\1/p')")
+	fmt.Println("  BODY='{\"tx_id\":\"test1\",\"quantity\":4}'")
+	// The format string is built rather than written out: `go vet` reads a %s
+	// inside a Println as a mistake, and here it is shell, not Go.
+	canonical := "%" + "s\\n%" + "s\\n%" + "s\\n%" + "s"
+	fmt.Println("  SIG=$(printf '" + canonical + "' POST /dispense \"$BODY\" \"$NONCE\" \\")
+	fmt.Println("        | openssl dgst -sha256 -hmac dev -r | cut -d' ' -f1)")
+	fmt.Println("  curl -X POST http://localhost:8080/dispense \\")
+	fmt.Println("    -H \"X-Nonce: $NONCE\" -H \"X-Signature: $SIG\" \\")
+	fmt.Println("    -H \"Content-Type: application/json\" -d \"$BODY\"")
 	fmt.Println()
 }

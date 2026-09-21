@@ -11,14 +11,22 @@
 
 HttpServer::HttpServer(DispenseManager& manager, HopperControl& hopper,
                        WifiSupervisor& wifi)
-  : dispenseManager(manager), hopperControl(hopper), wifiSupervisor(wifi), server(80) {
+  : dispenseManager(manager), hopperControl(hopper), wifiSupervisor(wifi),
+    server(80), signer(SIGNING_KEY) {
 }
 
 void HttpServer::begin() {
-  // GET /health - NO AUTH
-  server.on("/health", HTTP_GET, [this](AsyncWebServerRequest *request) {
-    this->handleHealth(request);
+  // GET /nonce - NO AUTH, and it cannot have any: it is the first call of
+  // every signed exchange (issue #8).  What it hands out is 128 random bits
+  // with a 30 s life, which is worth nothing to whoever does not hold the key.
+  server.on("/nonce", HTTP_GET, [this](AsyncWebServerRequest *request) {
+    this->handleNonce(request);
   });
+
+  // GET /health - answers unsigned with the three fields a liveness probe
+  // needs, and the full document to a signed request (issue #8).  Not 401
+  // when unsigned: this is the one call a monitor makes to tell "the machine
+  // is there" from "the machine is gone", and a 401 answers neither.
 
   // POST /dispense - REQUIRES AUTH
   //
@@ -56,13 +64,71 @@ void HttpServer::begin() {
   LOG_INFO("HTTP server started on port 80");
 }
 
-bool HttpServer::checkAuth(AsyncWebServerRequest *request) {
-  if (!request->hasHeader("X-API-Key")) {
-    return false;
+String HttpServer::signedPath(AsyncWebServerRequest *request) {
+  // The async server hands the query string back in url() on some builds, and
+  // the signature is defined over the path alone (dispenser-protocol.md), so
+  // it is cut off here rather than trusted to be absent.
+  String path = request->url();
+  int q = path.indexOf('?');
+  if (q != -1) {
+    path = path.substring(0, q);
+  }
+  return path;
+}
+
+bool HttpServer::requireSignature(AsyncWebServerRequest *request, bool mutating,
+                                  const char *body, size_t bodyLen) {
+  const char *nonce = NULL;
+  const char *signature = NULL;
+  String nonceValue;
+  String signatureValue;
+
+  if (request->hasHeader("X-Nonce")) {
+    nonceValue = request->header("X-Nonce");
+    nonce = nonceValue.c_str();
+  }
+  if (request->hasHeader("X-Signature")) {
+    signatureValue = request->header("X-Signature");
+    signature = signatureValue.c_str();
   }
 
-  String apiKey = request->header("X-API-Key");
-  return apiKey.equals(API_KEY);
+  String path = signedPath(request);
+  const char *method = mutating ? "POST" : "GET";
+
+  AuthResult result = signer.verify(millis(), method, path.c_str(),
+                                    body == NULL ? "" : body, bodyLen,
+                                    nonce, signature, mutating);
+  if (result == AUTH_OK) {
+    return true;
+  }
+
+  // The reason is the whole of the client contract on a 401: "nonce" means
+  // GET /nonce and retry ONCE (safe, because every mutating request is
+  // idempotent by tx_id); "signature" means the request is wrong and a retry
+  // changes nothing.  Without the distinction a terminal either loops on a
+  // misconfigured key or gives up on an expired nonce.
+  const char *reason = (result == AUTH_BAD_NONCE) ? "nonce" : "signature";
+  String payload = String("{\"error\":\"unauthorized\",\"reason\":\"") + reason + "\"}";
+  request->send(401, "application/json", payload);
+  return false;
+}
+
+void HttpServer::handleNonce(AsyncWebServerRequest *request) {
+  char nonce[NONCE_HEX_LEN + 1];
+  // RANDOM_REG32 is the ESP8266's hardware RNG (esp8266_peri.h, part of the
+  // pinned framework).  Four reads, 128 bits.  How good that entropy really
+  // is on a given board is a HARDWARE claim: nothing in the native test suite
+  // can see this register, and the tests feed the signer a counter instead.
+  signer.issueNonce(millis(), RANDOM_REG32, RANDOM_REG32, RANDOM_REG32,
+                    RANDOM_REG32, nonce);
+
+  JsonDocument doc;
+  doc["nonce"] = nonce;
+  doc["ttl"] = (uint32_t)(NONCE_TTL_MS / 1000);
+
+  String response;
+  serializeJson(doc, response);
+  request->send(200, "application/json", response);
 }
 
 const char* HttpServer::stateToString(TransactionState state) {
@@ -78,7 +144,61 @@ const char* HttpServer::stateToString(TransactionState state) {
 void HttpServer::handleHealth(AsyncWebServerRequest *request) {
   JsonDocument doc;
 
+  // A GET signs over an empty body.  No 401 is sent from here: an unsigned
+  // /health is a legitimate call, it just gets less.
+  String path = signedPath(request);
+  const char *nonce = NULL;
+  const char *signature = NULL;
+  String nonceValue, signatureValue;
+  if (request->hasHeader("X-Nonce")) {
+    nonceValue = request->header("X-Nonce");
+    nonce = nonceValue.c_str();
+  }
+  if (request->hasHeader("X-Signature")) {
+    signatureValue = request->header("X-Signature");
+    signature = signatureValue.c_str();
+  }
+  bool authenticated = signer.verify(millis(), "GET", path.c_str(), "", 0,
+                                     nonce, signature, false) == AUTH_OK;
+
+  // THE UNAUTHENTICATED DOCUMENT — these three fields and no more.
+  //
+  // They are what a caller needs to decide the only two questions that do not
+  // require the key: can this machine sell (`state != "fault"`), and does it
+  // need a human (`fault != "none"`)?  `protocol` is in there because the
+  // handshake has to happen BEFORE a client can sign anything at all — a
+  // device speaking another protocol must be refusable without credentials.
+  // None of the three tells a listener anything he could not learn by walking
+  // up to the machine and looking at it.
   doc["protocol"] = PROTOCOL_VERSION;
+  doc["state"] = deviceStateToString(dispenseManager.getDeviceState());
+  doc["fault"] = faultToString(dispenseManager.getFault());
+  // Stated, never inferred.  Otherwise a client that forgot to sign cannot
+  // tell a reduced document from an old firmware that never had the fields.
+  doc["authenticated"] = authenticated;
+
+  if (!authenticated) {
+    String minimal;
+    serializeJson(doc, minimal);
+    request->send(200, "application/json", minimal);
+    return;
+  }
+
+  // Everything below needs the key, and each field is on this side for a
+  // reason, not by default:
+  //
+  // - `fault_code` is the Azkoyen code behind a hopper_error.  The word above
+  //   already answers "needs a human"; the number is a diagnosis.
+  // - `uptime`, `reset_reason` and `heap_free` are a reboot oracle together:
+  //   they let an observer watch a power cycle land and confirm that whatever
+  //   he is doing to the device is working.
+  // - `firmware` is version fingerprinting — the first thing anyone picking an
+  //   exploit wants.
+  // - `wifi{rssi, ip, ssid, reconnects}` is the leak the issue names outright.
+  // - `metrics` carries lifetime `dispensed_tokens`, which is the figure the
+  //   backend bills against (dgloeckner/clubbar#952): commercial data.
+  // - `error_history` is diagnosis with timestamps.
+  doc["fault_code"] = dispenseManager.getFaultCode();
   // ONE state and ONE fault (issue #6).  The old document carried `status`
   // (ok | degraded | error) next to `dispenser` (idle | dispensing | error),
   // the terminal ORed the two together, and nothing decided which of them won
@@ -157,8 +277,7 @@ void HttpServer::handleHealth(AsyncWebServerRequest *request) {
 }
 
 void HttpServer::handleDebug(AsyncWebServerRequest *request) {
-  if (!checkAuth(request)) {
-    request->send(401, "application/json", "{\"error\":\"unauthorized\"}");
+  if (!requireSignature(request, false, "", 0)) {
     return;
   }
 
@@ -219,8 +338,30 @@ void HttpServer::handleDispensePost(AsyncWebServerRequest *request) {
   // Everything below runs in the async TCP callback, so it must stay cheap:
   // parse, decide, answer.  The flash commit and the motor start happen in
   // loop(), where DispenseManager picks the request slot up (issue #4).
-  if (!checkAuth(request)) {
-    request->send(401, "application/json", "{\"error\":\"unauthorized\"}");
+  RequestBody* body = (RequestBody*)request->_tempObject;
+
+  // The framing comes FIRST, ahead of the signature, and only for the two
+  // cases where there is nothing to verify: the signature is computed over the
+  // body bytes, and these are the requests whose body the device deliberately
+  // did not keep (issue #8).  Neither answer tells an unauthenticated caller
+  // anything or moves a motor.
+  if (body != NULL && body->status() == BODY_TOO_LARGE) {
+    request->send(413, "application/json", "{\"error\":\"body too large\"}");
+    return;
+  }
+  if (body != NULL && !body->isEmpty() && body->status() != BODY_COMPLETE) {
+    // A stream with a gap, or one that stopped short of its announced length.
+    request->send(400, "application/json", "{\"error\":\"incomplete body\"}");
+    return;
+  }
+
+  // The signature covers the body, so it can only be checked once the body is
+  // in — which is exactly where this handler runs (issue #4).  A POST with no
+  // body signs over the empty string; it still has to be signed, and it still
+  // ends in 400 below.
+  if (!requireSignature(request, true,
+                        body == NULL ? "" : body->data(),
+                        body == NULL ? 0 : body->size())) {
     return;
   }
 
@@ -231,23 +372,10 @@ void HttpServer::handleDispensePost(AsyncWebServerRequest *request) {
     return;
   }
 
-  RequestBody* body = (RequestBody*)request->_tempObject;
-
   // No body callback ever ran: the request carried no body at all.  This is
   // the case that used to hang.
   if (body == NULL || body->isEmpty()) {
     request->send(400, "application/json", "{\"error\":\"empty body\"}");
-    return;
-  }
-
-  if (body->status() == BODY_TOO_LARGE) {
-    request->send(413, "application/json", "{\"error\":\"body too large\"}");
-    return;
-  }
-
-  if (body->status() != BODY_COMPLETE) {
-    // A stream with a gap, or one that stopped short of its announced length.
-    request->send(400, "application/json", "{\"error\":\"incomplete body\"}");
     return;
   }
 
@@ -322,9 +450,9 @@ void HttpServer::handleDispensePost(AsyncWebServerRequest *request) {
 }
 
 void HttpServer::handleDispenseGet(AsyncWebServerRequest *request) {
-  // Check authentication
-  if (!checkAuth(request)) {
-    request->send(401, "application/json", "{\"error\":\"unauthorized\"}");
+  // A status poll is read-only, so it does not spend its nonce: the same one
+  // serves every poll of a transaction until it expires (issue #8).
+  if (!requireSignature(request, false, "", 0)) {
     return;
   }
 

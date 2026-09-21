@@ -25,15 +25,47 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	}
 }
 
-// requireAPIKey validates the X-API-Key header and writes a 401 if invalid.
-// Returns true if the key is valid.
-func (m *MockDispenser) requireAPIKey(w http.ResponseWriter, r *http.Request) bool {
-	key := r.Header.Get("X-API-Key")
-	if !m.ValidateAPIKey(key) {
-		writeJSON(w, http.StatusUnauthorized, ErrorResponse{Error: "unauthorized"})
-		return false
+// signedPath is what the signature covers: the path with no query string
+// (dispenser-protocol.md).
+func signedPath(r *http.Request) string {
+	return r.URL.Path
+}
+
+// checkSignature verifies X-Nonce / X-Signature over this request.  `body` is
+// the exact bytes the caller sent — the handler has to have read them first,
+// which is why the signature check on POST /dispense sits after the read.
+//
+// There is no X-API-Key path here.  A request carrying that header is an
+// unsigned request and gets the same 401 as any other.
+func (m *MockDispenser) checkSignature(r *http.Request, body string, mutating bool) AuthResult {
+	return m.nonces.Verify(r.Method, signedPath(r), body,
+		r.Header.Get("X-Nonce"), r.Header.Get("X-Signature"), mutating)
+}
+
+// requireSignature answers the 401 itself, with the `reason` the client acts
+// on.  Returns true when the request may proceed.
+func (m *MockDispenser) requireSignature(w http.ResponseWriter, r *http.Request, body string, mutating bool) bool {
+	result := m.checkSignature(r, body, mutating)
+	if result == ResultOK {
+		return true
 	}
-	return true
+	writeJSON(w, http.StatusUnauthorized,
+		ErrorResponse{Error: "unauthorized", Reason: result.reason()})
+	return false
+}
+
+// handleNonce handles GET /nonce (no auth, and there cannot be any: a client
+// holds nothing to sign with until it has one).  What it hands out is 128
+// random bits with a 30 s life — worth nothing without the key.
+func (m *MockDispenser) handleNonce(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, ErrorResponse{Error: "method not allowed"})
+		return
+	}
+	writeJSON(w, http.StatusOK, NonceResponse{
+		Nonce: m.nonces.Issue(),
+		TTL:   int(NonceTTL / time.Second),
+	})
 }
 
 // handleHealth handles GET /health (no auth required)
@@ -47,13 +79,27 @@ func (m *MockDispenser) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 	fault, faultCode := m.GetFault()
 
+	// TWO documents off one URL (issue #8).  Unsigned is a liveness probe and
+	// answers 200, not 401: a monitor asking "is the machine there" must be
+	// able to tell that from "the machine is gone", and a 401 answers neither.
+	if m.checkSignature(r, "", false) != ResultOK {
+		writeJSON(w, http.StatusOK, MinimalHealthResponse{
+			Protocol:      m.protocol,
+			State:         m.GetState(),
+			Fault:         fault,
+			Authenticated: false,
+		})
+		return
+	}
+
 	resp := HealthResponse{
-		Protocol:  m.protocol,
-		State:     m.GetState(),
-		Fault:     fault,
-		FaultCode: faultCode,
-		Uptime:    m.Uptime(),
-		Firmware:  "mock-v1.0.0",
+		Protocol:      m.protocol,
+		State:         m.GetState(),
+		Authenticated: true,
+		Fault:         fault,
+		FaultCode:     faultCode,
+		Uptime:        m.Uptime(),
+		Firmware:      "mock-v1.0.0",
 		// A plausible ESP8266 heap and the reset reason of a device that was
 		// simply switched on.  Constant, because nothing here can leak or
 		// crash — a soak run against the mock proves the RUNNER, and the
@@ -81,7 +127,7 @@ func (m *MockDispenser) handleDebug(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, ErrorResponse{Error: "method not allowed"})
 		return
 	}
-	if !m.requireAPIKey(w, r) {
+	if !m.requireSignature(w, r, "", false) {
 		return
 	}
 	writeJSON(w, http.StatusOK, DebugResponse{})
@@ -91,16 +137,6 @@ func (m *MockDispenser) handleDebug(w http.ResponseWriter, r *http.Request) {
 func (m *MockDispenser) handleDispense(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, ErrorResponse{Error: "method not allowed"})
-		return
-	}
-
-	if !m.requireAPIKey(w, r) {
-		return
-	}
-
-	contentType := r.Header.Get("Content-Type")
-	if !strings.HasPrefix(contentType, "application/json") {
-		writeJSON(w, http.StatusUnsupportedMediaType, ErrorResponse{Error: "content-type must be application/json"})
 		return
 	}
 
@@ -116,6 +152,23 @@ func (m *MockDispenser) handleDispense(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusRequestEntityTooLarge, ErrorResponse{Error: "body too large"})
 		return
 	}
+	// The signature covers the body, so it can only be checked once the body
+	// has been read — and after the two framing answers above, which are the
+	// cases where there are no bytes to verify.  `true`: a POST SPENDS its
+	// nonce, so the identical request replayed is 401 reason=nonce.
+	if !m.requireSignature(w, r, string(raw), true) {
+		return
+	}
+
+	// Content type AFTER the signature, in that order in both implementations:
+	// a device must not tell an unauthenticated caller which of its headers it
+	// dislikes.
+	contentType := r.Header.Get("Content-Type")
+	if !strings.HasPrefix(contentType, "application/json") {
+		writeJSON(w, http.StatusUnsupportedMediaType, ErrorResponse{Error: "content-type must be application/json"})
+		return
+	}
+
 	if len(raw) == 0 {
 		writeJSON(w, http.StatusBadRequest, ErrorResponse{Error: "empty body"})
 		return
@@ -266,7 +319,9 @@ func (m *MockDispenser) handleDispenseStatus(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	if !m.requireAPIKey(w, r) {
+	// A status poll is read-only, so it does not spend its nonce: the same
+	// one serves every poll of a transaction until it expires.
+	if !m.requireSignature(w, r, "", false) {
 		return
 	}
 
@@ -295,6 +350,7 @@ func (m *MockDispenser) handleDispenseStatus(w http.ResponseWriter, r *http.Requ
 // 404 for it, which is what the conformance suite asserts.
 func (m *MockDispenser) RegisterHandlers(mux *http.ServeMux) {
 	mux.HandleFunc("/health", m.handleHealth)
+	mux.HandleFunc("/nonce", m.handleNonce)
 	mux.HandleFunc("/debug", m.handleDebug)
 	mux.HandleFunc("/dispense", m.handleDispense)
 	mux.HandleFunc("/dispense/", m.handleDispenseStatus)

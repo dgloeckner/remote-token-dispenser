@@ -89,7 +89,7 @@ var (
 			Width(5)
 
 	logPath = lipgloss.NewStyle().
-			Foreground(colorText)
+		Foreground(colorText)
 
 	logStatus200 = lipgloss.NewStyle().
 			Foreground(colorSuccess).
@@ -153,7 +153,7 @@ var (
 // GPIO debug panel style
 var (
 	debugPanelStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(colorSecondary).
-			Padding(0, 1)
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(colorSecondary).
+		Padding(0, 1)
 )

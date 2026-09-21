@@ -12,7 +12,11 @@ import (
 // ProtocolVersion is the only protocol version this client speaks.
 // The handshake is deliberately strict: there are no devices in the field, so
 // a mismatch is a bug to fix, never something to adapt to at runtime.
-const ProtocolVersion = 2
+//
+// 3 since issue #8: `X-API-Key` is gone and every protected request must
+// carry X-Nonce / X-Signature, so a protocol-2 device and this client cannot
+// talk at all.  A breaking change, stated as one.
+const ProtocolVersion = 3
 
 // HealthResponse matches GET /health from the dispenser protocol.
 //
@@ -29,9 +33,15 @@ type HealthResponse struct {
 	// FaultCode is the Azkoyen code behind a hopper_error, 0 otherwise.  A
 	// POINTER, like CountReliable and OverrunTokens: a device that does not
 	// send the field must stay distinguishable from one that sends 0.
-	FaultCode *int   `json:"fault_code"`
-	Uptime    int    `json:"uptime"`
-	Firmware  string `json:"firmware"`
+	FaultCode *int `json:"fault_code"`
+	// Authenticated says WHICH /health document this is (issue #8).  Unsigned,
+	// the device answers three fields and sets this false; signed, it answers
+	// the whole thing.  A POINTER, like everything else here that can be
+	// absent: a device that does not send the field is not a device that
+	// answered "false".
+	Authenticated *bool  `json:"authenticated"`
+	Uptime        int    `json:"uptime"`
+	Firmware      string `json:"firmware"`
 	// HeapFree is the free heap in bytes (issue #7).  A POINTER: a device
 	// that does not report it must stay distinguishable from one reporting 0,
 	// which would read as "out of memory" on every panel that shows it.
@@ -139,20 +149,28 @@ type DispenseResponse struct {
 // blocking transaction, `tx_id reused`, or `fault` with the fault and its
 // Azkoyen code (issue #6).
 type ErrorResponse struct {
-	Error      string `json:"error"`
+	Error string `json:"error"`
+	// Reason narrows a 401 (issue #8): "nonce" means fetch a fresh one from
+	// GET /nonce and retry ONCE, "signature" means stop.
+	Reason     string `json:"reason,omitempty"`
 	ActiveTxID string `json:"active_tx_id,omitempty"`
 	Fault      string `json:"fault,omitempty"`
 	FaultCode  int    `json:"fault_code,omitempty"`
 }
 
-// DispenserClient wraps HTTP calls to the ESP8266
+// DispenserClient wraps HTTP calls to the ESP8266.
+//
+// SigningKey never leaves this process since issue #8: requests carry
+// HMAC-SHA256 over the canonical string, never the key.  There is no APIKey
+// field any more and no header that would carry one.
 type DispenserClient struct {
 	BaseURL    string
-	APIKey     string
+	SigningKey string
 	HTTPClient *http.Client
+	nonces     nonceCache
 }
 
-func NewDispenserClient(baseURL, apiKey string, timeout time.Duration) *DispenserClient {
+func NewDispenserClient(baseURL, signingKey string, timeout time.Duration) *DispenserClient {
 	// Normalize base URL
 	baseURL = strings.TrimRight(baseURL, "/")
 	if !strings.HasPrefix(baseURL, "http") {
@@ -160,8 +178,8 @@ func NewDispenserClient(baseURL, apiKey string, timeout time.Duration) *Dispense
 	}
 
 	return &DispenserClient{
-		BaseURL: baseURL,
-		APIKey:  apiKey,
+		BaseURL:    baseURL,
+		SigningKey: signingKey,
 		HTTPClient: &http.Client{
 			Timeout: timeout,
 		},
@@ -174,26 +192,21 @@ type APIResult struct {
 	Error      error
 }
 
-// Health fetches GET /health (no auth required)
+// Health fetches GET /health, SIGNED.
+//
+// Unsigned it would answer 200 with three fields — protocol, state, fault —
+// and this dashboard would show an empty WiFi block and no metrics without
+// saying why (issue #8).  The terminal signs its health polls like everything
+// else; HealthUnsigned() below is for the one caller that wants the other
+// document on purpose.
 func (c *DispenserClient) Health() (*HealthResponse, APIResult) {
 	start := time.Now()
 
-	req, err := http.NewRequest("GET", c.BaseURL+"/health", nil)
+	resp, body, err := c.doSigned("GET", "/health", "", false, nil)
 	if err != nil {
 		return nil, APIResult{Error: err, Latency: time.Since(start)}
 	}
-
-	resp, err := c.HTTPClient.Do(req)
-	if err != nil {
-		return nil, APIResult{Error: err, Latency: time.Since(start)}
-	}
-	defer resp.Body.Close()
-
 	latency := time.Since(start)
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, APIResult{StatusCode: resp.StatusCode, Error: err, Latency: latency}
-	}
 
 	if resp.StatusCode != 200 {
 		return nil, APIResult{
@@ -215,27 +228,29 @@ func (c *DispenserClient) Health() (*HealthResponse, APIResult) {
 	return &health, APIResult{StatusCode: 200, Latency: latency}
 }
 
+// HealthUnsigned fetches GET /health WITHOUT a signature and returns the raw
+// body: the minimal document of issue #8.  It exists so the conformance suite
+// can assert what an unauthenticated caller is allowed to see — that is the
+// only legitimate reason to ask for it.
+func (c *DispenserClient) HealthUnsigned() (int, []byte, error) {
+	resp, err := c.HTTPClient.Get(c.BaseURL + "/health")
+	if err != nil {
+		return 0, nil, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	return resp.StatusCode, body, err
+}
+
 // Debug fetches GET /debug (auth required): the raw pin levels for the bench.
 func (c *DispenserClient) Debug() (*DebugResponse, APIResult) {
 	start := time.Now()
 
-	req, err := http.NewRequest("GET", c.BaseURL+"/debug", nil)
+	resp, body, err := c.doSigned("GET", "/debug", "", false, nil)
 	if err != nil {
 		return nil, APIResult{Error: err, Latency: time.Since(start)}
 	}
-	req.Header.Set("X-API-Key", c.APIKey)
-
-	resp, err := c.HTTPClient.Do(req)
-	if err != nil {
-		return nil, APIResult{Error: err, Latency: time.Since(start)}
-	}
-	defer resp.Body.Close()
-
 	latency := time.Since(start)
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, APIResult{StatusCode: resp.StatusCode, Error: err, Latency: latency}
-	}
 	if resp.StatusCode != 200 {
 		return nil, APIResult{
 			StatusCode: resp.StatusCode,
@@ -256,24 +271,16 @@ func (c *DispenserClient) Dispense(txID string, quantity int) (*DispenseResponse
 	start := time.Now()
 
 	payload, _ := json.Marshal(DispenseRequest{TxID: txID, Quantity: quantity})
-	req, err := http.NewRequest("POST", c.BaseURL+"/dispense", strings.NewReader(string(payload)))
+	// MUTATING: the device spends the nonce on this one, so a replay of these
+	// exact bytes is refused.  A 401 that names the nonce is retried once with
+	// a fresh one inside doSigned() — safe, because the request is idempotent
+	// by tx_id.
+	resp, body, err := c.doSigned("POST", "/dispense", string(payload), true,
+		map[string]string{"Content-Type": "application/json"})
 	if err != nil {
 		return nil, APIResult{Error: err, Latency: time.Since(start)}
 	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-API-Key", c.APIKey)
-
-	resp, err := c.HTTPClient.Do(req)
-	if err != nil {
-		return nil, APIResult{Error: err, Latency: time.Since(start)}
-	}
-	defer resp.Body.Close()
-
 	latency := time.Since(start)
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, APIResult{StatusCode: resp.StatusCode, Error: err, Latency: latency}
-	}
 
 	result := APIResult{StatusCode: resp.StatusCode, Latency: latency}
 
@@ -301,6 +308,17 @@ func (c *DispenserClient) Dispense(txID string, quantity int) (*DispenseResponse
 	}
 
 	if resp.StatusCode == 401 {
+		// Say WHICH 401 it is.  "nonce" here means the retry inside doSigned()
+		// was used up too — a clock or a pool problem, not a wrong key — and
+		// "signature" means the key is wrong.  One message for both used to
+		// send people looking in the wrong place.
+		var errResp ErrorResponse
+		_ = json.Unmarshal(body, &errResp)
+		if errResp.Reason != "" {
+			return nil, APIResult{StatusCode: 401,
+				Error:   fmt.Errorf("unauthorized (%s)", errResp.Reason),
+				Latency: latency}
+		}
 		return nil, APIResult{StatusCode: 401, Error: fmt.Errorf("unauthorized"), Latency: latency}
 	}
 
@@ -324,23 +342,14 @@ func (c *DispenserClient) Dispense(txID string, quantity int) (*DispenseResponse
 func (c *DispenserClient) Status(txID string) (*DispenseResponse, APIResult) {
 	start := time.Now()
 
-	req, err := http.NewRequest("GET", c.BaseURL+"/dispense/"+txID, nil)
+	// Read-only, so it does NOT spend the nonce: the same one serves every
+	// poll of a transaction until it expires, which is why one GET /nonce per
+	// dispense is enough.
+	resp, body, err := c.doSigned("GET", "/dispense/"+txID, "", false, nil)
 	if err != nil {
 		return nil, APIResult{Error: err, Latency: time.Since(start)}
 	}
-	req.Header.Set("X-API-Key", c.APIKey)
-
-	resp, err := c.HTTPClient.Do(req)
-	if err != nil {
-		return nil, APIResult{Error: err, Latency: time.Since(start)}
-	}
-	defer resp.Body.Close()
-
 	latency := time.Since(start)
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, APIResult{StatusCode: resp.StatusCode, Error: err, Latency: latency}
-	}
 
 	result := APIResult{StatusCode: resp.StatusCode, Latency: latency}
 

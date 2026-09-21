@@ -18,7 +18,8 @@ import (
 type fakeDevice struct {
 	mu sync.Mutex
 
-	apiKey string
+	signingKey string
+	nonces     *fakeNoncePool
 	// knobs for the negative tests
 	protocol          int
 	ignoreAuth        bool
@@ -47,6 +48,16 @@ type fakeDevice struct {
 	omitErrorCode      bool // leave error_code/error_type off transactions
 	faultAfterReset    bool // report a recovered crash as a device fault
 	servesReset        bool // offer a way out of a fault that is not a power cycle
+
+	// Issue #8: the signing scheme.
+	acceptAPIKey        bool // take the old X-API-Key header as a credential
+	reusableNonce       bool // never spend a nonce, so a replayed POST works
+	constantNonce       bool // hand out the same "nonce" every time
+	openHealth          bool // serve the FULL health document unsigned
+	unboundSignature    bool // verify only the body, so a signature travels paths
+	silentUnauthorized  bool // answer 401 without saying which reason it was
+	spendNonceOnRead    bool // spend the nonce on GETs too, so a poll needs a new one each time
+	noAuthenticatedFlag bool // never say which of the two health documents this is
 
 	// Issue #7: the operational telemetry, and a device that leaks.
 	omitOpsTelemetry bool // no heap_free, no reset_reason, no wifi.reconnects
@@ -77,14 +88,64 @@ type fakeTx struct {
 // fakeMaxBody mirrors REQUEST_BODY_CAPACITY in the firmware.
 const fakeMaxBody = 256
 
-func newFakeDevice(apiKey string) *fakeDevice {
-	return &fakeDevice{apiKey: apiKey, protocol: ProtocolVersion, fault: "none",
+// fakeNoncePool is the fake device's memory of what it handed out.  A third
+// implementation of the rule (after the firmware's and the mock's) on purpose:
+// a suite whose only counterpart is the thing it judges judges nothing.
+type fakeNoncePool struct {
+	mu       sync.Mutex
+	issued   map[string]bool // nonce -> spent
+	counter  int
+	reusable bool
+	constant bool
+}
+
+func newFakeNoncePool() *fakeNoncePool {
+	return &fakeNoncePool{issued: map[string]bool{}}
+}
+
+func (p *fakeNoncePool) issue() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.constant {
+		p.issued["00000000000000000000000000000000"] = false
+		return "00000000000000000000000000000000"
+	}
+	p.counter++
+	n := fmt.Sprintf("%032x", p.counter)
+	p.issued[n] = false
+	return n
+}
+
+// check returns "" when the nonce is usable, or the 401 reason.
+func (p *fakeNoncePool) check(nonce string, mutating bool) string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	spent, ok := p.issued[nonce]
+	if !ok {
+		return "nonce"
+	}
+	if mutating && spent && !p.reusable {
+		return "nonce"
+	}
+	if mutating {
+		p.issued[nonce] = true
+	}
+	return ""
+}
+
+func newFakeDevice(signingKey string) *fakeDevice {
+	return &fakeDevice{signingKey: signingKey, protocol: ProtocolVersion, fault: "none",
 		heapFree: 30000, uptime: 42, resetReason: "Power on",
-		history: map[string]*fakeTx{}}
+		nonces: newFakeNoncePool(), history: map[string]*fakeTx{}}
 }
 
 func (f *fakeDevice) server() *httptest.Server {
+	f.nonces.reusable = f.reusableNonce
+	f.nonces.constant = f.constantNonce
 	mux := http.NewServeMux()
+	mux.HandleFunc("/nonce", func(w http.ResponseWriter, r *http.Request) {
+		f.writeJSON(w, 200, map[string]any{"nonce": f.nonces.issue(), "ttl": 30})
+	})
 	mux.HandleFunc("/health", f.health)
 	mux.HandleFunc("/dispense", f.dispense)
 	mux.HandleFunc("/dispense/", f.status)
@@ -106,8 +167,47 @@ func (f *fakeDevice) writeJSON(w http.ResponseWriter, code int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
+// verify is the fake device's half of issue #8.  Returns "" when the request
+// is authentic, otherwise the 401 reason the client acts on.
+func (f *fakeDevice) verify(r *http.Request, body string, mutating bool) string {
+	if f.ignoreAuth {
+		return ""
+	}
+	// The knob that says "this device still takes the old bearer key".  The
+	// header is gone from the protocol, so a device honouring it is a device
+	// an attacker can still own with one sniffed packet.
+	if f.acceptAPIKey && r.Header.Get("X-API-Key") == f.signingKey {
+		return ""
+	}
+	nonce := r.Header.Get("X-Nonce")
+	sig := r.Header.Get("X-Signature")
+	if nonce == "" || sig == "" {
+		return "signature"
+	}
+	path := r.URL.Path
+	method := r.Method
+	if f.unboundSignature {
+		// A device that leaves method and path out of the canonical string:
+		// a status poll's signature then opens /debug.
+		method, path = "", ""
+	}
+	if SignRequest(f.signingKey, method, path, body, nonce) != sig {
+		return "signature"
+	}
+	return f.nonces.check(nonce, mutating || f.spendNonceOnRead)
+}
+
+// refuse answers the 401 the way the protocol requires — with the reason.
+func (f *fakeDevice) refuse(w http.ResponseWriter, reason string) {
+	body := map[string]string{"error": "unauthorized"}
+	if !f.silentUnauthorized {
+		body["reason"] = reason
+	}
+	f.writeJSON(w, 401, body)
+}
+
 func (f *fakeDevice) authed(r *http.Request) bool {
-	return f.ignoreAuth || r.Header.Get("X-API-Key") == f.apiKey
+	return f.verify(r, "", false) == ""
 }
 
 func (f *fakeDevice) health(w http.ResponseWriter, r *http.Request) {
@@ -160,12 +260,39 @@ func (f *fakeDevice) health(w http.ResponseWriter, r *http.Request) {
 			"hopper_low": map[string]any{"raw": 1, "active": false},
 		}
 	}
+
+	// TWO documents off one URL (issue #8).  Unsigned: is it there, can it
+	// sell, does it need a human.  `openHealth` is the device that hands the
+	// whole thing — SSID, IP, firmware version, billed token counts — to
+	// anybody who asks.
+	if f.verify(r, "", false) != "" && !f.openHealth {
+		minimal := map[string]any{
+			"protocol":      body["protocol"],
+			"state":         body["state"],
+			"fault":         body["fault"],
+			"authenticated": false,
+		}
+		if f.legacyHealthShape {
+			delete(minimal, "state")
+			delete(minimal, "fault")
+			minimal["status"] = "ok"
+			minimal["dispenser"] = state
+		}
+		if f.noAuthenticatedFlag {
+			delete(minimal, "authenticated")
+		}
+		f.writeJSON(w, 200, minimal)
+		return
+	}
+	if !f.noAuthenticatedFlag {
+		body["authenticated"] = true
+	}
 	f.writeJSON(w, 200, body)
 }
 
 func (f *fakeDevice) debug(w http.ResponseWriter, r *http.Request) {
-	if !f.authed(r) {
-		f.writeJSON(w, 401, map[string]string{"error": "unauthorized"})
+	if reason := f.verify(r, "", false); reason != "" {
+		f.refuse(w, reason)
 		return
 	}
 	f.writeJSON(w, 200, map[string]any{
@@ -181,17 +308,22 @@ func (f *fakeDevice) dispense(w http.ResponseWriter, r *http.Request) {
 		f.writeJSON(w, 405, map[string]string{"error": "method not allowed"})
 		return
 	}
-	if !f.authed(r) {
-		f.writeJSON(w, 401, map[string]string{"error": "unauthorized"})
+	raw, err := io.ReadAll(r.Body)
+	if err != nil {
+		f.writeJSON(w, 400, map[string]string{"error": "invalid json"})
+		return
+	}
+	if len(raw) > fakeMaxBody && !f.noBodyCap {
+		f.writeJSON(w, 413, map[string]string{"error": "body too large"})
+		return
+	}
+	// The signature covers the body, so it is verified once the body is in.
+	if reason := f.verify(r, string(raw), true); reason != "" {
+		f.refuse(w, reason)
 		return
 	}
 	if !strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") {
 		f.writeJSON(w, 415, map[string]string{"error": "content-type must be application/json"})
-		return
-	}
-	raw, err := io.ReadAll(r.Body)
-	if err != nil {
-		f.writeJSON(w, 400, map[string]string{"error": "invalid json"})
 		return
 	}
 	if len(raw) == 0 {
@@ -199,10 +331,6 @@ func (f *fakeDevice) dispense(w http.ResponseWriter, r *http.Request) {
 		// issue #4: the request handler was an empty lambda.
 		time.Sleep(f.emptyBodyDelay)
 		f.writeJSON(w, 400, map[string]string{"error": "empty body"})
-		return
-	}
-	if len(raw) > fakeMaxBody && !f.noBodyCap {
-		f.writeJSON(w, 413, map[string]string{"error": "body too large"})
 		return
 	}
 	if f.truncateBody > 0 && f.truncateBody < len(raw) {
@@ -385,8 +513,10 @@ func (f *fakeDevice) run(tx *fakeTx) {
 }
 
 func (f *fakeDevice) status(w http.ResponseWriter, r *http.Request) {
-	if !f.authed(r) {
-		f.writeJSON(w, 401, map[string]string{"error": "unauthorized"})
+	// Read-only: it does NOT spend the nonce, so the same one serves every
+	// poll of a transaction.
+	if reason := f.verify(r, "", false); reason != "" {
+		f.refuse(w, reason)
 		return
 	}
 	id := strings.TrimPrefix(r.URL.Path, "/dispense/")

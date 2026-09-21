@@ -11,6 +11,7 @@ package main
 //     and runs last.
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -22,6 +23,8 @@ func ConformanceCases() []Case {
 		// --- health / handshake -------------------------------------------
 		{
 			Name: "health_is_200_without_auth",
+			Note: "still true after issue #8, and deliberately: /health unsigned is the " +
+				"liveness probe, so it answers 200 with three fields rather than 401",
 			Run: func(c *Ctx) error {
 				got, err := c.raw("GET", "/health", "", nil)
 				if err != nil {
@@ -31,7 +34,7 @@ func ConformanceCases() []Case {
 			},
 		},
 		{
-			Name: "health_protocol_is_2",
+			Name: "health_protocol_is_3",
 			Note: "the version handshake from dispenser-protocol.md; a device without it is protocol 1",
 			Run: func(c *Ctx) error {
 				health, res := c.Client.Health()
@@ -88,7 +91,9 @@ func ConformanceCases() []Case {
 				"pin said 'fine' forever; a field that is always fine is worse than no " +
 				"field, and it was removed from the protocol in issue #6",
 			Run: func(c *Ctx) error {
-				got, err := c.raw("GET", "/health", "", nil)
+				// Signed: since #8 the raw pin block, if a device still had
+				// one, would be in the authenticated document.
+				got, err := c.rawSigned("GET", "/health", "", nil)
 				if err != nil {
 					return err
 				}
@@ -136,9 +141,8 @@ func ConformanceCases() []Case {
 			Note: "a fault is cleared by a power cycle and by nothing else (owner " +
 				"decision, 2026-09-20): no reset endpoint, none in the TUI, none on the kiosk",
 			Run: func(c *Ctx) error {
-				got, err := c.raw("POST", "/reset", "",
-					map[string]string{"X-API-Key": c.Client.APIKey,
-						"Content-Type": "application/json"})
+				got, err := c.rawSigned("POST", "/reset", "",
+					map[string]string{"Content-Type": "application/json"})
 				if err != nil {
 					return err
 				}
@@ -150,22 +154,58 @@ func ConformanceCases() []Case {
 			},
 		},
 
-		// --- authentication ------------------------------------------------
+		// --- authentication: request signing (issue #8) ---------------------
+		//
+		// `X-API-Key` is GONE.  Until #8 the shared secret travelled in clear
+		// in every request, so one listener on the WLAN owned the machine and
+		// a captured request replayed with a new tx_id dispensed again.  The
+		// replacement is HMAC-SHA256 over METHOD \n PATH \n BODY \n NONCE with
+		// a single-use nonce from GET /nonce.
 		{
-			Name: "post_without_api_key_is_401",
+			Name: "nonce_endpoint_hands_out_a_fresh_nonce",
+			Note: "issue #8: a client holds nothing it can sign with until it has one, " +
+				"so GET /nonce is unauthenticated by necessity",
+			Run: func(c *Ctx) error {
+				first, err := c.Client.fetchNonce()
+				if err != nil {
+					return err
+				}
+				if len(first) != NonceHexLen {
+					return fmt.Errorf("nonce %q is %d characters, want %d", first, len(first), NonceHexLen)
+				}
+				second, err := c.Client.fetchNonce()
+				if err != nil {
+					return err
+				}
+				if first == second {
+					// A constant "nonce" is a constant, and a replay defence
+					// built on it defends nothing.
+					return fmt.Errorf("two calls to /nonce returned the same value %q", first)
+				}
+				return nil
+			},
+		},
+		{
+			Name: "post_without_a_signature_is_401",
 			Run: func(c *Ctx) error {
 				got, err := c.postJSON(`{"tx_id":"noauth01","quantity":1}`, false)
 				if err != nil {
 					return err
 				}
-				return wantStatus(got, 401)
+				if err := wantStatus(got, 401); err != nil {
+					return err
+				}
+				return wantReason(got, "signature")
 			},
 		},
 		{
-			Name: "post_with_wrong_api_key_is_401",
+			Name: "post_with_the_old_api_key_header_is_401",
+			Note: "the header of protocol 2 is not a credential and not a fallback: " +
+				"a request carrying it is simply unsigned",
 			Run: func(c *Ctx) error {
-				got, err := c.raw("POST", "/dispense", `{"tx_id":"wrongkey","quantity":1}`,
-					map[string]string{"Content-Type": "application/json", "X-API-Key": "definitely-not-the-key"})
+				got, err := c.raw("POST", "/dispense", `{"tx_id":"oldkey01","quantity":1}`,
+					map[string]string{"Content-Type": "application/json",
+						"X-API-Key": c.Client.SigningKey})
 				if err != nil {
 					return err
 				}
@@ -173,13 +213,226 @@ func ConformanceCases() []Case {
 			},
 		},
 		{
-			Name: "get_status_without_api_key_is_401",
+			Name: "post_signed_with_the_wrong_key_is_401",
+			Run: func(c *Ctx) error {
+				nonce, err := c.Client.fetchNonce()
+				if err != nil {
+					return err
+				}
+				body := `{"tx_id":"wrongkey","quantity":1}`
+				got, err := c.raw("POST", "/dispense", body, map[string]string{
+					"Content-Type": "application/json",
+					"X-Nonce":      nonce,
+					"X-Signature":  SignRequest("definitely-not-the-key", "POST", "/dispense", body, nonce),
+				})
+				if err != nil {
+					return err
+				}
+				if err := wantStatus(got, 401); err != nil {
+					return err
+				}
+				return wantReason(got, "signature")
+			},
+		},
+		{
+			Name: "replayed_signed_post_is_401",
+			Note: "the replay this whole scheme exists to stop: identical bytes, " +
+				"identical signature, a second time",
+			Run: func(c *Ctx) error {
+				nonce, err := c.Client.fetchNonce()
+				if err != nil {
+					return err
+				}
+				body := fmt.Sprintf(`{"tx_id":%q,"quantity":1}`, c.NextTxID("rep"))
+				headers := map[string]string{
+					"Content-Type": "application/json",
+					"X-Nonce":      nonce,
+					"X-Signature":  SignRequest(c.Client.SigningKey, "POST", "/dispense", body, nonce),
+				}
+				first, err := c.raw("POST", "/dispense", body, headers)
+				if err != nil {
+					return err
+				}
+				if err := wantStatus(first, 200); err != nil {
+					return fmt.Errorf("the first signed POST was refused: %w", err)
+				}
+				second, err := c.raw("POST", "/dispense", body, headers)
+				if err != nil {
+					return err
+				}
+				if err := wantStatus(second, 401); err != nil {
+					return err
+				}
+				return wantReason(second, "nonce")
+			},
+		},
+		{
+			Name: "tampered_body_is_401",
+			Note: "a captured request re-aimed at more tokens",
+			Run: func(c *Ctx) error {
+				nonce, err := c.Client.fetchNonce()
+				if err != nil {
+					return err
+				}
+				id := c.NextTxID("tam")
+				signedBody := fmt.Sprintf(`{"tx_id":%q,"quantity":1}`, id)
+				sentBody := fmt.Sprintf(`{"tx_id":%q,"quantity":9}`, id)
+				got, err := c.raw("POST", "/dispense", sentBody, map[string]string{
+					"Content-Type": "application/json",
+					"X-Nonce":      nonce,
+					"X-Signature":  SignRequest(c.Client.SigningKey, "POST", "/dispense", signedBody, nonce),
+				})
+				if err != nil {
+					return err
+				}
+				return wantStatus(got, 401)
+			},
+		},
+		{
+			Name: "signature_covers_method_and_path",
+			Note: "method and path are in the canonical string so a status poll's " +
+				"signature cannot be lifted onto /debug or onto a POST",
+			Run: func(c *Ctx) error {
+				nonce, err := c.Client.fetchNonce()
+				if err != nil {
+					return err
+				}
+				// A signature over a canonical string with method and path left
+				// out — what a device that binds only the body would accept.
+				// The request is otherwise perfect, so a 200 here means the
+				// signature says nothing about WHICH request it belongs to.
+				got, err := c.raw("GET", "/debug", "", map[string]string{
+					"X-Nonce":     nonce,
+					"X-Signature": SignRequest(c.Client.SigningKey, "", "", "", nonce),
+				})
+				if err != nil {
+					return err
+				}
+				return wantStatus(got, 401)
+			},
+		},
+		{
+			Name: "a_spent_nonce_still_polls",
+			Note: "a POST spends its nonce for MUTATING use only — the status polls " +
+				"behind it keep working, which is what one GET /nonce per transaction means",
+			Run: func(c *Ctx) error {
+				nonce, err := c.Client.fetchNonce()
+				if err != nil {
+					return err
+				}
+				id := c.NextTxID("spn")
+				body := fmt.Sprintf(`{"tx_id":%q,"quantity":1}`, id)
+				got, err := c.raw("POST", "/dispense", body, map[string]string{
+					"Content-Type": "application/json",
+					"X-Nonce":      nonce,
+					"X-Signature":  SignRequest(c.Client.SigningKey, "POST", "/dispense", body, nonce),
+				})
+				if err != nil {
+					return err
+				}
+				// 200 or 409: whether the device happened to be busy with an
+				// earlier case's transaction is not what this asserts.  Either
+				// way the signature verified, so the nonce is spent.
+				if got.Status != 200 && got.Status != 409 {
+					return wantStatus(got, 200)
+				}
+				poll, err := c.raw("GET", "/dispense/"+id, "", map[string]string{
+					"X-Nonce":     nonce,
+					"X-Signature": SignRequest(c.Client.SigningKey, "GET", "/dispense/"+id, "", nonce),
+				})
+				if err != nil {
+					return err
+				}
+				if poll.Status == 401 {
+					return fmt.Errorf("polling with the nonce the POST spent is 401: a "+
+						"transaction would need a fresh nonce for every poll (body: %s)",
+						strings.TrimSpace(poll.Body))
+				}
+				return nil
+			},
+		},
+		{
+			Name: "get_status_without_a_signature_is_401",
 			Run: func(c *Ctx) error {
 				got, err := c.raw("GET", "/dispense/whatever", "", nil)
 				if err != nil {
 					return err
 				}
 				return wantStatus(got, 401)
+			},
+		},
+		{
+			Name: "get_debug_without_a_signature_is_401",
+			Run: func(c *Ctx) error {
+				got, err := c.raw("GET", "/debug", "", nil)
+				if err != nil {
+					return err
+				}
+				return wantStatus(got, 401)
+			},
+		},
+		{
+			Name: "health_without_a_signature_is_minimal",
+			Note: "issue #8: unsigned, /health answers only protocol, state and fault — " +
+				"is it there, can it sell, does it need a human.  SSID, IP, firmware " +
+				"version, heap, reset reason and the billed token counts need the key.",
+			Run: func(c *Ctx) error {
+				status, body, err := c.Client.HealthUnsigned()
+				if err != nil {
+					return err
+				}
+				if status != 200 {
+					// Not 401: it is the liveness probe, and a 401 answers
+					// neither "the machine is there" nor "it is gone".
+					return fmt.Errorf("unsigned GET /health answered %d, want 200", status)
+				}
+				var minimal struct {
+					Protocol      int    `json:"protocol"`
+					State         string `json:"state"`
+					Fault         string `json:"fault"`
+					Authenticated *bool  `json:"authenticated"`
+				}
+				if err := json.Unmarshal(body, &minimal); err != nil {
+					return fmt.Errorf("unsigned /health is not JSON: %w", err)
+				}
+				if minimal.State == "" || minimal.Fault == "" || minimal.Protocol == 0 {
+					return fmt.Errorf("the unsigned document is missing one of its three fields: %s",
+						strings.TrimSpace(string(body)))
+				}
+				if minimal.Authenticated == nil {
+					return fmt.Errorf(`the unsigned document does not say "authenticated": false, ` +
+						"so a client cannot tell it from an old firmware that never had the fields")
+				}
+				if *minimal.Authenticated {
+					return fmt.Errorf("the unsigned document claims to be authenticated")
+				}
+				var leaked []string
+				for _, field := range []string{"wifi", "ssid", "metrics", "heap_free",
+					"reset_reason", "firmware", "uptime", "error_history", "fault_code"} {
+					if strings.Contains(string(body), `"`+field+`"`) {
+						leaked = append(leaked, field)
+					}
+				}
+				if len(leaked) > 0 {
+					return fmt.Errorf("the unsigned /health carries %s", strings.Join(leaked, ", "))
+				}
+				return nil
+			},
+		},
+		{
+			Name: "health_with_a_signature_is_whole",
+			Run: func(c *Ctx) error {
+				health, res := c.Client.Health()
+				if health == nil {
+					return fmt.Errorf("no health document: %v", res.Error)
+				}
+				if health.Authenticated == nil || !*health.Authenticated {
+					return fmt.Errorf("a signed /health does not say it is authenticated")
+				}
+				if health.WiFi == nil || health.Firmware == "" {
+					return fmt.Errorf("the signed document is missing the fields the key buys")
+				}
+				return nil
 			},
 		},
 
@@ -197,8 +450,8 @@ func ConformanceCases() []Case {
 		{
 			Name: "post_without_json_content_type_is_415",
 			Run: func(c *Ctx) error {
-				got, err := c.raw("POST", "/dispense", `{"tx_id":"ct01","quantity":1}`,
-					map[string]string{"Content-Type": "text/plain", "X-API-Key": c.Client.APIKey})
+				got, err := c.rawSigned("POST", "/dispense", `{"tx_id":"ct01","quantity":1}`,
+					map[string]string{"Content-Type": "text/plain"})
 				if err != nil {
 					return err
 				}
@@ -248,8 +501,8 @@ func ConformanceCases() []Case {
 		{
 			Name: "get_unknown_tx_is_404",
 			Run: func(c *Ctx) error {
-				got, err := c.raw("GET", "/dispense/"+c.NextTxID("unk"), "",
-					map[string]string{"X-API-Key": c.Client.APIKey})
+				id := c.NextTxID("unk")
+				got, err := c.rawSigned("GET", "/dispense/"+id, "", nil)
 				if err != nil {
 					return err
 				}
@@ -523,8 +776,7 @@ func ConformanceCases() []Case {
 				if !*final.CountReliable {
 					return fmt.Errorf("a dispense that nothing interrupted reports count_reliable=false")
 				}
-				raw, err := c.raw("GET", "/dispense/"+txID, "",
-					map[string]string{"X-API-Key": c.Client.APIKey})
+				raw, err := c.rawSigned("GET", "/dispense/"+txID, "", nil)
 				if err != nil {
 					return err
 				}

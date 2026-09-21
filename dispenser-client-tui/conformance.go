@@ -6,8 +6,8 @@ package main
 // otherwise "the mock does it differently" stays invisible, which is exactly
 // how the divergences in issue #1 survived.
 //
-//   token-tui conformance --endpoint http://127.0.0.1:8080 --api-key dev --target mock
-//   token-tui conformance --endpoint http://192.168.4.20  --api-key … --target simulator
+//   token-tui conformance --endpoint http://127.0.0.1:8080 --signing-key dev --target mock
+//   token-tui conformance --endpoint http://192.168.4.20  --signing-key … --target simulator
 //
 // Exit code is the verdict: 0 = every case that ran passed.
 
@@ -162,7 +162,7 @@ type Report struct {
 func runConformance(args []string) int {
 	fs := flag.NewFlagSet("conformance", flag.ExitOnError)
 	endpoint := fs.String("endpoint", "http://127.0.0.1:8080", "Dispenser base URL")
-	apiKey := fs.String("api-key", "", "API key (or TOKEN_DISPENSER_API_KEY env)")
+	signingKey := fs.String("signing-key", "", "Shared signing secret (or TOKEN_DISPENSER_SIGNING_KEY env). Never transmitted.")
 	target := fs.String("target", string(TargetMock), "mock | simulator | hopper")
 	timeout := fs.Duration("timeout", 10*time.Second, "HTTP request timeout")
 	jsonOut := fs.String("json", "", "Write a JSON report to this path")
@@ -190,9 +190,9 @@ Flags:
 		return 2
 	}
 
-	key := *apiKey
+	key := *signingKey
 	if key == "" {
-		key = os.Getenv("TOKEN_DISPENSER_API_KEY")
+		key = os.Getenv("TOKEN_DISPENSER_SIGNING_KEY")
 	}
 
 	ctx := &Ctx{
@@ -307,6 +307,32 @@ type rawResponse struct {
 	Body   string
 }
 
+// sign adds X-Nonce and X-Signature to a raw request, the way every client
+// must since issue #8.  Cases that want an UNSIGNED request simply do not
+// call it — there is no key header left to leave out.
+func (c *Ctx) sign(headers map[string]string, method, path, body string) (map[string]string, error) {
+	nonce, err := c.Client.fetchNonce()
+	if err != nil {
+		return nil, err
+	}
+	h := map[string]string{}
+	for k, v := range headers {
+		h[k] = v
+	}
+	h["X-Nonce"] = nonce
+	h["X-Signature"] = SignRequest(c.Client.SigningKey, method, path, body, nonce)
+	return h, nil
+}
+
+// rawSigned is raw() with a fresh signature over exactly what it sends.
+func (c *Ctx) rawSigned(method, path string, body string, headers map[string]string) (rawResponse, error) {
+	h, err := c.sign(headers, method, path, body)
+	if err != nil {
+		return rawResponse{}, err
+	}
+	return c.raw(method, path, body, h)
+}
+
 func (c *Ctx) raw(method, path string, body string, headers map[string]string) (rawResponse, error) {
 	var rdr io.Reader
 	if body != "" {
@@ -331,12 +357,14 @@ func (c *Ctx) raw(method, path string, body string, headers map[string]string) (
 	return rawResponse{Status: resp.StatusCode, Body: string(blob)}, nil
 }
 
-func (c *Ctx) postJSON(body string, withKey bool) (rawResponse, error) {
+// postJSON sends POST /dispense.  `signed` is what the cases vary: an
+// unsigned POST must be 401, a signed one gets judged on its content.
+func (c *Ctx) postJSON(body string, signed bool) (rawResponse, error) {
 	h := map[string]string{"Content-Type": "application/json"}
-	if withKey {
-		h["X-API-Key"] = c.Client.APIKey
+	if !signed {
+		return c.raw("POST", "/dispense", body, h)
 	}
-	return c.raw("POST", "/dispense", body, h)
+	return c.rawSigned("POST", "/dispense", body, h)
 }
 
 // postInTwoSegments sends POST /dispense with the JSON body split across two
@@ -362,12 +390,21 @@ func (c *Ctx) postInTwoSegments(body string) (rawResponse, error) {
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(15 * time.Second))
 
+	// The signature covers the WHOLE body, although it arrives in two
+	// segments: the device must assemble it before verifying, which is the
+	// same ordering issue #4 fixed for parsing.
+	nonce, err := c.Client.fetchNonce()
+	if err != nil {
+		return rawResponse{}, err
+	}
 	head := fmt.Sprintf("POST /dispense HTTP/1.1\r\n"+
 		"Host: %s\r\n"+
-		"X-API-Key: %s\r\n"+
+		"X-Nonce: %s\r\n"+
+		"X-Signature: %s\r\n"+
 		"Content-Type: application/json\r\n"+
 		"Content-Length: %d\r\n"+
-		"Connection: close\r\n\r\n", u.Host, c.Client.APIKey, len(body))
+		"Connection: close\r\n\r\n", u.Host, nonce,
+		SignRequest(c.Client.SigningKey, "POST", "/dispense", body, nonce), len(body))
 
 	cut := len(body) / 2
 	if _, err := io.WriteString(conn, head+body[:cut]); err != nil {
@@ -389,6 +426,22 @@ func (c *Ctx) postInTwoSegments(body string) (rawResponse, error) {
 		return rawResponse{}, err
 	}
 	return rawResponse{Status: resp.StatusCode, Body: string(blob)}, nil
+}
+
+// wantReason checks the `reason` of a 401 (issue #8).  It is the whole of the
+// client contract on that status: "nonce" means fetch a fresh one and retry
+// ONCE, "signature" means stop.  A 401 without it sends a terminal either into
+// a retry loop or into giving up on a nonce that merely expired.
+func wantReason(got rawResponse, want string) error {
+	var resp ErrorResponse
+	if err := json.Unmarshal([]byte(got.Body), &resp); err != nil {
+		return fmt.Errorf("the 401 body is not JSON: %s", strings.TrimSpace(got.Body))
+	}
+	if resp.Reason != want {
+		return fmt.Errorf("401 reason = %q, want %q (body: %s)", resp.Reason, want,
+			strings.TrimSpace(got.Body))
+	}
+	return nil
 }
 
 func wantStatus(got rawResponse, want int) error {

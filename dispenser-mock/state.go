@@ -19,7 +19,10 @@ const (
 type MockDispenser struct {
 	mu        sync.RWMutex
 	startTime time.Time
-	apiKey    string
+	// signingKey is the shared secret.  It NEVER travels since issue #8: a
+	// request carries HMAC-SHA256 over the canonical string, not the key.
+	signingKey string
+	nonces     *NoncePool
 	// protocol is what GET /health claims.  Normally ProtocolVersion; the
 	// --protocol flag sets it to something else so a terminal can be tested
 	// against a device it must refuse.
@@ -33,17 +36,18 @@ type MockDispenser struct {
 }
 
 // NewMockDispenser creates a new mock dispenser claiming ProtocolVersion.
-func NewMockDispenser(apiKey string) *MockDispenser {
-	return NewMockDispenserWithProtocol(apiKey, ProtocolVersion)
+func NewMockDispenser(signingKey string) *MockDispenser {
+	return NewMockDispenserWithProtocol(signingKey, ProtocolVersion)
 }
 
 // NewMockDispenserWithProtocol creates a mock that CLAIMS the given protocol
 // version while behaving exactly as before.  Anything but ProtocolVersion is
 // a device every conforming client has to refuse outright.
-func NewMockDispenserWithProtocol(apiKey string, protocol int) *MockDispenser {
+func NewMockDispenserWithProtocol(signingKey string, protocol int) *MockDispenser {
 	return &MockDispenser{
 		startTime:    time.Now(),
-		apiKey:       apiKey,
+		signingKey:   signingKey,
+		nonces:       NewNoncePool(signingKey),
 		protocol:     protocol,
 		fault:        FaultNone,
 		history:      make([]*Transaction, 0, 8),
@@ -146,11 +150,6 @@ func (m *MockDispenser) addToHistoryLocked(tx *Transaction) {
 		m.history = m.history[1:]
 	}
 	m.history = append(m.history, tx)
-}
-
-// ValidateAPIKey checks if provided key matches
-func (m *MockDispenser) ValidateAPIKey(key string) bool {
-	return key == m.apiKey
 }
 
 // GetMetrics returns a copy of the metrics for safe concurrent access
