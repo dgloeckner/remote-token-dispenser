@@ -11,6 +11,12 @@ var (
 	bind          = flag.String("bind", ":8080", "Network address to bind to")
 	apiKey        = flag.String("api-key", "dev", "Required API key for authentication")
 	listScenarios = flag.Bool("list-scenarios", false, "Print scenario mapping table and exit")
+	// The protocol version the mock CLAIMS in GET /health.  Nothing else
+	// changes with it: the point is a device a conforming client must refuse
+	// outright (dispenser-protocol.md, Design Principle 2).  The terminal
+	// side needs it to test "a dispenser speaking protocol 1 is unavailable,
+	// not degraded" without a second mock (dgloeckner/clubbar#948).
+	protocol = flag.Int("protocol", ProtocolVersion, "Protocol version to report in GET /health")
 )
 
 func main() {
@@ -22,7 +28,7 @@ func main() {
 	}
 
 	// Create mock dispenser
-	mock := NewMockDispenser(*apiKey)
+	mock := NewMockDispenserWithProtocol(*apiKey, *protocol)
 
 	// Setup routes
 	mux := http.NewServeMux()
@@ -31,6 +37,10 @@ func main() {
 	// Start server
 	log.Printf("Mock dispenser listening on %s", *bind)
 	log.Printf("API Key: %s", *apiKey)
+	if *protocol != ProtocolVersion {
+		log.Printf("Reporting protocol %d (this build speaks %d): every conforming "+
+			"client must refuse this device", *protocol, ProtocolVersion)
+	}
 	log.Printf("Ready for requests. Use --list-scenarios to see available test cases.")
 
 	if err := http.ListenAndServe(*bind, mux); err != nil {

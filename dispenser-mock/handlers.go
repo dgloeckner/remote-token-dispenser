@@ -45,31 +45,39 @@ func (m *MockDispenser) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("GET /health from %s", r.RemoteAddr)
 
-	dispenserState := m.GetState()
-
-	errorInfo := m.GetHardwareError()
-	if errorInfo == nil {
-		errorInfo = &ErrorInfo{Active: false}
-	}
+	fault, faultCode := m.GetFault()
 
 	resp := HealthResponse{
-		Protocol: ProtocolVersion,
-		Status:   "ok",
-		Uptime:   m.Uptime(),
-		Firmware: "mock-v1.0.0",
+		Protocol:  m.protocol,
+		State:     m.GetState(),
+		Fault:     fault,
+		FaultCode: faultCode,
+		Uptime:    m.Uptime(),
+		Firmware:  "mock-v1.0.0",
 		WiFi: &WiFiInfo{
 			RSSI: -55,
 			IP:   "192.168.1.100",
 			SSID: "mock-network",
 		},
-		Dispenser:    dispenserState,
-		GPIO:         &GPIOInfo{},
 		Metrics:      m.GetMetrics(),
-		Error:        errorInfo,
 		ErrorHistory: m.GetErrorHistory(),
 	}
 
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// handleDebug handles GET /debug (auth required): the raw pin levels, which
+// left /health in issue #6.  The mock has no pins; it answers the shape so a
+// client that reads them can be exercised against it.
+func (m *MockDispenser) handleDebug(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, ErrorResponse{Error: "method not allowed"})
+		return
+	}
+	if !m.requireAPIKey(w, r) {
+		return
+	}
+	writeJSON(w, http.StatusOK, DebugResponse{})
 }
 
 // handleDispense handles POST /dispense (auth required)
@@ -139,13 +147,7 @@ func (m *MockDispenser) handleDispense(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		log.Printf("POST /dispense tx_id=%q idempotent hit, state=%s", req.TxID, existing.State)
-		writeJSON(w, http.StatusOK, DispenseResponse{
-			TxID:          existing.TxID,
-			State:         existing.State,
-			Quantity:      existing.Quantity,
-			Dispensed:     existing.Dispensed,
-			CountReliable: existing.CountReliable,
-		})
+		writeJSON(w, http.StatusOK, respondTx(existing))
 		return
 	}
 
@@ -164,11 +166,17 @@ func (m *MockDispenser) handleDispense(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if m.hardwareError != nil && m.hardwareError.Active {
+	// The device fault: only a power cycle ends it, and the two idempotency
+	// checks above have already run — a terminal asking about a transaction it
+	// already sent still gets its answer (issue #6).
+	if m.fault != FaultNone {
+		fault, faultCode := m.fault, m.faultCode
 		m.mu.Unlock()
-		log.Printf("POST /dispense tx_id=%q rejected: hardware error active", req.TxID)
+		log.Printf("POST /dispense tx_id=%q rejected: device fault %s", req.TxID, fault)
 		writeJSON(w, http.StatusConflict, ErrorResponse{
-			Error: "error",
+			Error:     "fault",
+			Fault:     fault,
+			FaultCode: faultCode,
 		})
 		return
 	}
@@ -180,6 +188,7 @@ func (m *MockDispenser) handleDispense(w http.ResponseWriter, r *http.Request) {
 		Quantity:      req.Quantity,
 		Dispensed:     0,
 		CountReliable: true,
+		ErrorType:     TxErrorNone,
 		Timestamp:     time.Now(),
 		StopChan:      make(chan bool, 1),
 	}
@@ -215,20 +224,32 @@ func (m *MockDispenser) handleDispense(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Capture response values before starting goroutine to avoid data race
-	txID, state, quantity, dispensed := tx.TxID, tx.State, tx.Quantity, tx.Dispensed
-	reliable := tx.CountReliable
+	// Capture the response before starting the goroutine, to avoid a data race
+	resp := respondTx(tx)
 
 	// Start scenario in a goroutine
 	go m.ExecuteScenario(tx, scenario)
 
-	writeJSON(w, http.StatusOK, DispenseResponse{
-		TxID:          txID,
-		State:         state,
-		Quantity:      quantity,
-		Dispensed:     dispensed,
-		CountReliable: reliable,
-	})
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// respondTx is the transaction body of every 200.  count_reliable,
+// error_code and error_type are all REQUIRED: a reader that has to default
+// one of them cannot tell "nothing went wrong" from "the device never said".
+func respondTx(tx *Transaction) DispenseResponse {
+	errType := tx.ErrorType
+	if errType == "" {
+		errType = TxErrorNone
+	}
+	return DispenseResponse{
+		TxID:          tx.TxID,
+		State:         tx.State,
+		Quantity:      tx.Quantity,
+		Dispensed:     tx.Dispensed,
+		CountReliable: tx.CountReliable,
+		ErrorCode:     tx.ErrorCode,
+		ErrorType:     errType,
+	}
 }
 
 // handleDispenseStatus handles GET /dispense/{tx_id} (auth required)
@@ -258,18 +279,16 @@ func (m *MockDispenser) handleDispenseStatus(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	writeJSON(w, http.StatusOK, DispenseResponse{
-		TxID:          tx.TxID,
-		State:         tx.State,
-		Quantity:      tx.Quantity,
-		Dispensed:     tx.Dispensed,
-		CountReliable: tx.CountReliable,
-	})
+	writeJSON(w, http.StatusOK, respondTx(tx))
 }
 
-// RegisterHandlers registers all HTTP handlers on the given mux
+// RegisterHandlers registers all HTTP handlers on the given mux.
+// There is no /reset, and there must not be: a fault is ended by a power
+// cycle and by nothing else (owner decision, 2026-09-20).  The mux answers
+// 404 for it, which is what the conformance suite asserts.
 func (m *MockDispenser) RegisterHandlers(mux *http.ServeMux) {
 	mux.HandleFunc("/health", m.handleHealth)
+	mux.HandleFunc("/debug", m.handleDebug)
 	mux.HandleFunc("/dispense", m.handleDispense)
 	mux.HandleFunc("/dispense/", m.handleDispenseStatus)
 }

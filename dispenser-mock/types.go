@@ -5,20 +5,53 @@ import "time"
 // ProtocolVersion is the version handshake reported by GET /health.
 // It must match the version in dispenser-protocol.md and the firmware's
 // PROTOCOL_VERSION; a client refuses any other value.
+//
+// --protocol overrides what the mock CLAIMS, without changing anything it
+// does.  That is the only way to exercise a terminal's handshake against a
+// device speaking the old version: there are none left in the field, and a
+// client that quietly adapts to one is the bug the handshake exists to catch.
 const ProtocolVersion = 2
 
-// HealthResponse matches GET /health from the dispenser protocol
+// Fault values, the device-level condition of issue #6.
+const (
+	FaultNone        = "none"
+	FaultJam         = "jam"
+	FaultHopperError = "hopper_error"
+)
+
+// Transaction error types (dispenser-protocol.md).  The Azkoyen names come
+// from the error table; these are the two the firmware produces itself.
+const (
+	TxErrorNone       = "NONE"
+	TxErrorJamTimeout = "JAM_TIMEOUT"
+	TxErrorReset      = "RESET"
+)
+
+// HealthResponse matches GET /health from the dispenser protocol.
+//
+// One State and one Fault since issue #6.  Protocol 1 had `status`
+// (hard-coded "ok" in the firmware) next to `dispenser`, which overlapped it,
+// and the terminal ORed the two together.
 type HealthResponse struct {
-	Protocol     int           `json:"protocol"`
-	Status       string        `json:"status"`
+	Protocol int    `json:"protocol"`
+	State    string `json:"state"`
+	// Fault is the device-level condition: none | jam | hopper_error.  It
+	// outlives the transaction it broke and is cleared by a reboot only.
+	Fault string `json:"fault"`
+	// FaultCode is the Azkoyen code behind a hopper_error, 0 otherwise.
+	// No omitempty: the field is required, and 0 is a value.
+	FaultCode    int           `json:"fault_code"`
 	Uptime       int           `json:"uptime"`
 	Firmware     string        `json:"firmware"`
 	WiFi         *WiFiInfo     `json:"wifi,omitempty"`
-	Dispenser    string        `json:"dispenser"`
-	GPIO         *GPIOInfo     `json:"gpio,omitempty"`
 	Metrics      Metrics       `json:"metrics"`
-	Error        *ErrorInfo    `json:"error"`
 	ErrorHistory []ErrorRecord `json:"error_history"`
+}
+
+// DebugResponse matches GET /debug: the raw pin levels, which left /health in
+// issue #6.  Authenticated, because nothing a monitor should act on is in it.
+type DebugResponse struct {
+	GPIO GPIOInfo `json:"gpio"`
 }
 
 type WiFiInfo struct {
@@ -27,6 +60,9 @@ type WiFiInfo struct {
 	SSID string `json:"ssid"`
 }
 
+// GPIOInfo has no hopper_low any more (issue #6): the empty sensor is a
+// factory option the hopper in the boathouse does not have, so the pin sat on
+// its pull-up and said "not empty" forever — and /health published that.
 type GPIOInfo struct {
 	CoinPulse struct {
 		Raw    int  `json:"raw"`
@@ -36,10 +72,6 @@ type GPIOInfo struct {
 		Raw    int  `json:"raw"`
 		Active bool `json:"active"`
 	} `json:"error_signal"`
-	HopperLow struct {
-		Raw    int  `json:"raw"`
-		Active bool `json:"active"`
-	} `json:"hopper_low"`
 }
 
 type Metrics struct {
@@ -67,19 +99,13 @@ type ActiveTxInfo struct {
 	Dispensed int    `json:"dispensed"`
 }
 
-type ErrorInfo struct {
-	Active      bool   `json:"active"`
-	Code        int    `json:"code,omitempty"`
-	Type        string `json:"type,omitempty"`
-	Timestamp   int    `json:"timestamp,omitempty"`
-	Description string `json:"description,omitempty"`
-}
-
+// ErrorRecord is one decoded hopper error.  No `cleared` flag: an error
+// raises a fault, a fault ends with a power cycle, and the "self-healing" the
+// flag described had no case left to heal.
 type ErrorRecord struct {
 	Code      int    `json:"code"`
 	Type      string `json:"type"`
 	Timestamp int    `json:"timestamp"`
-	Cleared   bool   `json:"cleared"`
 }
 
 // DispenseRequest matches POST /dispense
@@ -100,14 +126,24 @@ type DispenseResponse struct {
 	Quantity      int    `json:"quantity"`
 	Dispensed     int    `json:"dispensed"`
 	CountReliable bool   `json:"count_reliable"`
-	Error         string `json:"error,omitempty"`
+	// ErrorCode / ErrorType say WHY a transaction ended in "error" (issue
+	// #6): an Azkoyen code 1-7 with its name, or 0 with JAM_TIMEOUT or RESET.
+	// Required on every transaction response, NONE when nothing went wrong —
+	// a reader must not have to tell "no error" from "no field".
+	ErrorCode int    `json:"error_code"`
+	ErrorType string `json:"error_type"`
+	Error     string `json:"error,omitempty"`
 }
 
-// ErrorResponse for 4xx/5xx
+// ErrorResponse for 4xx/5xx.  A 409 fault names the fault and its code, so
+// the terminal can tell "clear the jam" from "the hopper reports a motor
+// fault" — and never how to clear it, because there is no way but the plug.
 type ErrorResponse struct {
 	Error       string `json:"error"`
 	ActiveTxID  string `json:"active_tx_id,omitempty"`
 	ActiveState string `json:"active_state,omitempty"`
+	Fault       string `json:"fault,omitempty"`
+	FaultCode   int    `json:"fault_code,omitempty"`
 }
 
 // Transaction represents a dispense transaction
@@ -119,6 +155,9 @@ type Transaction struct {
 	// CountReliable mirrors the firmware: true unless the transaction was
 	// recovered after a reset that took the live count with it.
 	CountReliable bool
-	Timestamp     time.Time
-	StopChan      chan bool // For controlling dispensing goroutine
+	// ErrorKind/ErrorCode mirror the firmware's per-transaction reason.
+	ErrorType string
+	ErrorCode int
+	Timestamp time.Time
+	StopChan  chan bool // For controlling dispensing goroutine
 }

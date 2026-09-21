@@ -10,25 +10,42 @@ const (
 	StateDispensing = "dispensing"
 	StateDone       = "done"
 	StateError      = "error"
+	// StateFault is a DEVICE state, not a transaction state: the machine
+	// needs a human (issue #6).
+	StateFault = "fault"
 )
 
 // MockDispenser manages the mock dispenser state
 type MockDispenser struct {
-	mu            sync.RWMutex
-	startTime     time.Time
-	apiKey        string
-	activeTx      *Transaction
-	history       []*Transaction // Ring buffer, last 8 transactions
-	metrics       Metrics
-	hardwareError *ErrorInfo
-	errorHistory  []ErrorRecord
+	mu        sync.RWMutex
+	startTime time.Time
+	apiKey    string
+	// protocol is what GET /health claims.  Normally ProtocolVersion; the
+	// --protocol flag sets it to something else so a terminal can be tested
+	// against a device it must refuse.
+	protocol     int
+	activeTx     *Transaction
+	history      []*Transaction // Ring buffer, last 8 transactions
+	metrics      Metrics
+	fault        string
+	faultCode    int
+	errorHistory []ErrorRecord
 }
 
-// NewMockDispenser creates a new mock dispenser
+// NewMockDispenser creates a new mock dispenser claiming ProtocolVersion.
 func NewMockDispenser(apiKey string) *MockDispenser {
+	return NewMockDispenserWithProtocol(apiKey, ProtocolVersion)
+}
+
+// NewMockDispenserWithProtocol creates a mock that CLAIMS the given protocol
+// version while behaving exactly as before.  Anything but ProtocolVersion is
+// a device every conforming client has to refuse outright.
+func NewMockDispenserWithProtocol(apiKey string, protocol int) *MockDispenser {
 	return &MockDispenser{
 		startTime:    time.Now(),
 		apiKey:       apiKey,
+		protocol:     protocol,
+		fault:        FaultNone,
 		history:      make([]*Transaction, 0, 8),
 		errorHistory: make([]ErrorRecord, 0, 5),
 		metrics: Metrics{
@@ -49,18 +66,37 @@ func (m *MockDispenser) Uptime() int {
 	return int(time.Since(m.startTime).Seconds())
 }
 
-// GetState returns current dispenser state
+// GetState returns the DEVICE state of GET /health: idle | dispensing |
+// fault.  A fault outranks everything — it is the answer to "is it safe to
+// run the motor", and only a power cycle changes it (issue #6).
 func (m *MockDispenser) GetState() string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	if m.activeTx != nil {
-		return m.activeTx.State
+	if m.fault != FaultNone {
+		return StateFault
 	}
-	if m.hardwareError != nil && m.hardwareError.Active {
-		return StateError
+	if m.activeTx != nil {
+		return StateDispensing
 	}
 	return StateIdle
+}
+
+// GetFault returns the device fault and its Azkoyen code.
+func (m *MockDispenser) GetFault() (string, int) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.fault, m.faultCode
+}
+
+// raiseFaultLocked puts the device out of service.  INTERNAL USE ONLY -
+// caller must hold m.mu.Lock().  There is no clearing counterpart, on
+// purpose: the mock is restarted, which is what pulling the plug is.
+func (m *MockDispenser) raiseFaultLocked(fault string, code int) {
+	if m.fault == FaultNone {
+		m.fault = fault
+		m.faultCode = code
+	}
 }
 
 // FindTransaction finds a transaction by ID in history
@@ -138,19 +174,6 @@ func (m *MockDispenser) GetActiveTxInfo() *ActiveTxInfo {
 		Quantity:  m.activeTx.Quantity,
 		Dispensed: m.activeTx.Dispensed,
 	}
-}
-
-// GetHardwareError returns a copy of the hardware error if exists
-func (m *MockDispenser) GetHardwareError() *ErrorInfo {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	if m.hardwareError == nil {
-		return nil
-	}
-
-	errorCopy := *m.hardwareError
-	return &errorCopy
 }
 
 // GetErrorHistory returns a copy of the error history slice

@@ -17,6 +17,10 @@ go build
 
 # List available test scenarios
 ./dispenser-mock --list-scenarios
+
+# Claim protocol 1: a device every conforming client must REFUSE.
+# Nothing else changes — the mock still behaves like protocol 2.
+./dispenser-mock --protocol 1
 ```
 
 ## Configuration
@@ -25,6 +29,12 @@ go build
 - `--bind` - Network address (default: `:8080`)
 - `--api-key` - Required API key (default: `dev`)
 - `--list-scenarios` - Print scenario mapping and exit
+- `--protocol` - Protocol version to report in `GET /health` (default: `2`).
+  Only the *claim* changes; the mock's behaviour does not. It exists so a
+  terminal can be tested against a dispenser speaking the old protocol, which
+  must come out as **unavailable, not degraded** — there are no protocol-1
+  devices in the field, so a client that adapts to one is a bug
+  (dgloeckner/clubbar#948).
 
 ## Test Scenarios
 
@@ -69,10 +79,14 @@ go run . --url=http://localhost:8080 --api-key=dev
 
 ## Protocol
 
-Implements [Dispenser Protocol v1.1.0](../dispenser-protocol.md):
-- `GET /health` (public)
+Implements [Dispenser Protocol 2](../dispenser-protocol.md):
+- `GET /health` (public) — one `state`, one `fault`, metrics
+- `GET /debug` (auth required) — raw pin levels
 - `POST /dispense` (auth required)
 - `GET /dispense/{tx_id}` (auth required)
+
+There is deliberately **no `POST /reset`**: a fault is cleared by a power
+cycle and by nothing else. Restarting the mock is that power cycle.
 
 ## Implementation Notes
 

@@ -142,9 +142,11 @@ func (m *MockDispenser) executeTimeoutPartial(tx *Transaction) {
 	case <-tx.StopChan:
 		return
 	case <-timeout.C:
-		// Enter error state
+		// The jam watchdog: the transaction fails AND the device faults.
 		m.mu.Lock()
 		tx.State = StateError
+		tx.ErrorType = TxErrorJamTimeout
+		m.raiseFaultLocked(FaultJam, 0)
 		m.metrics.Jams++
 		m.metrics.Partial++
 		m.metrics.Failures++
@@ -191,6 +193,9 @@ func (m *MockDispenser) executeCrashAfterFirst(tx *Transaction) {
 	time.Sleep(2 * time.Second)
 	m.mu.Lock()
 	tx.State = StateError
+	// A recovered crash sets NO device fault (issue #6): nothing is wrong
+	// with the machine, and one watchdog reset used to take it out of service.
+	tx.ErrorType = TxErrorReset
 	tx.CountReliable = true // RTC memory came through the reset
 	m.metrics.Failures++
 	m.metrics.Partial++
@@ -223,6 +228,7 @@ func (m *MockDispenser) executePowerLossAfterFirst(tx *Transaction) {
 	time.Sleep(1 * time.Second)
 	m.mu.Lock()
 	tx.State = StateError
+	tx.ErrorType = TxErrorReset
 	tx.Dispensed = 0 // the lower bound from flash, not the token in the tray
 	tx.CountReliable = false
 	m.metrics.Failures++
@@ -297,9 +303,11 @@ func (m *MockDispenser) executePartialDispense(tx *Transaction) {
 		}
 	}
 
-	// Enter error state
+	// Enter error state — and fault the device with it
 	m.mu.Lock()
 	tx.State = StateError
+	tx.ErrorType = TxErrorJamTimeout
+	m.raiseFaultLocked(FaultJam, 0)
 	m.metrics.Jams++
 	m.metrics.Partial++
 	m.metrics.Failures++
@@ -347,19 +355,16 @@ func (m *MockDispenser) executeLoadDelay(tx *Transaction) {
 	}
 }
 
-// executeHardwareError simulates Azkoyen error code
+// executeHardwareError simulates a decoded Azkoyen error.  Since issue #6 it
+// does what the firmware does: the error faults the DEVICE, and the fault
+// ends only with a power cycle — restarting the mock is that power cycle.
 func (m *MockDispenser) executeHardwareError(tx *Transaction, code int, errType, description string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// Set hardware error
-	m.hardwareError = &ErrorInfo{
-		Active:      true,
-		Code:        code,
-		Type:        errType,
-		Timestamp:   int(m.Uptime()),
-		Description: description,
-	}
+	_ = description // the description left /health with the `error` block
+
+	m.raiseFaultLocked(FaultHopperError, code)
 
 	// Add to error history
 	if len(m.errorHistory) >= 5 {
@@ -369,11 +374,12 @@ func (m *MockDispenser) executeHardwareError(tx *Transaction, code int, errType,
 		Code:      code,
 		Type:      errType,
 		Timestamp: int(m.Uptime()),
-		Cleared:   false,
 	})
 
-	// Mark transaction as error
+	// Mark transaction as error, with the hopper's own reason
 	tx.State = StateError
+	tx.ErrorCode = code
+	tx.ErrorType = errType
 	m.metrics.TotalDispenses++
 	m.metrics.RequestedTokens += tx.Quantity
 	m.metrics.Failures++
