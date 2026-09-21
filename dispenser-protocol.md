@@ -787,8 +787,11 @@ The table lives in `dispenser-client-tui/conformance_cases.go`. Adding to it:
   simulator's `b` and `c` commands drive `bounce_burst_counts_one_token_per_coin`
   and `coast_pulse_is_counted_as_an_overrun`, which need `--interactive`.
 - No case is known-red today. `post_while_error_is_409` was, against the
-  firmware, from #1 until #6 fixed it; it is now `post_while_fault_is_409` and
-  green against firmware, mock and the suite's own fake device.
+  firmware, from #1 until #6 fixed it. It is now `post_while_fault_is_409`,
+  green in CI against the mock and the suite's own fake device; the firmware
+  side of it — a faulted device refuses a new POST — is pinned by the native
+  test `test_jam_sets_fault_and_blocks_new_dispense`, and the case itself runs
+  against the real thing with `--target simulator` on the bench.
 - The two resets of Design Principle 4 are covered from both sides: the mock
   runs `crashed_tx_is_found_after_reboot` and `power_loss_reports_count_unreliable`
   in CI (its scenarios for quantity 5 and 17), and on a real device the same
