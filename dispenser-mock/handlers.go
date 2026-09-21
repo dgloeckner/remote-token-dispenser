@@ -54,10 +54,17 @@ func (m *MockDispenser) handleHealth(w http.ResponseWriter, r *http.Request) {
 		FaultCode: faultCode,
 		Uptime:    m.Uptime(),
 		Firmware:  "mock-v1.0.0",
+		// A plausible ESP8266 heap and the reset reason of a device that was
+		// simply switched on.  Constant, because nothing here can leak or
+		// crash — a soak run against the mock proves the RUNNER, and the
+		// numbers it judges only mean something on a real board.
+		HeapFree:    28000,
+		ResetReason: "Power on",
 		WiFi: &WiFiInfo{
-			RSSI: -55,
-			IP:   "192.168.1.100",
-			SSID: "mock-network",
+			RSSI:       -55,
+			IP:         "192.168.1.100",
+			SSID:       "mock-network",
+			Reconnects: 0,
 		},
 		Metrics:      m.GetMetrics(),
 		ErrorHistory: m.GetErrorHistory(),

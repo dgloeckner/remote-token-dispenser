@@ -40,9 +40,16 @@ type HealthResponse struct {
 	Fault string `json:"fault"`
 	// FaultCode is the Azkoyen code behind a hopper_error, 0 otherwise.
 	// No omitempty: the field is required, and 0 is a value.
-	FaultCode    int           `json:"fault_code"`
-	Uptime       int           `json:"uptime"`
-	Firmware     string        `json:"firmware"`
+	FaultCode int    `json:"fault_code"`
+	Uptime    int    `json:"uptime"`
+	Firmware  string `json:"firmware"`
+	// HeapFree, ResetReason and WiFi.Reconnects are the operational telemetry
+	// of issue #7.  The mock has no heap and never resets, but it reports the
+	// fields: a client that reads them has to be exercisable without an ESP,
+	// and a mock that leaves them out teaches the client to tolerate their
+	// absence — which is the habit the pointer types exist to prevent.
+	HeapFree     int           `json:"heap_free"`
+	ResetReason  string        `json:"reset_reason"`
 	WiFi         *WiFiInfo     `json:"wifi,omitempty"`
 	Metrics      Metrics       `json:"metrics"`
 	ErrorHistory []ErrorRecord `json:"error_history"`
@@ -58,6 +65,9 @@ type WiFiInfo struct {
 	RSSI int    `json:"rssi"`
 	IP   string `json:"ip"`
 	SSID string `json:"ssid"`
+	// Reconnects counts the times the link came back since boot.  Always 0
+	// here: the mock's link never drops, and saying so is a reading.
+	Reconnects int `json:"reconnects"`
 }
 
 // GPIOInfo has no hopper_low any more (issue #6): the empty sensor is a
