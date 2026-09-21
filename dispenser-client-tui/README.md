@@ -45,7 +45,7 @@ export TOKEN_DISPENSER_ENDPOINT=http://192.168.4.20
 
 ### 1. Dashboard (Tab 1)
 - Real-time health monitoring with auto-refresh every 5s
-- ESP8266 status, uptime, firmware version, hopper status
+- Device `state` and `fault` (issue #6), uptime, firmware version
 - **WiFi signal strength with visual bars** (NEW)
 - Dispense metrics: success rate, jams, partial dispenses, failures
 - Latency sparkline with min/avg/max stats

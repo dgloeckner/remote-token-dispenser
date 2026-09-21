@@ -130,7 +130,8 @@ firmware/dispenser/
 #define MOTOR_PIN          D1    // GPIO5 - Control output via PC817 #1
 #define COIN_PULSE_PIN     D7    // GPIO13 - Coin pulse input via PC817 #2
 #define ERROR_SIGNAL_PIN   D5    // GPIO14 - Error signal input via PC817 #3
-#define HOPPER_LOW_PIN     D6    // GPIO12 - Empty sensor input via PC817 #4
+// D6 (GPIO12) is free: the hopper's empty sensor is a factory option this
+// unit does not have, so the pin reported "not empty" forever (issue #6).
 ```
 
 ### 2. Verify Pin Connections
@@ -204,18 +205,26 @@ curl http://192.168.4.20/health
 Expected response:
 ```json
 {
-  "status": "ok",
+  "protocol": 2,
+  "state": "idle",
+  "fault": "none",
+  "fault_code": 0,
   "uptime": 42,
-  "firmware": "1.0.0",
-  "dispenser": "idle",
-  "hopper_low": false,
+  "firmware": "1.2.0",
+  "wifi": {"rssi": -47, "ip": "192.168.4.20", "ssid": "…"},
   "metrics": {
     "total_dispenses": 0,
     "successful": 0,
     "jams": 0
-  }
+  },
+  "error_history": []
 }
 ```
+
+`state` and `fault` are the whole health verdict (issue #6): `state` is
+`idle | dispensing | fault`, `fault` is `none | jam | hopper_error`, and only
+a power cycle clears a fault. The raw pin levels are `GET /debug` (API key
+required). The full contract is `dispenser-protocol.md`.
 
 ### 3. Test Authentication
 

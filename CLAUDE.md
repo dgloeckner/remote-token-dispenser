@@ -67,7 +67,8 @@ Defines the WiFi HTTP protocol between Raspberry Pi and ESP8266:
 - **Idempotent transactions** with client-generated `tx_id`
 - **State machine**: `idle` → `reserved` → `dispensing` → `done`
 - **Endpoints**:
-  - `GET /health` - connectivity and status
+  - `GET /health` - one `state`, one `fault`, metrics (public)
+  - `GET /debug` - raw pin levels for the bench (auth required)
   - `POST /dispense` - reserve/confirm/cancel actions
   - `GET /dispense/{tx_id}` - poll transaction status
 - **Error recovery** for crashes, network timeouts, and hardware jams
@@ -136,8 +137,9 @@ Transaction fields: `tx_id`, `user_id`, `quantity`, `dispensed`, `count_reliable
   - 30-65ms pulses per coin (PULSES coin mode)
 - **D5 (GPIO14)** ← Error signal input (via PC817 #3)
   - Active LOW (LOW = error condition)
-- **D6 (GPIO12)** ← Empty sensor input (via PC817 #4)
-  - Active LOW (LOW = NOT empty, HIGH = empty)
+- **D6 (GPIO12)** — free. The empty sensor is a factory option this hopper
+  does not have; the pin never carried a signal and `hopper_low` was removed
+  from the protocol in issue #6 rather than published as data.
 
 **Hopper Connector Pinout (10-pin Molex):**
 - Pins 1, 2, 3: 12V VCC
@@ -177,15 +179,30 @@ Daemon config at `/etc/pos-daemon/config.toml`:
 - **Full dispense timeout**: 60s
 
 ### State Machine
-ESP8266 tracks exactly one active transaction. States:
+ESP8266 tracks exactly one active transaction. **Transaction** states:
 - `idle` - ready for new transaction
-- `reserved` - locked, awaiting confirm
-- `dispensing` - motor running, tokens dropping
+- `dispensing` - motor running, tokens dropping (including the 500 ms settling window)
 - `done` - completed successfully
-- `error` - hardware fault or jam
-- `cancelled` - reservation released without dispensing
+- `error` - the transaction failed; `error_type` says why
+
+The **device** has a state of its own, and the two are not the same thing
+(issue #6). `GET /health` reports one `state` (`idle | dispensing | fault`)
+and one `fault` (`none | jam | hopper_error`, with `fault_code`):
+
+- A jam timeout or a decoded hopper error raises the fault and aborts the
+  dispense at once.
+- While it is up, a new `POST /dispense` is `409 fault`; an idempotent retry
+  and `GET /dispense/{tx_id}` still answer `200`.
+- **Only a power cycle clears a fault** (owner decision, 2026-09-20). There is
+  no reset route, none in the TUI and none on the kiosk, and the fault is not
+  persisted — any boot clears it, and a jam that is still there simply faults
+  the next dispense again, having dispensed and billed nothing.
+- **A recovered crash sets no fault**: the transaction is an `error`, the
+  device is `idle` and sellable. One watchdog reset used to take the machine
+  out of service.
 
 ### Error Handling
-- Hopper jam: partial dispense recorded with exact `dispensed` count
+- Hopper jam: partial dispense recorded with exact `dispensed` count, `error_type: "JAM_TIMEOUT"`, device faulted
+- Decoded hopper error: the motor stops immediately, `error_code`/`error_type` name the Azkoyen fault, device faulted
 - Network timeout: idempotent retry safe
 - Power loss: flash persistence enables recovery; `count_reliable: false` says the count is a lower bound

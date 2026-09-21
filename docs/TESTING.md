@@ -5,6 +5,13 @@
 **Device:** Wemos D1 Mini (ESP8266)
 **IP Address:** 192.168.188.244
 
+> **This is the record of a test session on firmware 1.0.0**, kept for what it
+> found. The `/health` bodies quoted below are protocol 1 and no longer the
+> shape the device answers: `status`, `dispenser` and `hopper_low` are gone,
+> replaced by one `state` and one `fault` (issue #6). The contract is
+> `dispenser-protocol.md`; what is executable of this session now lives in
+> `token-tui conformance`.
+
 ---
 
 ## Test Environment
@@ -501,10 +508,11 @@ The following scenarios cannot be fully tested without the Azkoyen Hopper U-II c
 - **Expected:** FALLING edge interrupt triggers correctly
 - **Expected:** No pulse counting errors up to 20 tokens
 
-### 16. Hopper Low Sensor
-- **Requires:** Hopper with low token condition
-- **Expected:** hopper_low field in /health returns true
-- **Expected:** D8 pin reads LOW when sensor active
+### 16. Hopper Low Sensor — **dropped (issue #6)**
+The empty sensor is a factory option this Hopper U-II does not have. The line
+never produced a signal, the pin sat on its pull-up, and `/health` published
+"not empty" as if it were a measurement. `hopper_low` was removed from the
+protocol, the firmware and the pin list; there is nothing here to test.
 
 ### 17. Extended Reliability Test
 - **Requires:** 100+ consecutive dispense operations
@@ -616,7 +624,7 @@ Before testing, ensure:
 - [ ] Backup config.h securely (contains secrets)
 - [ ] Test all endpoints in production environment
 - [ ] Monitor healthchecks.io integration (from Pi daemon)
-- [ ] Set up alerting for hopper_low condition
+- [ ] Set up alerting on `fault != "none"` (there is no hopper_low to alert on — issue #6)
 
 ---
 

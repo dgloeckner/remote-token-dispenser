@@ -25,6 +25,7 @@ anyone noticing. Two rules keep them honest:
 - [Data Types](#data-types)
 - [Endpoints](#endpoints)
   - [GET /health](#get-health)
+  - [GET /debug](#get-debug)
   - [POST /dispense](#post-dispense)
   - [GET /dispense/{tx_id}](#get-dispensetx_id)
 - [State Machine](#state-machine)
@@ -61,7 +62,7 @@ protocol 2 replaced protocol 1 outright and a mismatch means something was not
 deployed, never something to work around at runtime.
 
 ```json
-{"protocol": 2, "status": "ok", "...": "..."}
+{"protocol": 2, "state": "idle", "fault": "none", "...": "..."}
 ```
 
 Protocol 1 was the shape before the conformance suite existed; nothing speaks
@@ -148,12 +149,62 @@ Tokens are **physically dispensed before payment processing**. This ensures:
 - No payment refunds for dispense failures
 - Simple reconciliation (what was dispensed = what is charged)
 
-### 6. Self-Healing Error Recovery
-Hardware errors (from Azkoyen error signal) persist until either:
-- **Manual reset:** Power cycle clears error state
-- **Self-healing:** Successful token dispense automatically clears active error
+### 6. A fault is a device condition, and only a power cycle ends it
 
-Jams (timeout-based) always require manual intervention (power cycle). The dispenser enters `error` state and rejects new requests until reset.
+Two things used to be the same word. "The last transaction failed" and "this
+machine needs a human" are different facts with different consequences, and
+`error` meant both.
+
+The device therefore carries a **fault** of its own, reported by `GET /health`
+and independent of any transaction:
+
+| `fault` | Raised by | Means |
+|---------|-----------|-------|
+| `none` | — | the device is fine |
+| `jam` | the 5 s jam watchdog | nothing came out; something is wedged, or the hopper is empty |
+| `hopper_error` | a decoded error on the hopper's error line (`fault_code` 1-7) | the hopper itself reported a fault |
+
+Three rules, all of them owner decisions of 2026-09-20:
+
+1. **A fault aborts the dispense at once.** The motor stops when the hopper
+   says "motor fault", not five seconds later when the jam watchdog notices.
+2. **While `fault != none`, a new `POST /dispense` is `409 fault`.** An
+   idempotent hit — the transaction that is running, or one in the history
+   ring — is still answered with `200` and its state: that caller is asking
+   what happened to tokens that already fell, not asking for new ones. `GET
+   /dispense/{tx_id}` likewise keeps answering.
+3. **A fault is cleared by a reboot and by nothing else.** There is no
+   `POST /reset`, no button in the TUI and none on the kiosk. The staff
+   instruction is *clear the jam, refill if empty, pull the plug for 5 s*
+   (`hardware/README.md`).
+
+The fault is **not persisted**: any boot clears it, exactly as before. That a
+watchdog reset, the RST button or the WiFi supervisor's restart also clears a
+jam is known and accepted — if the jam is still there, the next dispense runs
+into the 5 s timeout and faults again, having dispensed and billed nothing.
+
+**A recovered crash sets no fault.** The transaction is an `error`; the device
+is `idle`. This is the whole point of the separation: one watchdog reset used
+to take the machine out of service, because the terminal read `error`, greyed
+the token products out, and the dispense that would have cleared the state was
+exactly the one nobody could start.
+
+There is no self-healing any more. A successful dispense used to clear an
+active hardware error, which cannot happen now — a decoded error faults the
+device, and a faulted device does not dispense.
+
+### 7. No sensor that is not fitted
+
+`hopper_low` is **not part of this protocol**. The Hopper U-II's empty sensor
+is a factory option (`docs/azkoyen-hopper-protocol.md` § 1, *With Empty Sensor
+(Optional)*) and the unit in the boathouse does not have it: D6 sat on its
+pull-up and read *not low* forever, and `/health` published that as if it were
+a measurement. A field that always says *fine* is worse than no field — every
+consumer built on it (kiosk warning, admin panel, a `degraded` status) would
+have been permanently and silently wrong.
+
+An empty hopper therefore ends as a `jam`, and the early warning comes from
+counting what was sold since the last refill, not from the device.
 
 ---
 
@@ -191,6 +242,8 @@ The following endpoints do NOT require authentication:
 | `state` | enum | `"idle"`, `"dispensing"`, `"done"`, `"error"` | `"dispensing"` |
 | `timestamp` | integer | Seconds since boot (uptime) | `84230` |
 | `count_reliable` | boolean | `false` = `dispensed` is a lower bound, not a fact | `true` |
+| `fault` | enum | Device fault: `"none"`, `"jam"`, `"hopper_error"` | `"jam"` |
+| `error_type` | enum | Why a transaction failed: `"NONE"`, `"JAM_TIMEOUT"`, `"RESET"`, or an Azkoyen name | `"JAM_TIMEOUT"` |
 
 ---
 
@@ -212,83 +265,46 @@ Host: 192.168.4.20
 ```json
 {
   "protocol": 2,
-  "status": "ok",
+  "state": "idle",
+  "fault": "none",
+  "fault_code": 0,
   "uptime": 84230,
-  "firmware": "1.1.0",
+  "firmware": "1.2.0",
   "wifi": {
     "rssi": -47,
     "ip": "192.168.188.243",
     "ssid": "Ponyhof"
-  },
-  "dispenser": "idle",
-  "gpio": {
-    "coin_pulse": {"raw": 1, "active": false},
-    "error_signal": {"raw": 1, "active": false},
-    "hopper_low": {"raw": 1, "active": false}
   },
   "metrics": {
     "total_dispenses": 1247,
     "successful": 1189,
     "jams": 3,
     "partial": 2,
+    "crashes": 1,
     "failures": 55,
+    "requested_tokens": 3120,
+    "dispensed_tokens": 3098,
     "overrun_tokens": 4,
     "filtered_pulses": 11
-  },
-  "error": {
-    "active": false
   },
   "error_history": []
 }
 ```
 
-**Response (200 OK) - With Active Error:**
+**Response (200 OK) — faulted:**
 ```json
 {
   "protocol": 2,
-  "status": "ok",
+  "state": "fault",
+  "fault": "hopper_error",
+  "fault_code": 3,
   "uptime": 84230,
-  "firmware": "1.1.0",
-  "wifi": {
-    "rssi": -47,
-    "ip": "192.168.188.243",
-    "ssid": "Ponyhof"
-  },
-  "dispenser": "error",
-  "gpio": {
-    "coin_pulse": {"raw": 1, "active": false},
-    "error_signal": {"raw": 0, "active": true},
-    "hopper_low": {"raw": 1, "active": false}
-  },
-  "metrics": {
-    "total_dispenses": 1247,
-    "successful": 1189,
-    "jams": 3,
-    "partial": 2,
-    "failures": 55,
-    "overrun_tokens": 4,
-    "filtered_pulses": 11
-  },
-  "error": {
-    "active": true,
-    "code": 3,
-    "type": "JAM_PERMANENT",
-    "timestamp": 82150,
-    "description": "Permanent jam detected"
-  },
+  "firmware": "1.2.0",
+  "wifi": {"rssi": -47, "ip": "192.168.188.243", "ssid": "Ponyhof"},
+  "metrics": {"...": "..."},
   "error_history": [
-    {
-      "code": 3,
-      "type": "JAM_PERMANENT",
-      "timestamp": 82150,
-      "cleared": false
-    },
-    {
-      "code": 1,
-      "type": "COIN_STUCK",
-      "timestamp": 75400,
-      "cleared": true
-    }
+    {"code": 3, "type": "JAM_PERMANENT", "timestamp": 82150},
+    {"code": 1, "type": "COIN_STUCK", "timestamp": 75400}
   ]
 }
 ```
@@ -298,48 +314,69 @@ Host: 192.168.4.20
 | Field | Type | Description |
 |-------|------|-------------|
 | `protocol` | integer | Protocol version; always `2`. A client that reads anything else refuses the device. |
-| `status` | string | Overall health: `"ok"`, `"degraded"`, `"error"` |
+| `state` | string | **Required.** The device: `"idle"`, `"dispensing"` or `"fault"`. One field, not two. |
+| `fault` | string | **Required.** `"none"`, `"jam"` or `"hopper_error"` (Design Principle 6). |
+| `fault_code` | integer | **Required.** The Azkoyen code 1-7 behind a `hopper_error`, `0` otherwise. |
 | `uptime` | integer | Seconds since boot |
 | `firmware` | string | Firmware version |
-| `wifi` | object | WiFi connection info |
-| `wifi.rssi` | integer | Signal strength in dBm (-30 to -90) |
-| `wifi.ip` | string | ESP8266 IP address |
-| `wifi.ssid` | string | Connected WiFi network name |
-| `dispenser` | string | Current state: `"idle"`, `"dispensing"`, `"error"` |
-| `gpio` | object | GPIO pin states |
-| `gpio.coin_pulse` | object | Coin sensor state (`raw`: pin value, `active`: interpreted state) |
-| `gpio.error_signal` | object | Error signal state (`raw`: pin value, `active`: interpreted state) |
-| `gpio.hopper_low` | object | Hopper low sensor state (`raw`: pin value, `active`: interpreted state) |
+| `wifi` | object | WiFi connection info (`rssi`, `ip`, `ssid`) |
 | `metrics` | object | Dispense metrics |
 | `metrics.total_dispenses` | integer | Total dispense attempts since boot |
 | `metrics.successful` | integer | Completed successfully |
-| `metrics.jams` | integer | Jam errors detected (timeout-based) |
-| `metrics.partial` | integer | Partial dispenses (subset of jams) |
+| `metrics.jams` | integer | Jam timeouts |
+| `metrics.partial` | integer | Failed transactions that had already dispensed something |
+| `metrics.crashes` | integer | Transactions recovered after a reset |
 | `metrics.failures` | integer | Total failures (jams + other errors) |
-| `metrics.overrun_tokens` | integer | Tokens delivered past the requested quantity, across all transactions (see Design Principle 4b) |
-| `metrics.filtered_pulses` | integer | Falling edges on the coin line rejected as noise since the last transaction started |
-| `error` | object | Active error information |
-| `error.active` | boolean | Whether an error is currently active |
-| `error.code` | integer | Error code (1-7, see Error Codes section) |
-| `error.type` | string | Error type name (e.g., "JAM_PERMANENT") |
-| `error.timestamp` | integer | Uptime when error was detected |
-| `error.description` | string | Human-readable error description |
-| `error_history` | array | Last 5 error events (newest first) |
-| `error_history[].code` | integer | Error code (1-7) |
+| `metrics.requested_tokens` | integer | Tokens asked for, across all transactions |
+| `metrics.dispensed_tokens` | integer | Tokens that actually left the hopper |
+| `metrics.overrun_tokens` | integer | Tokens delivered past the requested quantity (Design Principle 4b) |
+| `metrics.filtered_pulses` | integer | Falling edges on the coin line rejected as noise |
+| `error_history` | array | Last 5 decoded hopper errors, newest first |
+| `error_history[].code` | integer | Error code (1-7, see Error Codes) |
 | `error_history[].type` | string | Error type name |
-| `error_history[].timestamp` | integer | Uptime when error was detected |
-| `error_history[].cleared` | boolean | Whether error has been cleared |
+| `error_history[].timestamp` | integer | Uptime when the error was decoded |
 
-**Status Levels:**
-- `"ok"` - Operating normally, dispenser idle or active
-- `"degraded"` - Hopper low warning
-- `"error"` - Active jam/fault, dispenser unavailable
+**What is deliberately NOT here:**
+
+- **`status`** (`ok`/`degraded`/`error`) — it overlapped `dispenser`, the
+  terminal ORed the two together, and nothing decided which won when they
+  disagreed. The firmware hard-coded it to `"ok"`, so it never said anything
+  at all. `state` and `fault` replace both.
+- **`dispenser`** — replaced by `state`, which is the same information with a
+  `fault` value the old enum did not have.
+- **the `error` block** — what an active hardware error *means* is the fault;
+  the decoded errors themselves are in `error_history`, which has no `cleared`
+  flag any more because nothing clears them short of a power cycle.
+- **the `gpio` block** — raw pin levels moved to `GET /debug`. A monitor
+  cannot act on them and a member cannot read them.
+- **`hopper_low`** — see Design Principle 7.
 
 **Usage:**
-System monitors should poll this endpoint every 60 seconds to track:
+Monitors poll this every 60 seconds:
+- Available: `state != "fault"`
+- Needs a human: `fault != "none"` — and the errand is `fault`/`fault_code`
 - Success rate: `successful / total_dispenses`
-- Jam rate: `jams / total_dispenses`
-- Dispenser availability: `dispenser != "error"`
+
+---
+
+### GET /debug
+
+The raw pin levels, for the bench and the TUI. Nothing here is a protocol
+promise about behaviour; it is an instrument.
+
+**Authentication:** Required (`X-API-Key` header)
+
+**Response (200 OK):**
+```json
+{
+  "gpio": {
+    "coin_pulse": {"raw": 1, "active": false},
+    "error_signal": {"raw": 1, "active": false}
+  }
+}
+```
+
+There is no `hopper_low` pin here either (Design Principle 7).
 
 ---
 
@@ -376,7 +413,9 @@ Content-Type: application/json
   "state": "dispensing",
   "quantity": 3,
   "dispensed": 0,
-  "count_reliable": true
+  "count_reliable": true,
+  "error_code": 0,
+  "error_type": "NONE"
 }
 ```
 
@@ -387,7 +426,9 @@ Content-Type: application/json
   "state": "done",
   "quantity": 3,
   "dispensed": 3,
-  "count_reliable": true
+  "count_reliable": true,
+  "error_code": 0,
+  "error_type": "NONE"
 }
 ```
 
@@ -419,10 +460,26 @@ Causes:
 }
 ```
 
-Returned when:
-- **Another** transaction is currently `dispensing` — `active_tx_id` names it,
-  and it is never the `tx_id` of the request itself
-- Dispenser is in `error` state (jam, requires reset)
+Returned when **another** transaction is currently `dispensing` —
+`active_tx_id` names it, and it is never the `tx_id` of the request itself.
+
+**Response (409 Conflict) - Faulted:**
+```json
+{
+  "error": "fault",
+  "fault": "jam",
+  "fault_code": 0
+}
+```
+
+The device needs a human (Design Principle 6). `fault` says which errand —
+`jam` is "clear it and refill if it is empty", `hopper_error` with its
+`fault_code` is the hopper's own verdict. The answer never says how to clear
+it, because there is no way from here: the instruction is to pull the plug.
+
+An idempotent hit is **not** refused this way: a `POST` for the transaction
+that failed, or for one in the history ring, still answers `200` with its
+state, and so does `GET /dispense/{tx_id}`.
 
 **Response (409 Conflict) - Reused transaction ID:**
 ```json
@@ -502,10 +559,14 @@ requests whenever the network happens to split them.
    - Answering with the stored quantity would look like the confirmation of a
      request that was never made
 
-4. **Busy/Error:** If **another** transaction is dispensing, or the dispenser is
-   in `error`:
-   - Return `409 Conflict`
+4. **Busy:** If **another** transaction is dispensing:
+   - Return `409 Conflict` with `{"error": "busy", ...}`
    - Client should retry after delay or check status
+
+5. **Faulted:** If the device has a fault:
+   - Return `409 Conflict` with `{"error": "fault", "fault": …, "fault_code": …}`
+   - Retrying does not help and must not be automatic: somebody has to clear
+     the jam and power-cycle the device
 
 ---
 
@@ -535,7 +596,9 @@ X-API-Key: your-secret-api-key-here
   "state": "dispensing",
   "quantity": 3,
   "dispensed": 2,
-  "count_reliable": true
+  "count_reliable": true,
+  "error_code": 0,
+  "error_type": "NONE"
 }
 ```
 
@@ -546,7 +609,22 @@ X-API-Key: your-secret-api-key-here
   "state": "error",
   "quantity": 5,
   "dispensed": 0,
-  "count_reliable": false
+  "count_reliable": false,
+  "error_code": 0,
+  "error_type": "RESET"
+}
+```
+
+**Response (200 OK) - The hopper reported a fault during it:**
+```json
+{
+  "tx_id": "a3f8c012",
+  "state": "error",
+  "quantity": 5,
+  "dispensed": 1,
+  "count_reliable": true,
+  "error_code": 5,
+  "error_type": "MOTOR_FAULT"
 }
 ```
 
@@ -559,6 +637,14 @@ X-API-Key: your-secret-api-key-here
 | `quantity` | integer | Requested token count |
 | `dispensed` | integer | Actual tokens dispensed so far. **May exceed `quantity`** (Design Principle 4b) |
 | `count_reliable` | boolean | **Required.** `false` means `dispensed` is a lower bound (see Design Principle 4a) |
+| `error_code` | integer | **Required.** The Azkoyen code 1-7 when the hopper reported one during this transaction, `0` otherwise |
+| `error_type` | string | **Required.** `"NONE"` on a transaction that did not fail; `"JAM_TIMEOUT"`, `"RESET"`, or the Azkoyen name for `error_code` |
+
+**Why the pair is required on every response, including the successful ones:**
+one flat `"error"` made a jam, an empty hopper and a dead sensor the same row
+on the terminal. A field that appears only on failures would leave a reader
+defaulting it — and "nothing went wrong" and "the device never said" are
+different answers.
 
 **Response (400 Bad Request) - Invalid tx_id:**
 ```json
@@ -647,25 +733,25 @@ idle ──POST /dispense──► dispensing ──[success]──► done
    - The state stays `dispensing` for the whole window; the device is busy
 
 3. **dispensing → error:**
-   - Trigger: Jam timeout (5 seconds without pulse)
-   - Actions: Stop motor, persist state with partial count
-   - Result: Requires manual reset (power cycle)
+   - Trigger: the 5 s jam timeout, or a decoded hopper error, or a reset
+     while the transaction was running
+   - Actions: stop the motor, persist the partial count with its
+     `error_type`, and — for the first two — raise the device `fault`
+   - Result: the transaction is closed. The *device* is faulted for the first
+     two and idle for the third
 
-**Error State Recovery:**
+**The transaction state and the device state are two different things.** A
+transaction ends in `error` and stays there; whether the *machine* is usable
+afterwards is the `fault` in `GET /health`:
 
-Errors can be cleared in two ways:
+| What happened | transaction | `state` | `fault` |
+|---------------|-------------|---------|---------|
+| Jam timeout | `error`, `JAM_TIMEOUT` | `fault` | `jam` |
+| Decoded hopper error | `error`, the Azkoyen name | `fault` | `hopper_error` (+ `fault_code`) |
+| Reset mid-dispense | `error`, `RESET` | `idle` | `none` |
 
-1. **Self-healing (hardware errors only):**
-   - When a successful dispense completes (`dispensing` → `done`)
-   - Active hardware error is automatically cleared
-   - Dispenser returns to `idle` and accepts new requests
-   - This handles transient hardware issues
-
-2. **Manual reset (all errors):**
-   - Operator physically clears jam/issue
-   - Power cycle (reboot) ESP8266
-   - On boot, ESP8266 clears `error` state → returns to `idle`
-   - Required for jam timeouts and persistent hardware faults
+**Leaving a fault:** a power cycle, and nothing else (Design Principle 6).
+On boot the device is `idle` again, whatever it was before.
 
 ---
 
@@ -700,8 +786,9 @@ The table lives in `dispenser-client-tui/conformance_cases.go`. Adding to it:
   `health_reports_overrun_tokens` in CI, and on a real device the hopper
   simulator's `b` and `c` commands drive `bounce_burst_counts_one_token_per_coin`
   and `coast_pulse_is_counted_as_an_overrun`, which need `--interactive`.
-- Known-red today: `post_while_error_is_409` (firmware accepts a dispense while
-  a hardware error is active — issue #6). It is green against the mock.
+- No case is known-red today. `post_while_error_is_409` was, against the
+  firmware, from #1 until #6 fixed it; it is now `post_while_fault_is_409` and
+  green against firmware, mock and the suite's own fake device.
 - The two resets of Design Principle 4 are covered from both sides: the mock
   runs `crashed_tx_is_found_after_reboot` and `power_loss_reports_count_unreliable`
   in CI (its scenarios for quantity 5 and 17), and on a real device the same
@@ -730,7 +817,7 @@ exists once the HTTP layer and the hardware are in play.
 | `404` | `not found` | Unknown `tx_id` | Check tx_id, may have expired |
 | `409` | `busy` | Another transaction active | Wait and retry |
 | `409` | `tx_id reused` | Known `tx_id`, different `quantity` | Use a fresh `tx_id` |
-| `409` | `error` (dispenser in error state) | Jam or hardware fault | Clear jam, power cycle |
+| `409` | `fault` | The device has a jam or a hopper error | Clear the jam, refill if empty, power cycle |
 | `413` | `body too large` | Body over 256 bytes | Send a dispense request, nothing else |
 | `415` | `content-type must be application/json` | Wrong/missing Content-Type | Set `Content-Type: application/json` |
 
@@ -750,8 +837,10 @@ These error codes are reported via the error signal pin (GPIO D5) from the Azkoy
 
 **Error Signal Protocol:**
 - Errors are pulse-encoded: 100ms start pulse + N×10ms pulses (where N = error code)
-- Active errors persist until cleared by successful dispense or power cycle
-- Error history tracks last 5 errors with timestamps and cleared status
+- A decoded error aborts the running dispense and raises the device `fault`;
+  only a power cycle ends it (Design Principle 6)
+- `error_history` keeps the last 5 with their timestamps — there is no
+  `cleared` flag, because nothing clears them
 
 ---
 
@@ -872,16 +961,23 @@ one meaning, "the request never arrived".
   "tx_id": "abc123",
   "state": "error",
   "quantity": 5,
-  "dispensed": 2
+  "dispensed": 2,
+  "count_reliable": true,
+  "error_code": 0,
+  "error_type": "JAM_TIMEOUT"
 }
 ```
 
 **Resolution:**
-1. Operator physically clears jam
-2. Power cycle ESP8266
-3. On boot, ESP8266 clears error → returns to `idle`
-4. Client records partial dispense in local DB
+1. Operator physically clears the jam — and refills the hopper if it was
+   simply empty, which looks exactly the same from outside
+2. Power cycle the ESP8266 (5 s off)
+3. On boot the fault is gone and the device is `idle`
+4. Client records the partial dispense in its local DB
 5. Backend reconciliation handles refund/credit
+
+While the fault is up, every new `POST /dispense` is `409 fault`; a retry of
+the transaction that jammed still answers `200` with its partial count.
 
 ---
 
@@ -902,62 +998,55 @@ one meaning, "the request never arrived".
 
 **Resolution:**
 1. Second client waits
-2. Polls `GET /health` to check `dispenser` state
-3. When `dispenser == "idle"`, retries original request
+2. Polls `GET /health` to check `state`
+3. When `state == "idle"`, retries original request
 
 ---
 
-### Self-Healing Hardware Error
+### Hardware Error During a Dispense
 
-**Scenario:** Hopper reports transient hardware error (e.g., COIN_STUCK), but clears itself.
+**Scenario:** the hopper reports a decoded error (e.g. MOTOR_FAULT, code 5)
+while tokens are being dispensed.
 
 **Detection:**
-1. ESP8266 detects error signal from hopper
-2. Error decoder identifies error code (e.g., code 1 = COIN_STUCK)
-3. Error recorded in history with `cleared: false`
-4. Health endpoint reports active error
-
-**Client Response:**
-```bash
-$ curl http://192.168.4.20/health
-{
-  "dispenser": "idle",
-  "error": {
-    "active": true,
-    "code": 1,
-    "type": "COIN_STUCK",
-    "timestamp": 75400,
-    "description": "Coin stuck in exit sensor (>65ms)"
-  }
-}
-```
-
-**Self-Healing:**
-1. Client initiates new dispense transaction
-2. Dispense completes successfully (`dispensing` → `done`)
-3. ESP8266 automatically clears active error
-4. Error marked as `cleared: true` in history
-5. Dispenser continues normal operation
+1. The error line is pulse-encoded: a 100 ms start pulse plus N×10 ms pulses
+2. The firmware decodes it in `loop()` and hands it to the dispense manager —
+   the one place that may stop a motor
+3. The motor stops **now**, not in five seconds when the jam watchdog notices
+4. The transaction is closed as `error` with `error_code: 5`,
+   `error_type: "MOTOR_FAULT"` and the exact count of what did fall
+5. The device raises `fault: "hopper_error"` with `fault_code: 5`
 
 ```bash
 $ curl http://192.168.4.20/health
-{
-  "dispenser": "idle",
-  "error": {
-    "active": false
-  },
-  "error_history": [
-    {
-      "code": 1,
-      "type": "COIN_STUCK",
-      "timestamp": 75400,
-      "cleared": true
-    }
-  ]
-}
+{"protocol":2,"state":"fault","fault":"hopper_error","fault_code":5,"...":"..."}
+
+$ curl -X POST http://192.168.4.20/dispense -H "X-API-Key: secret" \
+  -H "Content-Type: application/json" -d '{"tx_id":"next1","quantity":2}'
+409 Conflict
+{"error":"fault","fault":"hopper_error","fault_code":5}
 ```
 
-**Resolution:** No manual intervention required. System self-healed.
+**Resolution:** a human, then a power cycle. There is no self-healing: a
+successful dispense used to clear an active hardware error, which cannot
+happen any more, because a faulted device does not dispense.
+
+---
+
+### Reset Mid-Dispense Leaves the Device Usable
+
+**Scenario:** a watchdog reset, an exception or a brownout while the motor
+runs — the reset a motor on a shared supply actually causes.
+
+**Behaviour:** the transaction is recovered and closed as `error` with
+`error_type: "RESET"` and its count (Design Principle 4), and the device comes
+up `idle` with `fault: "none"`.
+
+**Why it matters:** before issue #6 the recovered transaction left the device
+reporting `error`. The terminal treats an unavailable dispenser by greying out
+the token products — so the only thing that could have cleared the state, a
+new dispense, was the one thing nobody could start. Somebody had to pull the
+plug on a machine with nothing wrong with it.
 
 ---
 
@@ -1079,17 +1168,17 @@ $ curl -X POST http://192.168.4.20/dispense \
 
 # 3. Poll shows error
 $ curl -H "X-API-Key: secret" http://192.168.4.20/dispense/jam123
-{"tx_id":"jam123","state":"error","quantity":5,"dispensed":2}
+{"tx_id":"jam123","state":"error","quantity":5,"dispensed":2,"count_reliable":true,"error_code":0,"error_type":"JAM_TIMEOUT"}
 
-# 4. Check health (dispenser in error state)
+# 4. Check health (the device is faulted)
 $ curl http://192.168.4.20/health
-{"dispenser":"error",...}
+{"state":"fault","fault":"jam","fault_code":0,...}
 
-# 5. Operator clears jam, power cycles ESP8266
+# 5. Operator clears the jam, refills if empty, power cycles the ESP8266
 
-# 6. After reboot, dispenser returns to idle
+# 6. After the reboot the device is idle again
 $ curl http://192.168.4.20/health
-{"dispenser":"idle",...}
+{"state":"idle","fault":"none","fault_code":0,...}
 
 # 7. Client can now start new transactions
 ```
@@ -1108,7 +1197,7 @@ $ curl http://192.168.4.20/health
   - D1 (GPIO5): Motor control output
   - D7 (GPIO13): Coin pulse input (FALLING edge interrupt)
   - D5 (GPIO14): Error signal input
-  - D6 (GPIO12): Hopper low sensor input
+  - D6 (GPIO12): free — the empty sensor is not fitted (Design Principle 7)
 
 ### Ring Buffer
 
@@ -1126,6 +1215,8 @@ struct PersistedTransaction {
   uint8_t dispensed;       // Actual count
   uint8_t state;           // TransactionState, as one byte
   uint8_t count_reliable;  // 1 = dispensed is exact
+  uint8_t error_kind;      // why it failed: none | jam_timeout | hopper | reset
+  uint8_t error_code;      // the Azkoyen code 1-7 for a hopper error, else 0
 };
 
 struct PersistedRecord {
@@ -1142,6 +1233,10 @@ struct PersistedRecord {
 Written to EEPROM address 0 on every state transition — **one commit, not one
 per token**. A successful dispense costs exactly two: the start and the finish.
 The record is no longer cleared on completion; the ring *is* the record.
+
+The **device fault is deliberately not in this record.** A fault is cleared by
+any boot, which is the whole of the reset story; persisting it would make the
+power cycle that is supposed to end a jam the one thing that cannot.
 
 `state` is a `uint8_t` and not the enum: this struct is a wire format between
 two builds of the firmware, and the width of an enum is not promised by the
@@ -1209,9 +1304,20 @@ All inputs validated:
   `404` means "never arrived" again. The flash record carries a magic, a layout
   version and a CRC-16, and a completed dispense costs two commits instead of
   two plus an erase.
-- Known deviation of the firmware from this document: issue #6 (dispense while
-  a hardware error is active); the suite reports it per case rather than
-  hiding it
+- **The fault model (#6):** the device carries a `fault` (`none | jam |
+  hopper_error` with a `fault_code`) of its own, separate from "the last
+  transaction failed". A jam timeout or a decoded hopper error raises it and
+  aborts the dispense at once; while it is up a new `POST /dispense` is
+  `409 fault` and an idempotent hit is still `200`. It is cleared by a reboot
+  and by nothing else — no reset route, none in the TUI, none on the kiosk —
+  and it is **not persisted**, so any boot clears it. A recovered crash sets
+  **no** fault: the transaction is an `error`, the device is `idle` and
+  sellable. `GET /health` was redesigned around one `state` and one `fault`;
+  `status`, `dispenser`, the `error` block and the raw `gpio` block are gone,
+  and the pin levels moved to `GET /debug`. `hopper_low` was **removed from
+  the protocol**: the empty sensor is a factory option this hopper does not
+  have. Transaction responses now carry required `error_code` / `error_type`.
+  Persisted layout version 3.
 
 ### Version 1.1.0 (2026-02-14)
 - **Error decoding:** Added Azkoyen hardware error code detection (7 error types)

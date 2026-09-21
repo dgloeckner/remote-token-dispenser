@@ -120,11 +120,14 @@ Every 60 seconds, the daemon calls `GET http://<wemos-ip>/health` on the Wemos.
 
 ```rust
 struct WemosHealth {
-    status: String,       // "ok"
     uptime_s: u64,
     firmware: String,
-    dispenser: String,    // "idle" | "dispensing" | "error"
-    hopper_low: bool,
+    // One state and one fault (issue #6).  There is no `status` and no
+    // `hopper_low`: the first overlapped `dispenser` and was hard-coded "ok",
+    // the second was a sensor this hopper does not have.
+    state: String,        // "idle" | "dispensing" | "fault"
+    fault: String,        // "none" | "jam" | "hopper_error"
+    fault_code: u8,       // Azkoyen 1-7 for a hopper_error, else 0
 }
 ```
 
@@ -133,9 +136,8 @@ struct WemosHealth {
 | Condition            | Detection                        | Severity |
 |----------------------|----------------------------------|----------|
 | Wemos unreachable    | HTTP timeout (3s) × 3 retries   | Critical |
-| Hopper low           | `hopper_low: true`               | Warning  |
-| Hopper empty         | Last dispense error: `empty`     | Critical |
-| Dispenser jammed     | `dispenser: "error"`             | Critical |
+| Dispenser faulted    | `fault != "none"`                | Critical |
+| Hopper empty         | ends as `fault: "jam"`; the early warning is what was sold since the last refill, not the device | Critical |
 | Wemos rebooted       | `uptime_s` decreased since last  | Info     |
 | Firmware mismatch    | `firmware` != expected version   | Info     |
 
