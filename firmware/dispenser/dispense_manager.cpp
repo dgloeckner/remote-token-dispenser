@@ -103,6 +103,8 @@ void DispenseManager::begin() {
     }
 
     active_tx.state = STATE_ERROR;
+    active_tx.error_kind = TX_ERROR_RESET;
+    active_tx.error_code = 0;
 
     // Count the crashed transaction
     total_dispenses++;                        // Transaction was started before the reset
@@ -112,10 +114,19 @@ void DispenseManager::begin() {
 
     addToHistory(active_tx);
     countMemory.invalidate();
-    persistState();
 
     LOG_INFO("boot: %s recovered as ERROR after a reset, dispensed %u",
              active_tx.tx_id, (unsigned)active_tx.dispensed);
+
+    // The device itself is fine, and it says so: a recovered crash sets NO
+    // fault (issue #6).  Leaving the transaction in the active slot was what
+    // took the machine out of service over a watchdog reset — the terminal
+    // read "error", greyed the tokens out, and the dispense that would have
+    // cleared the state was exactly the one nobody could start.
+    memset(&active_tx, 0, sizeof(active_tx));
+    active_tx.state = STATE_IDLE;
+    active_tx.count_reliable = true;
+    persistState();
   } else if (active_tx.state == STATE_ERROR) {
     // Power cycled to clear a jam — the documented manual reset.  Only the
     // ACTIVE slot is cleared: the ring stays, so the transaction that jammed
@@ -164,6 +175,16 @@ DispenseOutcome DispenseManager::requestDispense(const char* tx_id, uint8_t quan
   if (active_tx.state == STATE_DISPENSING) {
     LOG_INFO("busy: %s is dispensing, %s rejected", active_tx.tx_id, tx_id);
     return DISPENSE_BUSY;
+  }
+
+  // The device fault, and it comes after the two idempotency checks on
+  // purpose: a terminal asking what became of a transaction it already sent
+  // gets its answer even now — it is asking about tokens that already fell,
+  // not for new ones.  A NEW transaction is refused until somebody pulls the
+  // plug (owner decision 3, 2026-09-20).
+  if (fault != FAULT_NONE) {
+    LOG_INFO("fault %s: %s rejected", faultToString(fault), tx_id);
+    return DISPENSE_FAULT;
   }
 
   // Accept the transaction — in memory only.  This call runs in the async TCP
@@ -265,6 +286,16 @@ void DispenseManager::loop() {
     return;
   }
 
+  // The hopper's own verdict, ahead of everything the firmware infers.  It
+  // is checked even while idle: "the hopper is jammed" does not stop being
+  // true because nothing is running, and the next POST must be refused
+  // rather than driving a motor into it (issue #6).
+  uint8_t decoded = hopperControl.takeDecodedError();
+  if (decoded != 0) {
+    raiseFault(FAULT_HOPPER_ERROR, decoded, TX_ERROR_HOPPER);
+    return;
+  }
+
   if (active_tx.state != STATE_DISPENSING) {
     return;  // Nothing to monitor
   }
@@ -310,26 +341,65 @@ void DispenseManager::loop() {
 
   // Check for jam
   if (hopperControl.checkJam()) {
-    LOG_INFO("jam: %s stopped at %u/%u",
-             active_tx.tx_id, (unsigned)active_tx.dispensed, (unsigned)active_tx.quantity);
-    hopperControl.stopMotor();
-    settling = false;
-    active_tx.state = STATE_ERROR;
-    addToHistory(active_tx);
-    countMemory.invalidate();
-    persistState();
+    LOG_ERROR("jam: %s stopped at %u/%u",
+              active_tx.tx_id, (unsigned)active_tx.dispensed, (unsigned)active_tx.quantity);
     jam_count++;
-
-    // Track dispensed tokens even on jam (partial dispense)
-    dispensed_tokens += active_tx.dispensed;
-
-    if (active_tx.dispensed > 0) {
-      partial_count++;
-    }
-
-    // Stay in ERROR state - requires power cycle to clear
+    raiseFault(FAULT_JAM, 0, TX_ERROR_JAM_TIMEOUT);
     return;
   }
+}
+
+// The device needs a human.  Only a reboot ends this (owner decision 3,
+// 2026-09-20): there is no reset route, no button in the TUI and none on the
+// kiosk, and the fault is deliberately not persisted — any boot clears it, and
+// a jam that is still there simply faults the next dispense again, having
+// dispensed and billed nothing.
+void DispenseManager::raiseFault(DeviceFault which, uint8_t code, uint8_t error_kind) {
+  if (fault == FAULT_NONE) {
+    fault = which;
+    fault_code = code;
+    LOG_ERROR("fault %s (code %u): the device is out of service until a power cycle",
+              faultToString(which), (unsigned)code);
+  }
+
+  if (active_tx.state == STATE_DISPENSING) {
+    failActive(error_kind, code);
+  }
+}
+
+void DispenseManager::failActive(uint8_t error_kind, uint8_t error_code) {
+  // The motor first, before any log call: on this path it is time the motor
+  // is still running (issue #4).
+  hopperControl.stopMotor();
+  // The settling window is over, whatever it was waiting for.  A flag left
+  // standing here would let the next loop() pass finish a failed transaction
+  // as `done` once the 500 ms are up (issue #5).
+  settling = false;
+
+  active_tx.state = STATE_ERROR;
+  active_tx.error_kind = error_kind;
+  active_tx.error_code = error_code;
+
+  LOG_ERROR("%s failed as %s at %u/%u", active_tx.tx_id,
+            txErrorTypeToString(error_kind, error_code),
+            (unsigned)active_tx.dispensed, (unsigned)active_tx.quantity);
+
+  // The tokens that did fall are in the tray and are billed.
+  dispensed_tokens += active_tx.dispensed;
+  if (active_tx.dispensed > 0) {
+    partial_count++;
+  }
+
+  addToHistory(active_tx);
+  countMemory.invalidate();
+
+  // One commit, and the active slot goes empty with it: the failed
+  // transaction lives in the ring, where a GET still finds it, and the device
+  // state is the fault — not a transaction nobody can clear.
+  memset(&active_tx, 0, sizeof(active_tx));
+  active_tx.state = STATE_IDLE;
+  active_tx.count_reliable = true;
+  persistState();
 }
 
 Transaction DispenseManager::getTransaction(const char* tx_id) {
@@ -358,7 +428,10 @@ Transaction DispenseManager::getActiveTransaction() {
 }
 
 bool DispenseManager::isIdle() {
-  return active_tx.state != STATE_DISPENSING;
+  // A faulted device is not idle, whatever the transaction slot says.  Before
+  // #6 this asked only about STATE_DISPENSING, which is the whole bug: an
+  // active error let the next POST straight through.
+  return fault == FAULT_NONE && active_tx.state != STATE_DISPENSING;
 }
 
 // The device as GET /health reports it (issue #6).

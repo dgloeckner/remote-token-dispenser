@@ -22,6 +22,10 @@ private:
 
   // Endpoint handlers
   void handleHealth(AsyncWebServerRequest *request);
+  // The raw pin levels.  They left /health in issue #6: a monitor cannot act
+  // on them and a member cannot read them, and the one reader that wants them
+  // (the TUI on the bench) can send a key.
+  void handleDebug(AsyncWebServerRequest *request);
   // The POST is two callbacks, on purpose (issue #4).  collectDispenseBody()
   // only copies bytes; handleDispensePost() runs once the body is in, and is
   // reached even when there is no body at all — which is how an empty POST
@@ -36,6 +40,9 @@ private:
 
   // Utility
   const char* stateToString(TransactionState state);
+  // The transaction body every 200 carries, including the required
+  // count_reliable / error_code / error_type (dispenser-protocol.md).
+  void sendTransaction(AsyncWebServerRequest *request, const Transaction& tx);
 };
 
 #endif

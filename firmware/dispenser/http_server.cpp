@@ -42,6 +42,15 @@ void HttpServer::begin() {
     this->handleDispenseGet(request);
   });
 
+  // GET /debug - REQUIRES AUTH.  Raw pin levels for the bench (issue #6).
+  server.on("/debug", HTTP_GET, [this](AsyncWebServerRequest *request) {
+    this->handleDebug(request);
+  });
+
+  // Nothing else is registered, and POST /reset in particular is not: a fault
+  // is ended by a power cycle and by nothing else (owner decision,
+  // 2026-09-20).  The async server answers 404 for it, which is the protocol.
+
   server.begin();
   LOG_INFO("HTTP server started on port 80");
 }
@@ -69,7 +78,13 @@ void HttpServer::handleHealth(AsyncWebServerRequest *request) {
   JsonDocument doc;
 
   doc["protocol"] = PROTOCOL_VERSION;
-  doc["status"] = "ok";
+  // ONE state and ONE fault (issue #6).  The old document carried `status`
+  // (ok | degraded | error) next to `dispenser` (idle | dispensing | error),
+  // the terminal ORed the two together, and nothing decided which of them won
+  // when they disagreed.  `status` was hard-coded "ok" on top of that.
+  doc["state"] = deviceStateToString(dispenseManager.getDeviceState());
+  doc["fault"] = faultToString(dispenseManager.getFault());
+  doc["fault_code"] = dispenseManager.getFaultCode();
   doc["uptime"] = millis() / 1000;
   doc["firmware"] = FIRMWARE_VERSION;
 
@@ -79,23 +94,9 @@ void HttpServer::handleHealth(AsyncWebServerRequest *request) {
   wifi["ip"] = WiFi.localIP().toString();
   wifi["ssid"] = WiFi.SSID();
 
-  Transaction active = dispenseManager.getActiveTransaction();
-  doc["dispenser"] = stateToString(active.state);
-
-  // GPIO pin states
-  JsonObject gpio = doc.createNestedObject("gpio");
-
-  JsonObject coinPulse = gpio.createNestedObject("coin_pulse");
-  coinPulse["raw"] = hopperControl.getCoinPulseRaw();
-  coinPulse["active"] = hopperControl.isCoinPulseActive();
-
-  JsonObject errorSignal = gpio.createNestedObject("error_signal");
-  errorSignal["raw"] = hopperControl.getErrorSignalRaw();
-  errorSignal["active"] = hopperControl.isErrorSignalActive();
-
-  JsonObject hopperLow = gpio.createNestedObject("hopper_low");
-  hopperLow["raw"] = hopperControl.getHopperLowRaw();
-  hopperLow["active"] = hopperControl.isHopperLow();
+  // No `gpio` block: raw pin levels are GET /debug now, and there is no
+  // hopper_low anywhere any more — the empty sensor is a factory option this
+  // hopper does not have, so the line reported "not empty" forever.
 
   // Metrics
   JsonObject metrics = doc.createNestedObject("metrics");
@@ -123,21 +124,10 @@ void HttpServer::handleHealth(AsyncWebServerRequest *request) {
   // bounces is visible here before it is visible in a short dispense.
   metrics["filtered_pulses"] = hopperControl.getFilteredPulseCount();
 
-  // Add error information
-  ErrorRecord* activeError = hopperControl.errorHistory.getActive();
-  if (activeError) {
-    JsonObject err = doc.createNestedObject("error");
-    err["active"] = true;
-    err["code"] = (int)activeError->code;
-    err["type"] = errorCodeToString(activeError->code);
-    err["timestamp"] = activeError->timestamp;
-    err["description"] = errorCodeToDescription(activeError->code);
-  } else {
-    JsonObject err = doc.createNestedObject("error");
-    err["active"] = false;
-  }
-
-  // Add error history (last 5 errors)
+  // The decoded hopper errors, newest first.  There is no separate `error`
+  // block any more: what an active error MEANS is the fault above, and the
+  // records have no `cleared` flag because nothing clears them short of a
+  // power cycle.
   JsonArray history = doc.createNestedArray("error_history");
   ErrorRecord records[5];
   int count;
@@ -148,12 +138,53 @@ void HttpServer::handleHealth(AsyncWebServerRequest *request) {
     e["code"] = (int)records[i].code;
     e["type"] = errorCodeToString(records[i].code);
     e["timestamp"] = records[i].timestamp;
-    e["cleared"] = records[i].cleared;
   }
 
   String response;
   serializeJson(doc, response);
   request->send(200, "application/json", response);
+}
+
+void HttpServer::handleDebug(AsyncWebServerRequest *request) {
+  if (!checkAuth(request)) {
+    request->send(401, "application/json", "{\"error\":\"unauthorized\"}");
+    return;
+  }
+
+  JsonDocument doc;
+  JsonObject gpio = doc.createNestedObject("gpio");
+
+  JsonObject coinPulse = gpio.createNestedObject("coin_pulse");
+  coinPulse["raw"] = hopperControl.getCoinPulseRaw();
+  coinPulse["active"] = hopperControl.isCoinPulseActive();
+
+  JsonObject errorSignal = gpio.createNestedObject("error_signal");
+  errorSignal["raw"] = hopperControl.getErrorSignalRaw();
+  errorSignal["active"] = hopperControl.isErrorSignalActive();
+
+  String response;
+  serializeJson(doc, response);
+  request->send(200, "application/json", response);
+}
+
+void HttpServer::sendTransaction(AsyncWebServerRequest *request, const Transaction& tx) {
+  JsonDocument response;
+  response["tx_id"] = tx.tx_id;
+  response["state"] = stateToString(tx.state);
+  response["quantity"] = tx.quantity;
+  response["dispensed"] = tx.dispensed;
+  // Required on every transaction response: false means the count is a lower
+  // bound because the device lost power mid-dispense (dispenser-protocol.md).
+  response["count_reliable"] = tx.count_reliable;
+  // Also required, also on every response (issue #6): WHY it failed, if it
+  // did.  One flat "error" made a jam, an empty hopper and a dead sensor the
+  // same row on the terminal.
+  response["error_code"] = tx.error_code;
+  response["error_type"] = txErrorTypeToString(tx.error_kind, tx.error_code);
+
+  String responseStr;
+  serializeJson(response, responseStr);
+  request->send(200, "application/json", responseStr);
 }
 
 void HttpServer::collectDispenseBody(AsyncWebServerRequest *request,
@@ -243,6 +274,22 @@ void HttpServer::handleDispensePost(AsyncWebServerRequest *request) {
     return;
   }
 
+  if (outcome == DISPENSE_FAULT) {
+    // The device needs a human.  It says which kind, because "clear the jam"
+    // and "the hopper reports a motor fault" are different errands — and it
+    // never says how to clear it from here, because there is no way: the
+    // instruction is to pull the plug (owner decision, 2026-09-20).
+    JsonDocument response;
+    response["error"] = "fault";
+    response["fault"] = faultToString(dispenseManager.getFault());
+    response["fault_code"] = dispenseManager.getFaultCode();
+
+    String responseStr;
+    serializeJson(response, responseStr);
+    request->send(409, "application/json", responseStr);
+    return;
+  }
+
   if (outcome == DISPENSE_BUSY) {
     // Busy always means ANOTHER transaction now — a retry of the running one
     // is answered above with its current state (issue #2).
@@ -260,20 +307,7 @@ void HttpServer::handleDispensePost(AsyncWebServerRequest *request) {
   }
 
   // Return current transaction state
-  Transaction tx = dispenseManager.getTransaction(tx_id);
-
-  JsonDocument response;
-  response["tx_id"] = tx.tx_id;
-  response["state"] = stateToString(tx.state);
-  response["quantity"] = tx.quantity;
-  response["dispensed"] = tx.dispensed;
-  // Required on every transaction response: false means the count is a lower
-  // bound because the device lost power mid-dispense (dispenser-protocol.md).
-  response["count_reliable"] = tx.count_reliable;
-
-  String responseStr;
-  serializeJson(response, responseStr);
-  request->send(200, "application/json", responseStr);
+  sendTransaction(request, dispenseManager.getTransaction(tx_id));
 }
 
 void HttpServer::handleDispenseGet(AsyncWebServerRequest *request) {
@@ -309,16 +343,5 @@ void HttpServer::handleDispenseGet(AsyncWebServerRequest *request) {
     return;
   }
 
-  JsonDocument response;
-  response["tx_id"] = tx.tx_id;
-  response["state"] = stateToString(tx.state);
-  response["quantity"] = tx.quantity;
-  response["dispensed"] = tx.dispensed;
-  // Required on every transaction response: false means the count is a lower
-  // bound because the device lost power mid-dispense (dispenser-protocol.md).
-  response["count_reliable"] = tx.count_reliable;
-
-  String responseStr;
-  serializeJson(response, responseStr);
-  request->send(200, "application/json", responseStr);
+  sendTransaction(request, tx);
 }

@@ -138,6 +138,13 @@ private:
   DeviceFault fault;
   uint8_t fault_code;
 
+  // Raise the device fault and, if one is running, end the transaction with
+  // it.  The only callers are the jam watchdog and the decoded hopper error.
+  void raiseFault(DeviceFault which, uint8_t code, uint8_t error_kind);
+  // End the active transaction in STATE_ERROR: motor off, settling window
+  // closed, metrics, ring, one commit, active slot empty.
+  void failActive(uint8_t error_kind, uint8_t error_code);
+
 };
 
 #endif
