@@ -16,6 +16,7 @@
 #include "dispense_manager.h"
 #include "pulse_filter.h"
 #include "request_body.h"
+#include "request_signer.h"
 #include "wifi_supervisor.h"
 #include "mocks/count_memory_mock.h"
 #include "mocks/flash_storage_mock.h"
@@ -1507,6 +1508,330 @@ void test_a_jam_is_still_a_jam_while_below_the_target(void) {
         0, manager->getOverrunTokens(), "… and a partial dispense is no overrun");
 }
 
+
+// ---------------------------------------------------------------------------
+// Request signing and the nonce pool (issue #8)
+//
+// `X-API-Key` used to travel in clear in every request: one listener on the
+// WLAN owned the machine, and a captured request replayed with a new tx_id
+// dispensed again.  It is gone.  What follows pins the replacement down to the
+// byte, because a second implementation of it lives in the terminal
+// (dgloeckner/clubbar#951) and the two only interoperate if the canonical
+// string is identical.
+// ---------------------------------------------------------------------------
+
+static void hexOf(const uint8_t* bytes, size_t len, char* out) {
+    toHex(bytes, len, out);
+}
+
+void test_sha256_matches_the_fips_vector(void) {
+    // FIPS 180-4, the "abc" vector.
+    Sha256 h;
+    h.update((const uint8_t*)"abc", 3);
+    uint8_t digest[SHA256_DIGEST_SIZE];
+    h.finish(digest);
+
+    char hex[SHA256_DIGEST_SIZE * 2 + 1];
+    hexOf(digest, SHA256_DIGEST_SIZE, hex);
+    TEST_ASSERT_EQUAL_STRING(
+        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", hex);
+}
+
+void test_sha256_spans_more_than_one_block(void) {
+    // FIPS 180-4, the 56-character vector: the padding lands in a second block.
+    const char* msg = "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq";
+    Sha256 h;
+    h.update((const uint8_t*)msg, strlen(msg));
+    uint8_t digest[SHA256_DIGEST_SIZE];
+    h.finish(digest);
+
+    char hex[SHA256_DIGEST_SIZE * 2 + 1];
+    hexOf(digest, SHA256_DIGEST_SIZE, hex);
+    TEST_ASSERT_EQUAL_STRING(
+        "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1", hex);
+}
+
+void test_signature_over_known_vector_matches(void) {
+    // RFC 4231 test case 2: key "Jefe", data "what do ya want for nothing?".
+    // If this drifts, every signature the terminal computes is wrong and
+    // nothing else in this file would say why.
+    uint8_t mac[SHA256_DIGEST_SIZE];
+    hmacSha256((const uint8_t*)"Jefe", 4,
+               (const uint8_t*)"what do ya want for nothing?", 28, mac);
+
+    char hex[SHA256_DIGEST_SIZE * 2 + 1];
+    hexOf(mac, SHA256_DIGEST_SIZE, hex);
+    TEST_ASSERT_EQUAL_STRING(
+        "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843", hex);
+}
+
+void test_signature_with_a_key_longer_than_the_block(void) {
+    // RFC 4231 test case 6: a 131-byte key, which HMAC hashes down first.
+    uint8_t key[131];
+    memset(key, 0xaa, sizeof(key));
+    const char* data = "Test Using Larger Than Block-Size Key - Hash Key First";
+
+    uint8_t mac[SHA256_DIGEST_SIZE];
+    hmacSha256(key, sizeof(key), (const uint8_t*)data, strlen(data), mac);
+
+    char hex[SHA256_DIGEST_SIZE * 2 + 1];
+    hexOf(mac, SHA256_DIGEST_SIZE, hex);
+    TEST_ASSERT_EQUAL_STRING(
+        "60e431591ee0b67f0d8a26aacbf5b77f8e0bc6213728c5140546040f0ee37f54", hex);
+}
+
+void test_the_canonical_string_is_method_path_body_nonce(void) {
+    // THE interoperability assertion.  RequestSigner::sign() must be exactly
+    // HMAC-SHA256 over "METHOD\nPATH\nBODY\nNONCE" with single LF separators
+    // and no trailing newline — the terminal builds that string by hand.
+    const char* key = "s3cr3t";
+    const char* nonce = "0123456789abcdef0123456789abcdef";
+    const char* body = "{\"tx_id\":\"abc123\",\"quantity\":3}";
+
+    const char* canonical = "POST\n/dispense\n{\"tx_id\":\"abc123\",\"quantity\":3}\n"
+                            "0123456789abcdef0123456789abcdef";
+    uint8_t mac[SHA256_DIGEST_SIZE];
+    hmacSha256((const uint8_t*)key, strlen(key),
+               (const uint8_t*)canonical, strlen(canonical), mac);
+    char byHand[SHA256_DIGEST_SIZE * 2 + 1];
+    hexOf(mac, SHA256_DIGEST_SIZE, byHand);
+
+    char produced[SIGNATURE_HEX_LEN + 1];
+    RequestSigner::sign(key, "POST", "/dispense", body, strlen(body), nonce, produced);
+
+    TEST_ASSERT_EQUAL_STRING(byHand, produced);
+    TEST_ASSERT_EQUAL_UINT(SIGNATURE_HEX_LEN, strlen(produced));
+}
+
+void test_a_get_signs_over_an_empty_body(void) {
+    const char* key = "s3cr3t";
+    const char* nonce = "0123456789abcdef0123456789abcdef";
+    const char* canonical = "GET\n/dispense/abc123\n\n0123456789abcdef0123456789abcdef";
+
+    uint8_t mac[SHA256_DIGEST_SIZE];
+    hmacSha256((const uint8_t*)key, strlen(key),
+               (const uint8_t*)canonical, strlen(canonical), mac);
+    char byHand[SHA256_DIGEST_SIZE * 2 + 1];
+    hexOf(mac, SHA256_DIGEST_SIZE, byHand);
+
+    char produced[SIGNATURE_HEX_LEN + 1];
+    RequestSigner::sign(key, "GET", "/dispense/abc123", "", 0, nonce, produced);
+    TEST_ASSERT_EQUAL_STRING(byHand, produced);
+}
+
+// A signer with one nonce already issued, and that nonce in `nonce`.
+static RequestSigner* signerWithNonce(char* nonce, unsigned long now_ms = 1000) {
+    RequestSigner* s = new RequestSigner("s3cr3t");
+    s->issueNonce(now_ms, 0x11111111UL, 0x22222222UL, 0x33333333UL, 0x44444444UL, nonce);
+    return s;
+}
+
+void test_a_correctly_signed_post_is_accepted(void) {
+    char nonce[NONCE_HEX_LEN + 1];
+    RequestSigner* s = signerWithNonce(nonce);
+    const char* body = "{\"tx_id\":\"abc123\",\"quantity\":3}";
+
+    char sig[SIGNATURE_HEX_LEN + 1];
+    RequestSigner::sign("s3cr3t", "POST", "/dispense", body, strlen(body), nonce, sig);
+
+    TEST_ASSERT_EQUAL(AUTH_OK, s->verify(1000, "POST", "/dispense", body,
+                                         strlen(body), nonce, sig, true));
+    delete s;
+}
+
+void test_nonce_is_single_use(void) {
+    // The replay.  Identical bytes, identical signature, a second time — and
+    // this is the whole reason the scheme exists.
+    char nonce[NONCE_HEX_LEN + 1];
+    RequestSigner* s = signerWithNonce(nonce);
+    const char* body = "{\"tx_id\":\"abc123\",\"quantity\":3}";
+
+    char sig[SIGNATURE_HEX_LEN + 1];
+    RequestSigner::sign("s3cr3t", "POST", "/dispense", body, strlen(body), nonce, sig);
+
+    TEST_ASSERT_EQUAL(AUTH_OK, s->verify(1000, "POST", "/dispense", body,
+                                         strlen(body), nonce, sig, true));
+    TEST_ASSERT_EQUAL(AUTH_BAD_NONCE, s->verify(1001, "POST", "/dispense", body,
+                                                strlen(body), nonce, sig, true));
+    delete s;
+}
+
+void test_a_spent_nonce_still_reads(void) {
+    // A POST spends the nonce for MUTATING use only: the status polls that
+    // follow it keep working off the same nonce for the rest of its life,
+    // which is what "one GET /nonce per transaction" means.  Replaying a GET
+    // hands the attacker the reading he already watched go past.
+    char nonce[NONCE_HEX_LEN + 1];
+    RequestSigner* s = signerWithNonce(nonce);
+    const char* body = "{\"tx_id\":\"abc123\",\"quantity\":3}";
+
+    char post[SIGNATURE_HEX_LEN + 1];
+    RequestSigner::sign("s3cr3t", "POST", "/dispense", body, strlen(body), nonce, post);
+    TEST_ASSERT_EQUAL(AUTH_OK, s->verify(1000, "POST", "/dispense", body,
+                                         strlen(body), nonce, post, true));
+
+    char get[SIGNATURE_HEX_LEN + 1];
+    RequestSigner::sign("s3cr3t", "GET", "/dispense/abc123", "", 0, nonce, get);
+    TEST_ASSERT_EQUAL(AUTH_OK, s->verify(1500, "GET", "/dispense/abc123", "", 0,
+                                         nonce, get, false));
+    TEST_ASSERT_EQUAL(AUTH_OK, s->verify(9000, "GET", "/dispense/abc123", "", 0,
+                                         nonce, get, false));
+    delete s;
+}
+
+void test_nonce_expires(void) {
+    char nonce[NONCE_HEX_LEN + 1];
+    RequestSigner* s = signerWithNonce(nonce, 1000);
+    char sig[SIGNATURE_HEX_LEN + 1];
+    RequestSigner::sign("s3cr3t", "GET", "/health", "", 0, nonce, sig);
+
+    TEST_ASSERT_EQUAL(AUTH_OK,
+        s->verify(1000 + NONCE_TTL_MS, "GET", "/health", "", 0, nonce, sig, false));
+    TEST_ASSERT_EQUAL(AUTH_BAD_NONCE,
+        s->verify(1001 + NONCE_TTL_MS, "GET", "/health", "", 0, nonce, sig, false));
+    delete s;
+}
+
+void test_tampered_body_is_rejected(void) {
+    // A captured request re-aimed at twenty tokens instead of three.
+    char nonce[NONCE_HEX_LEN + 1];
+    RequestSigner* s = signerWithNonce(nonce);
+    const char* signed_body = "{\"tx_id\":\"abc123\",\"quantity\":3}";
+    const char* sent_body   = "{\"tx_id\":\"abc123\",\"quantity\":9}";
+
+    char sig[SIGNATURE_HEX_LEN + 1];
+    RequestSigner::sign("s3cr3t", "POST", "/dispense", signed_body,
+                        strlen(signed_body), nonce, sig);
+
+    TEST_ASSERT_EQUAL(AUTH_BAD_SIGNATURE,
+        s->verify(1000, "POST", "/dispense", sent_body, strlen(sent_body),
+                  nonce, sig, true));
+    delete s;
+}
+
+void test_a_rejected_signature_does_not_burn_the_nonce(void) {
+    // Otherwise anyone without the key could take a terminal out of service by
+    // replaying its request with one byte changed, over and over.
+    char nonce[NONCE_HEX_LEN + 1];
+    RequestSigner* s = signerWithNonce(nonce);
+    const char* body = "{\"tx_id\":\"abc123\",\"quantity\":3}";
+
+    char sig[SIGNATURE_HEX_LEN + 1];
+    RequestSigner::sign("s3cr3t", "POST", "/dispense", body, strlen(body), nonce, sig);
+
+    char forged[SIGNATURE_HEX_LEN + 1];
+    memcpy(forged, sig, sizeof(forged));
+    forged[0] = (forged[0] == 'a') ? 'b' : 'a';
+    TEST_ASSERT_EQUAL(AUTH_BAD_SIGNATURE,
+        s->verify(1000, "POST", "/dispense", body, strlen(body), nonce, forged, true));
+
+    TEST_ASSERT_EQUAL(AUTH_OK,
+        s->verify(1000, "POST", "/dispense", body, strlen(body), nonce, sig, true));
+    delete s;
+}
+
+void test_a_signature_is_bound_to_its_method_and_path(void) {
+    char nonce[NONCE_HEX_LEN + 1];
+    RequestSigner* s = signerWithNonce(nonce);
+
+    char sig[SIGNATURE_HEX_LEN + 1];
+    RequestSigner::sign("s3cr3t", "GET", "/dispense/abc123", "", 0, nonce, sig);
+
+    // Same bytes, another path: a /health signature must not open /debug.
+    TEST_ASSERT_EQUAL(AUTH_BAD_SIGNATURE,
+        s->verify(1000, "GET", "/debug", "", 0, nonce, sig, false));
+    // Same path, another method.
+    TEST_ASSERT_EQUAL(AUTH_BAD_SIGNATURE,
+        s->verify(1000, "POST", "/dispense/abc123", "", 0, nonce, sig, true));
+    delete s;
+}
+
+void test_a_wrong_key_is_rejected(void) {
+    char nonce[NONCE_HEX_LEN + 1];
+    RequestSigner* s = signerWithNonce(nonce);
+
+    char sig[SIGNATURE_HEX_LEN + 1];
+    RequestSigner::sign("not-the-key", "GET", "/health", "", 0, nonce, sig);
+    TEST_ASSERT_EQUAL(AUTH_BAD_SIGNATURE,
+        s->verify(1000, "GET", "/health", "", 0, nonce, sig, false));
+    delete s;
+}
+
+void test_missing_headers_are_a_signature_problem_not_a_nonce_problem(void) {
+    // The distinction the terminal acts on: AUTH_BAD_NONCE means "fetch one and
+    // retry once", AUTH_BAD_SIGNATURE means "stop".  A client that sends no
+    // headers at all must not be sent round that loop.
+    char nonce[NONCE_HEX_LEN + 1];
+    RequestSigner* s = signerWithNonce(nonce);
+
+    TEST_ASSERT_EQUAL(AUTH_BAD_SIGNATURE,
+        s->verify(1000, "GET", "/health", "", 0, NULL, NULL, false));
+    TEST_ASSERT_EQUAL(AUTH_BAD_SIGNATURE,
+        s->verify(1000, "GET", "/health", "", 0, nonce, "short", false));
+    // A nonce of the right shape that was never issued IS a nonce problem.
+    char sig[SIGNATURE_HEX_LEN + 1];
+    RequestSigner::sign("s3cr3t", "GET", "/health", "", 0,
+                        "ffffffffffffffffffffffffffffffff", sig);
+    TEST_ASSERT_EQUAL(AUTH_BAD_NONCE,
+        s->verify(1000, "GET", "/health", "", 0,
+                  "ffffffffffffffffffffffffffffffff", sig, false));
+    delete s;
+}
+
+void test_the_pool_holds_eight_and_evicts_the_oldest(void) {
+    RequestSigner s("s3cr3t");
+    char first[NONCE_HEX_LEN + 1];
+    s.issueNonce(1000, 1, 0, 0, 0, first);
+    for (uint32_t i = 2; i <= NONCE_POOL_SIZE; i++) {
+        char n[NONCE_HEX_LEN + 1];
+        s.issueNonce(1000 + i, i, 0, 0, 0, n);
+    }
+    TEST_ASSERT_EQUAL_INT(NONCE_POOL_SIZE, s.liveNonces(1100));
+
+    char sig[SIGNATURE_HEX_LEN + 1];
+    RequestSigner::sign("s3cr3t", "GET", "/health", "", 0, first, sig);
+    TEST_ASSERT_EQUAL(AUTH_OK, s.verify(1100, "GET", "/health", "", 0, first, sig, false));
+
+    // The ninth evicts it.  Documented consequence, not an accident: a client
+    // that sees AUTH_BAD_NONCE fetches another and retries once.
+    char ninth[NONCE_HEX_LEN + 1];
+    s.issueNonce(1100, 99, 0, 0, 0, ninth);
+    TEST_ASSERT_EQUAL_INT(NONCE_POOL_SIZE, s.liveNonces(1100));
+    TEST_ASSERT_EQUAL(AUTH_BAD_NONCE,
+        s.verify(1100, "GET", "/health", "", 0, first, sig, false));
+}
+
+void test_an_expired_slot_is_reused_before_a_live_one_is_evicted(void) {
+    RequestSigner s("s3cr3t");
+    char old_nonce[NONCE_HEX_LEN + 1];
+    s.issueNonce(1000, 1, 0, 0, 0, old_nonce);
+    char fresh[NONCE_HEX_LEN + 1];
+    s.issueNonce(1000 + NONCE_TTL_MS + 1, 2, 0, 0, 0, fresh);
+
+    TEST_ASSERT_EQUAL_INT(1, s.liveNonces(1000 + NONCE_TTL_MS + 1));
+
+    char sig[SIGNATURE_HEX_LEN + 1];
+    RequestSigner::sign("s3cr3t", "GET", "/health", "", 0, fresh, sig);
+    TEST_ASSERT_EQUAL(AUTH_OK,
+        s.verify(1000 + NONCE_TTL_MS + 1, "GET", "/health", "", 0, fresh, sig, false));
+}
+
+void test_a_nonce_is_thirty_two_hex_characters(void) {
+    RequestSigner s("s3cr3t");
+    char n[NONCE_HEX_LEN + 1];
+    s.issueNonce(1000, 0xdeadbeefUL, 0x01234567UL, 0x89abcdefUL, 0xfeedfaceUL, n);
+    TEST_ASSERT_EQUAL_STRING("deadbeef0123456789abcdeffeedface", n);
+    TEST_ASSERT_EQUAL_UINT(NONCE_HEX_LEN, strlen(n));
+}
+
+void test_constant_time_equals_is_still_an_equality(void) {
+    TEST_ASSERT_TRUE(constantTimeEquals("abcd", "abcd", 4));
+    TEST_ASSERT_FALSE(constantTimeEquals("abcd", "abce", 4));
+    // The difference in the FIRST byte must be found as surely as one in the
+    // last: the loop has no early exit, so both of these are full passes.
+    TEST_ASSERT_FALSE(constantTimeEquals("zbcd", "abcd", 4));
+}
+
 int main(int argc, char **argv) {
     (void)argc; (void)argv;
     UNITY_BEGIN();
@@ -1595,6 +1920,26 @@ int main(int argc, char **argv) {
     RUN_TEST(test_should_restart_is_the_whole_rule);
     RUN_TEST(test_a_reconnect_is_counted_and_starts_the_clock_over);
     RUN_TEST(test_the_outage_clock_survives_the_millis_wraparound);
+
+    RUN_TEST(test_sha256_matches_the_fips_vector);
+    RUN_TEST(test_sha256_spans_more_than_one_block);
+    RUN_TEST(test_signature_over_known_vector_matches);
+    RUN_TEST(test_signature_with_a_key_longer_than_the_block);
+    RUN_TEST(test_the_canonical_string_is_method_path_body_nonce);
+    RUN_TEST(test_a_get_signs_over_an_empty_body);
+    RUN_TEST(test_a_correctly_signed_post_is_accepted);
+    RUN_TEST(test_nonce_is_single_use);
+    RUN_TEST(test_a_spent_nonce_still_reads);
+    RUN_TEST(test_nonce_expires);
+    RUN_TEST(test_tampered_body_is_rejected);
+    RUN_TEST(test_a_rejected_signature_does_not_burn_the_nonce);
+    RUN_TEST(test_a_signature_is_bound_to_its_method_and_path);
+    RUN_TEST(test_a_wrong_key_is_rejected);
+    RUN_TEST(test_missing_headers_are_a_signature_problem_not_a_nonce_problem);
+    RUN_TEST(test_the_pool_holds_eight_and_evicts_the_oldest);
+    RUN_TEST(test_an_expired_slot_is_reused_before_a_live_one_is_evicted);
+    RUN_TEST(test_a_nonce_is_thirty_two_hex_characters);
+    RUN_TEST(test_constant_time_equals_is_still_an_equality);
 
     return UNITY_END();
 }
