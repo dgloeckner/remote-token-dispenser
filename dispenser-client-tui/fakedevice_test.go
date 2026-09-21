@@ -51,13 +51,17 @@ type fakeDevice struct {
 	// Issue #7: the operational telemetry, and a device that leaks.
 	omitOpsTelemetry bool // no heap_free, no reset_reason, no wifi.reconnects
 	leakHeap         bool // lose 2 % of the heap per dispense, as a leak does
+	resetAfter       int  // reset (uptime back to 1, another reset_reason) after N dispenses
 
-	heapFree  int
-	active    *fakeTx
-	history   map[string]*fakeTx
-	fault     string
-	faultCode int
-	overruns  int
+	heapFree    int
+	uptime      int
+	resetReason string
+	dispenses   int
+	active      *fakeTx
+	history     map[string]*fakeTx
+	fault       string
+	faultCode   int
+	overruns    int
 }
 
 type fakeTx struct {
@@ -75,7 +79,8 @@ const fakeMaxBody = 256
 
 func newFakeDevice(apiKey string) *fakeDevice {
 	return &fakeDevice{apiKey: apiKey, protocol: ProtocolVersion, fault: "none",
-		heapFree: 30000, history: map[string]*fakeTx{}}
+		heapFree: 30000, uptime: 42, resetReason: "Power on",
+		history: map[string]*fakeTx{}}
 }
 
 func (f *fakeDevice) server() *httptest.Server {
@@ -117,6 +122,8 @@ func (f *fakeDevice) health(w http.ResponseWriter, r *http.Request) {
 	proto := f.protocol
 	overruns := f.overruns
 	heap := f.heapFree
+	uptime := f.uptime
+	resetReason := f.resetReason
 	f.mu.Unlock()
 
 	metrics := map[string]int{"total_dispenses": 0}
@@ -126,7 +133,7 @@ func (f *fakeDevice) health(w http.ResponseWriter, r *http.Request) {
 
 	body := map[string]any{
 		"protocol":   proto,
-		"uptime":     42,
+		"uptime":     uptime,
 		"firmware":   "fake-device",
 		"state":      state,
 		"fault":      fault,
@@ -135,7 +142,7 @@ func (f *fakeDevice) health(w http.ResponseWriter, r *http.Request) {
 	}
 	if !f.omitOpsTelemetry {
 		body["heap_free"] = heap
-		body["reset_reason"] = "Power on"
+		body["reset_reason"] = resetReason
 		body["wifi"] = map[string]any{
 			"rssi": -50, "ip": "127.0.0.1", "ssid": "fake", "reconnects": 0,
 		}
@@ -253,6 +260,16 @@ func (f *fakeDevice) dispense(w http.ResponseWriter, r *http.Request) {
 	// that reboots on a Saturday afternoon.
 	if f.leakHeap {
 		f.heapFree -= f.heapFree / 50
+	}
+	// A board that resets in the middle of a soak run: uptime starts over and
+	// the reset reason stops being "Power on".  Both are things no single
+	// request can show.
+	f.dispenses++
+	if f.resetAfter > 0 && f.dispenses > f.resetAfter {
+		f.uptime = 1
+		f.resetReason = "Software Watchdog"
+	} else {
+		f.uptime += 2
 	}
 
 	// The work the firmware used to do in the TCP callback, before the caller

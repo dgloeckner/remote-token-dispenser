@@ -452,3 +452,101 @@ func TestSuiteCatchesMissingOpsTelemetry(t *testing.T) {
 			"reports neither heap nor reset reason nor reconnects", got.Status)
 	}
 }
+
+// --- issue #7: the soak runner ----------------------------------------------
+//
+// The runner is what Cycle A of the epic executes at the bench
+// (`--target simulator --soak 200`).  These tests soak a fake device a few
+// dozen times instead, which takes under a second: what is under test here is
+// the RUNNER — that it judges what it claims to judge, and that each of its
+// five assertions can actually fail.
+
+func TestSoakIsGreenAgainstConformingDevice(t *testing.T) {
+	dev := newFakeDevice("k")
+	srv := dev.server()
+	defer srv.Close()
+
+	report := RunSoak(newCtx(srv.URL, "k", TargetMock), 5, 5*time.Millisecond)
+
+	if report.Failed != 0 {
+		for _, c := range report.Cases {
+			if c.Status == "fail" {
+				t.Errorf("soak assertion %s failed: %s", c.Name, c.Detail)
+			}
+		}
+	}
+	if report.Soak == nil {
+		t.Fatal("the report carries no soak summary")
+	}
+	if report.Soak.TokensDispensed != 5 {
+		t.Errorf("tokens dispensed = %d, want 5", report.Soak.TokensDispensed)
+	}
+	if report.Soak.FailedRequests != 0 {
+		t.Errorf("failed requests = %d, want 0", report.Soak.FailedRequests)
+	}
+}
+
+func TestSoakCatchesAHeapLeak(t *testing.T) {
+	dev := newFakeDevice("k")
+	dev.leakHeap = true // 2 % per dispense: past the 10 % budget within six
+	srv := dev.server()
+	defer srv.Close()
+
+	report := RunSoak(newCtx(srv.URL, "k", TargetMock), 10, 5*time.Millisecond)
+
+	got := findCase(t, report, "soak_heap_free_within_10_percent")
+	if got.Status != "fail" {
+		t.Errorf("soak_heap_free_within_10_percent = %s (%s), want fail against a leaking device",
+			got.Status, got.Detail)
+	}
+}
+
+func TestSoakCatchesAResetMidRun(t *testing.T) {
+	dev := newFakeDevice("k")
+	dev.resetAfter = 3 // the board comes back with a fresh uptime and another reason
+	srv := dev.server()
+	defer srv.Close()
+
+	report := RunSoak(newCtx(srv.URL, "k", TargetMock), 8, 5*time.Millisecond)
+
+	for _, name := range []string{"soak_uptime_is_monotonic", "soak_reset_reason_unchanged"} {
+		got := findCase(t, report, name)
+		if got.Status != "fail" {
+			t.Errorf("%s = %s (%s), want fail against a device that reset mid-run",
+				name, got.Status, got.Detail)
+		}
+	}
+}
+
+func TestSoakCatchesAFailedRequest(t *testing.T) {
+	dev := newFakeDevice("k")
+	// A device that refuses a retry is not what this case is about; a device
+	// that faults is: every dispense after it is a 409, which is exactly what
+	// a soak must not report as success.
+	dev.fault, dev.faultCode = "jam", 0
+	srv := dev.server()
+	defer srv.Close()
+
+	report := RunSoak(newCtx(srv.URL, "k", TargetMock), 3, 5*time.Millisecond)
+
+	got := findCase(t, report, "soak_all_requests_succeeded")
+	if got.Status != "fail" {
+		t.Errorf("soak_all_requests_succeeded = %s (%s), want fail against a faulted device",
+			got.Status, got.Detail)
+	}
+}
+
+func TestSoakRefusesADeviceWithoutTelemetry(t *testing.T) {
+	dev := newFakeDevice("k")
+	dev.omitOpsTelemetry = true
+	srv := dev.server()
+	defer srv.Close()
+
+	report := RunSoak(newCtx(srv.URL, "k", TargetMock), 3, 5*time.Millisecond)
+
+	got := findCase(t, report, "soak_device_answers_health")
+	if got.Status != "fail" {
+		t.Errorf("soak_device_answers_health = %s, want fail: without heap_free and "+
+			"reset_reason the run has nothing to compare against", got.Status)
+	}
+}

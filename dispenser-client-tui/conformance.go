@@ -152,6 +152,9 @@ type Report struct {
 	Failed   int      `json:"failed"`
 	Skipped  int      `json:"skipped"`
 	Cases    []Result `json:"cases"`
+	// Soak carries the numbers of a --soak run (issue #7); nil for an
+	// ordinary run of the case table.
+	Soak *SoakSummary `json:"soak,omitempty"`
 }
 
 // runConformance is the `token-tui conformance …` subcommand.
@@ -165,6 +168,8 @@ func runConformance(args []string) int {
 	jsonOut := fs.String("json", "", "Write a JSON report to this path")
 	interactive := fs.Bool("interactive", false, "Run cases that need a physical act (press RST, cut power)")
 	only := fs.String("only", "", "Run only cases whose name contains this substring")
+	soak := fs.Int("soak", 0, "Run a soak of N dispenses INSTEAD of the case table (issue #7)")
+	soakPoll := fs.Duration("soak-poll", 500*time.Millisecond, "How often --soak polls a running transaction")
 	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, `Usage: token-tui conformance [flags]
 
@@ -198,7 +203,15 @@ Flags:
 		out:         os.Stdout,
 	}
 
-	report := RunCases(ctx, ConformanceCases(), *only)
+	var report Report
+	if *soak > 0 {
+		// Instead of the table, not after it: the table ends with the
+		// destructive fault cases and a faulted device refuses every dispense
+		// after them (dispenser-protocol.md, "Soak runs").
+		report = RunSoak(ctx, *soak, *soakPoll)
+	} else {
+		report = RunCases(ctx, ConformanceCases(), *only)
+	}
 	report.Endpoint = ctx.Client.BaseURL
 
 	if *jsonOut != "" {
@@ -402,4 +415,264 @@ func (c *Ctx) waitForFinalState(txID string, deadline time.Duration) (*DispenseR
 		time.Sleep(150 * time.Millisecond)
 	}
 	return last, fmt.Errorf("transaction %s still dispensing after %s", txID, deadline)
+}
+
+// ---------------------------------------------------------------------------
+// The soak run (--soak N), issue #7.
+//
+// The conformance table answers "does this device speak the protocol".  The
+// soak answers the other question the epic's Cycle A asks: does it still speak
+// it after two hundred dispenses.  The failures it is built for are the ones a
+// single request can never show — a heap that creeps down, a board that resets
+// once an hour, a radio that goes to sleep and answers the two-hundredth POST
+// in four seconds.
+//
+//   token-tui conformance --target simulator --soak 200 --json report-A.json
+//
+// It runs INSTEAD of the case table, deliberately: the table ends with the
+// destructive fault cases, and a faulted device refuses every dispense after
+// them, so a soak behind them would measure nothing but 409s.
+// ---------------------------------------------------------------------------
+
+// SoakSummary is the numbers of one soak run; `--json` carries it next to the
+// per-assertion results, so a report is readable a season later.
+type SoakSummary struct {
+	Cycles             int    `json:"cycles"`
+	Requests           int    `json:"requests"`
+	FailedRequests     int    `json:"failed_requests"`
+	TokensRequested    int    `json:"tokens_requested"`
+	TokensDispensed    int    `json:"tokens_dispensed"`
+	HeapFreeStart      int    `json:"heap_free_start"`
+	HeapFreeEnd        int    `json:"heap_free_end"`
+	HeapFreeMin        int    `json:"heap_free_min"`
+	HeapDropPercent    int    `json:"heap_drop_percent"`
+	UptimeStart        int    `json:"uptime_start"`
+	UptimeEnd          int    `json:"uptime_end"`
+	ResetReasonAtStart string `json:"reset_reason_at_start"`
+	ResetReasonAtEnd   string `json:"reset_reason_at_end"`
+	Reconnects         int    `json:"wifi_reconnects"`
+	LatencyMedianMs    int64  `json:"post_latency_median_ms"`
+	LatencyP95Ms       int64  `json:"post_latency_p95_ms"`
+	DurationSeconds    int    `json:"duration_seconds"`
+}
+
+// heapBudgetPercent is how much free heap a soak run may lose.  Ten percent is
+// noise on an ESP8266 whose async server holds a connection or two; a leak
+// walks past it long before the device actually dies, which is the point of
+// measuring it at the end of two hundred dispenses rather than at the end of
+// the season.
+const heapBudgetPercent = 10
+
+// RunSoak dispenses `cycles` times, polling the running transaction every
+// `poll`, and turns the run into the same Result rows the case table produces.
+// Exported for the unit tests, which soak a fake device in a few hundred ms.
+func RunSoak(ctx *Ctx, cycles int, poll time.Duration) Report {
+	report := Report{
+		Target:   ctx.Target,
+		Protocol: ProtocolVersion,
+		Started:  time.Now().Format(time.RFC3339),
+	}
+	sum := &SoakSummary{Cycles: cycles}
+	started := time.Now()
+
+	fmt.Fprintf(ctx.out, "soak: target=%s endpoint=%s cycles=%d poll=%s\n\n",
+		ctx.Target, ctx.Client.BaseURL, cycles, poll)
+
+	add := func(name, detail string, ok bool, note string) {
+		res := Result{Name: name, Status: "pass", Note: note}
+		if !ok {
+			res.Status = "fail"
+			res.Detail = detail
+		}
+		report.Cases = append(report.Cases, res)
+		if ok {
+			report.Passed++
+			fmt.Fprintf(ctx.out, "  PASS  %-46s %s\n", name, detail)
+		} else {
+			report.Failed++
+			fmt.Fprintf(ctx.out, "  FAIL  %-46s %s\n", name, detail)
+			if note != "" {
+				fmt.Fprintf(ctx.out, "        note: %s\n", note)
+			}
+		}
+	}
+
+	// The starting point every assertion below is measured against.
+	first, res := ctx.Client.Health()
+	if first == nil {
+		add("soak_device_answers_health", fmt.Sprintf("no health document: %v", res.Error), false,
+			"a soak against a device that does not answer /health measures nothing")
+		report.Soak = sum
+		return report
+	}
+	if first.HeapFree == nil || first.ResetReason == "" {
+		add("soak_device_answers_health",
+			"the device reports no heap_free or no reset_reason; run the conformance "+
+				"table first and fix health_reports_ops_telemetry", false,
+			"the soak's heap and reset assertions have nothing to compare against")
+		report.Soak = sum
+		return report
+	}
+	sum.HeapFreeStart = *first.HeapFree
+	sum.HeapFreeMin = *first.HeapFree
+	sum.UptimeStart = first.Uptime
+	sum.ResetReasonAtStart = first.ResetReason
+	sum.ResetReasonAtEnd = first.ResetReason
+
+	var failures []string
+	var latencies []time.Duration
+	uptimeDropped := ""
+	resetChanged := ""
+	lastUptime := first.Uptime
+	last := first
+
+	note := func(format string, args ...any) {
+		sum.FailedRequests++
+		if len(failures) < 5 {
+			failures = append(failures, fmt.Sprintf(format, args...))
+		}
+	}
+
+	for i := 0; i < cycles; i++ {
+		txID := ctx.NextTxID("sk")
+		sum.Requests++
+		sum.TokensRequested++
+
+		start := time.Now()
+		tx, res := ctx.Client.Dispense(txID, 1)
+		latencies = append(latencies, time.Since(start))
+		if res.Error != nil || tx == nil {
+			note("dispense %d (%s): %v", i+1, txID, res.Error)
+			// A device that refuses work does not recover by being asked
+			// faster; give it the poll interval before the next cycle.
+			time.Sleep(poll)
+			continue
+		}
+
+		final, polls, err := ctx.soakWaitFinal(txID, poll, 60*time.Second)
+		sum.Requests += polls
+		if err != nil {
+			note("dispense %d (%s): %v", i+1, txID, err)
+			continue
+		}
+		// dispensed >= quantity, never ==: a token that falls while the disc
+		// coasts is billed and legal (issue #5).
+		if final.State != "done" || final.Dispensed < final.Quantity {
+			note("dispense %d (%s): state=%q dispensed=%d/%d error_type=%s",
+				i+1, txID, final.State, final.Dispensed, final.Quantity, final.ErrorType)
+			continue
+		}
+		sum.TokensDispensed += final.Dispensed
+
+		// One health poll per cycle: a reset in the middle of the run is
+		// caught where it happened rather than inferred at the end.
+		h, res := ctx.Client.Health()
+		sum.Requests++
+		if h == nil {
+			note("health after dispense %d: %v", i+1, res.Error)
+			continue
+		}
+		last = h
+		if h.HeapFree != nil && *h.HeapFree < sum.HeapFreeMin {
+			sum.HeapFreeMin = *h.HeapFree
+		}
+		if h.Uptime < lastUptime && uptimeDropped == "" {
+			uptimeDropped = fmt.Sprintf("uptime fell from %ds to %ds after dispense %d: the device reset",
+				lastUptime, h.Uptime, i+1)
+		}
+		lastUptime = h.Uptime
+		if h.ResetReason != sum.ResetReasonAtStart && resetChanged == "" {
+			resetChanged = fmt.Sprintf("reset_reason changed from %q to %q after dispense %d",
+				sum.ResetReasonAtStart, h.ResetReason, i+1)
+		}
+		if cycles >= 20 && (i+1)%(cycles/10) == 0 {
+			fmt.Fprintf(ctx.out, "  … %d/%d dispenses, %d failed requests\n",
+				i+1, cycles, sum.FailedRequests)
+		}
+	}
+
+	sum.UptimeEnd = last.Uptime
+	sum.ResetReasonAtEnd = last.ResetReason
+	if last.HeapFree != nil {
+		sum.HeapFreeEnd = *last.HeapFree
+	}
+	if last.WiFi != nil && last.WiFi.Reconnects != nil {
+		sum.Reconnects = *last.WiFi.Reconnects
+	}
+	if sum.HeapFreeStart > 0 {
+		sum.HeapDropPercent = (sum.HeapFreeStart - sum.HeapFreeEnd) * 100 / sum.HeapFreeStart
+	}
+	sort.Slice(latencies, func(i, j int) bool { return latencies[i] < latencies[j] })
+	if len(latencies) > 0 {
+		sum.LatencyMedianMs = int64(latencies[len(latencies)/2] / time.Millisecond)
+		sum.LatencyP95Ms = int64(latencies[(len(latencies)*95-1)/100] / time.Millisecond)
+	}
+	sum.DurationSeconds = int(time.Since(started) / time.Second)
+
+	add("soak_all_requests_succeeded",
+		fmt.Sprintf("%d of %d requests failed%s", sum.FailedRequests, sum.Requests,
+			joinDetail(failures)),
+		sum.FailedRequests == 0,
+		"one failed request in two hundred is the flakiness the terminal's retry "+
+			"logic was written around; the retries hide it, the soak does not")
+	add("soak_heap_free_within_10_percent",
+		fmt.Sprintf("heap_free %d → %d (min %d), %d%% down, budget %d%%",
+			sum.HeapFreeStart, sum.HeapFreeEnd, sum.HeapFreeMin, sum.HeapDropPercent,
+			heapBudgetPercent),
+		sum.HeapDropPercent <= heapBudgetPercent,
+		"a leak is invisible in a single reading and fatal over a season")
+	add("soak_uptime_is_monotonic",
+		firstNonEmpty(uptimeDropped, fmt.Sprintf("uptime %ds → %ds, no reset", sum.UptimeStart, sum.UptimeEnd)),
+		uptimeDropped == "",
+		"a device that resets mid-run loses the active transaction; the terminal "+
+			"sees a timeout and the member sees nothing")
+	add("soak_reset_reason_unchanged",
+		firstNonEmpty(resetChanged, fmt.Sprintf("reset_reason %q throughout", sum.ResetReasonAtStart)),
+		resetChanged == "",
+		"the reset reason names WHICH kind of reset it was; a changed one is a "+
+			"watchdog or an exception, not a power cut")
+	add("soak_post_latency_p95_below_300ms",
+		fmt.Sprintf("p95 %dms, median %dms over %d POSTs", sum.LatencyP95Ms, sum.LatencyMedianMs, len(latencies)),
+		sum.LatencyP95Ms <= 300,
+		"modem sleep shows up here and nowhere else: one POST in twenty takes "+
+			"seconds and the one after it does not")
+
+	report.Soak = sum
+	fmt.Fprintf(ctx.out, "\n%d passed, %d failed, %d skipped (soak of %d dispenses in %ds)\n",
+		report.Passed, report.Failed, report.Skipped, cycles, sum.DurationSeconds)
+	return report
+}
+
+// soakWaitFinal is waitForFinalState with the soak's own poll interval, and it
+// counts every poll as a request: a run that answers 200 to the POST and then
+// stops answering has not succeeded.
+func (c *Ctx) soakWaitFinal(txID string, poll, deadline time.Duration) (*DispenseResponse, int, error) {
+	until := time.Now().Add(deadline)
+	polls := 0
+	for time.Now().Before(until) {
+		tx, res := c.Client.Status(txID)
+		polls++
+		if res.Error != nil {
+			return nil, polls, fmt.Errorf("status poll: %w", res.Error)
+		}
+		if tx.State != "dispensing" {
+			return tx, polls, nil
+		}
+		time.Sleep(poll)
+	}
+	return nil, polls, fmt.Errorf("transaction %s still dispensing after %s", txID, deadline)
+}
+
+func joinDetail(reasons []string) string {
+	if len(reasons) == 0 {
+		return ""
+	}
+	return " — " + strings.Join(reasons, "; ")
+}
+
+func firstNonEmpty(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
 }

@@ -110,10 +110,30 @@ jobs:
           "$RUNNER_TEMP/token-tui" conformance \
             --endpoint http://127.0.0.1:8080 --api-key ci-key \
             --target mock --json "$RUNNER_TEMP/conformance-mock.json"
+      # A short soak, against a FRESH mock: the run above ends with the
+      # destructive fault cases, and a faulted device answers 409 to every
+      # dispense after them.  Twenty cycles prove the runner, not the device —
+      # the numbers only mean something on a real board, which is Cycle A of
+      # the epic (--target simulator --soak 200, see dispenser-protocol.md).
+      - name: Soak the mock (the runner of issue #7)
+        run: |
+          "$RUNNER_TEMP/dispenser-mock" --bind 127.0.0.1:8081 --api-key ci-key \
+            > "$RUNNER_TEMP/mock-soak.log" 2>&1 &
+          for _ in $(seq 1 50); do
+            curl -sf http://127.0.0.1:8081/health > /dev/null && break
+            sleep 0.2
+          done
+          "$RUNNER_TEMP/token-tui" conformance \
+            --endpoint http://127.0.0.1:8081 --api-key ci-key \
+            --target mock --soak 20 --soak-poll 100ms \
+            --json "$RUNNER_TEMP/soak-mock.json"
+
       - name: Upload report
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: conformance-mock
-          path: ${{ runner.temp }}/conformance-mock.json
+          path: |
+            ${{ runner.temp }}/conformance-mock.json
+            ${{ runner.temp }}/soak-mock.json
           if-no-files-found: warn
