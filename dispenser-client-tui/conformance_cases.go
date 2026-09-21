@@ -100,6 +100,38 @@ func ConformanceCases() []Case {
 			},
 		},
 		{
+			Name: "health_reports_ops_telemetry",
+			Note: "issue #7: without free heap, the reset reason and a reconnect count, a " +
+				"device that resets once a week leaves no evidence but a small uptime",
+			Run: func(c *Ctx) error {
+				health, res := c.Client.Health()
+				if health == nil {
+					return fmt.Errorf("no health document: %v", res.Error)
+				}
+				var missing []string
+				if health.HeapFree == nil {
+					missing = append(missing, "heap_free")
+				}
+				if health.ResetReason == "" {
+					missing = append(missing, "reset_reason")
+				}
+				if health.WiFi == nil {
+					missing = append(missing, "wifi")
+				} else if health.WiFi.Reconnects == nil {
+					missing = append(missing, "wifi.reconnects")
+				}
+				if len(missing) > 0 {
+					return fmt.Errorf("missing field(s): %s", strings.Join(missing, ", "))
+				}
+				// Zero free heap is not a reading, it is a device that would
+				// already be dead; the field is there but says nothing.
+				if *health.HeapFree <= 0 {
+					return fmt.Errorf("heap_free is %d", *health.HeapFree)
+				}
+				return nil
+			},
+		},
+		{
 			Name: "no_reset_route_exists",
 			Note: "a fault is cleared by a power cycle and by nothing else (owner " +
 				"decision, 2026-09-20): no reset endpoint, none in the TUI, none on the kiosk",

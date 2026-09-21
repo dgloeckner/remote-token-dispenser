@@ -48,6 +48,11 @@ type fakeDevice struct {
 	faultAfterReset    bool // report a recovered crash as a device fault
 	servesReset        bool // offer a way out of a fault that is not a power cycle
 
+	// Issue #7: the operational telemetry, and a device that leaks.
+	omitOpsTelemetry bool // no heap_free, no reset_reason, no wifi.reconnects
+	leakHeap         bool // lose 2 % of the heap per dispense, as a leak does
+
+	heapFree  int
 	active    *fakeTx
 	history   map[string]*fakeTx
 	fault     string
@@ -70,7 +75,7 @@ const fakeMaxBody = 256
 
 func newFakeDevice(apiKey string) *fakeDevice {
 	return &fakeDevice{apiKey: apiKey, protocol: ProtocolVersion, fault: "none",
-		history: map[string]*fakeTx{}}
+		heapFree: 30000, history: map[string]*fakeTx{}}
 }
 
 func (f *fakeDevice) server() *httptest.Server {
@@ -111,6 +116,7 @@ func (f *fakeDevice) health(w http.ResponseWriter, r *http.Request) {
 	fault, faultCode := f.fault, f.faultCode
 	proto := f.protocol
 	overruns := f.overruns
+	heap := f.heapFree
 	f.mu.Unlock()
 
 	metrics := map[string]int{"total_dispenses": 0}
@@ -126,6 +132,13 @@ func (f *fakeDevice) health(w http.ResponseWriter, r *http.Request) {
 		"fault":      fault,
 		"fault_code": faultCode,
 		"metrics":    metrics,
+	}
+	if !f.omitOpsTelemetry {
+		body["heap_free"] = heap
+		body["reset_reason"] = "Power on"
+		body["wifi"] = map[string]any{
+			"rssi": -50, "ip": "127.0.0.1", "ssid": "fake", "reconnects": 0,
+		}
 	}
 	if f.legacyHealthShape {
 		// Protocol 1: two overlapping fields and no fault at all.
@@ -232,6 +245,14 @@ func (f *fakeDevice) dispense(w http.ResponseWriter, r *http.Request) {
 		f.writeJSON(w, 409, map[string]any{"error": "fault",
 			"fault": f.fault, "fault_code": f.faultCode})
 		return
+	}
+
+	// A device that loses a little heap per request (issue #7).  Two percent
+	// a dispense is below anything a single reading would show; over a soak
+	// run it is the difference between a machine that runs all season and one
+	// that reboots on a Saturday afternoon.
+	if f.leakHeap {
+		f.heapFree -= f.heapFree / 50
 	}
 
 	// The work the firmware used to do in the TCP callback, before the caller

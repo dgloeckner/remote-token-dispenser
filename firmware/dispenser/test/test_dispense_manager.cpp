@@ -16,6 +16,7 @@
 #include "dispense_manager.h"
 #include "pulse_filter.h"
 #include "request_body.h"
+#include "wifi_supervisor.h"
 #include "mocks/count_memory_mock.h"
 #include "mocks/flash_storage_mock.h"
 #include "mocks/hopper_control_mock.h"
@@ -78,6 +79,108 @@ static void snprintfTxId(char* out, int n) {
     out[0] = 'r'; out[1] = 'i'; out[2] = 'n'; out[3] = 'g';
     out[4] = (char)('0' + n);
     out[5] = '\0';
+}
+
+// =============================================================================
+// The connectivity supervisor (issue #7)
+//
+// The rule is one line — down for longer than a minute and not dispensing —
+// but every part of it is load-bearing, so every part has a test.  The two SDK
+// calls around it (`WiFi.status()`, `ESP.restart()`) stay in the sketch and
+// are the one thing here that only hardware can prove.
+// =============================================================================
+
+void test_a_connected_link_never_restarts(void) {
+    WifiSupervisor wifi;
+    wifi.begin(true, 0);
+
+    for (unsigned long t = 0; t < 10UL * 60UL * 1000UL; t += 1000) {
+        TEST_ASSERT_FALSE(wifi.update(true, false, t));
+    }
+    TEST_ASSERT_EQUAL_UINT16(0, wifi.reconnects());
+    TEST_ASSERT_TRUE(wifi.connected());
+}
+
+void test_a_short_outage_is_ridden_out(void) {
+    WifiSupervisor wifi;
+    wifi.begin(true, 1000);
+
+    TEST_ASSERT_FALSE(wifi.update(false, false, 1000));
+    // Exactly the deadline is not past it: the SDK's own auto-reconnect gets
+    // the whole minute, which is what covers an ordinary roam.
+    TEST_ASSERT_FALSE(wifi.update(false, false, 1000 + WIFI_RESTART_AFTER_MS));
+    TEST_ASSERT_EQUAL_UINT32(WIFI_RESTART_AFTER_MS, wifi.disconnectedFor(1000 + WIFI_RESTART_AFTER_MS));
+}
+
+void test_a_minute_down_and_idle_restarts(void) {
+    WifiSupervisor wifi;
+    wifi.begin(true, 1000);
+
+    TEST_ASSERT_FALSE(wifi.update(false, false, 1000));
+    TEST_ASSERT_TRUE(wifi.update(false, false, 1001 + WIFI_RESTART_AFTER_MS));
+}
+
+void test_a_failed_join_restarts_like_a_dropped_link(void) {
+    // setup() waited its 15 s and never joined.  This is the case that used to
+    // end with an HTTP server nobody could reach and no way back but a walk to
+    // the boathouse.
+    WifiSupervisor wifi;
+    wifi.begin(false, 15000);
+
+    TEST_ASSERT_FALSE(wifi.update(false, false, 15000));
+    TEST_ASSERT_TRUE(wifi.update(false, false, 15001 + WIFI_RESTART_AFTER_MS));
+}
+
+void test_the_motor_outranks_the_supervisor(void) {
+    WifiSupervisor wifi;
+    wifi.begin(true, 0);
+    wifi.update(false, true, 0);
+
+    // An hour down: still no restart while a token may be dropping.  A restart
+    // here would bill a partial dispense as a RESET error for a customer who
+    // is standing in front of a machine that is otherwise working.
+    TEST_ASSERT_FALSE(wifi.update(false, true, 60UL * 60UL * 1000UL));
+    // The transaction ends; the clock was never reset, so the pass after it
+    // restarts at once.
+    TEST_ASSERT_TRUE(wifi.update(false, false, 60UL * 60UL * 1000UL + 10));
+}
+
+void test_should_restart_is_the_whole_rule(void) {
+    TEST_ASSERT_FALSE(WifiSupervisor::shouldRestart(0, false));
+    TEST_ASSERT_FALSE(WifiSupervisor::shouldRestart(WIFI_RESTART_AFTER_MS, false));
+    TEST_ASSERT_TRUE(WifiSupervisor::shouldRestart(WIFI_RESTART_AFTER_MS + 1, false));
+    TEST_ASSERT_FALSE(WifiSupervisor::shouldRestart(WIFI_RESTART_AFTER_MS + 1, true));
+}
+
+void test_a_reconnect_is_counted_and_starts_the_clock_over(void) {
+    WifiSupervisor wifi;
+    wifi.begin(true, 0);
+
+    wifi.update(false, false, 1000);
+    TEST_ASSERT_FALSE(wifi.update(true, false, 20000));   // back within the minute
+    TEST_ASSERT_EQUAL_UINT16(1, wifi.reconnects());
+    TEST_ASSERT_EQUAL_UINT32(0, wifi.disconnectedFor(20000));
+
+    // A second outage gets its own full minute, not the remainder of the first.
+    wifi.update(false, false, 30000);
+    TEST_ASSERT_FALSE(wifi.update(false, false, 30000 + WIFI_RESTART_AFTER_MS));
+    TEST_ASSERT_TRUE(wifi.update(false, false, 30001 + WIFI_RESTART_AFTER_MS));
+
+    wifi.update(true, false, 200000);
+    TEST_ASSERT_EQUAL_UINT16(2, wifi.reconnects());
+}
+
+void test_the_outage_clock_survives_the_millis_wraparound(void) {
+    // millis() wraps after ~49.7 days.  Unsigned subtraction carries the
+    // difference across it; a signed or clamped one would hand the supervisor
+    // a 49-day outage and restart a healthy device.
+    const unsigned long nearWrap = 0xFFFFFF00UL;
+    WifiSupervisor wifi;
+    wifi.begin(true, nearWrap);
+
+    wifi.update(false, false, nearWrap);
+    TEST_ASSERT_FALSE(wifi.update(false, false, nearWrap + 1000));
+    TEST_ASSERT_TRUE(wifi.update(false, false, nearWrap + WIFI_RESTART_AFTER_MS + 1));
 }
 
 // =============================================================================
@@ -1483,6 +1586,15 @@ int main(int argc, char **argv) {
     RUN_TEST(test_a_request_during_the_settling_window_is_busy);
     RUN_TEST(test_settling_does_not_cost_a_third_commit);
     RUN_TEST(test_a_jam_is_still_a_jam_while_below_the_target);
+
+    RUN_TEST(test_a_connected_link_never_restarts);
+    RUN_TEST(test_a_short_outage_is_ridden_out);
+    RUN_TEST(test_a_minute_down_and_idle_restarts);
+    RUN_TEST(test_a_failed_join_restarts_like_a_dropped_link);
+    RUN_TEST(test_the_motor_outranks_the_supervisor);
+    RUN_TEST(test_should_restart_is_the_whole_rule);
+    RUN_TEST(test_a_reconnect_is_counted_and_starts_the_clock_over);
+    RUN_TEST(test_the_outage_clock_survives_the_millis_wraparound);
 
     return UNITY_END();
 }

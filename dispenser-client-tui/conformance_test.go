@@ -435,3 +435,20 @@ func TestSuiteCatchesResetRoute(t *testing.T) {
 		t.Errorf("no_reset_route_exists = %s, want fail against a device with a reset endpoint", got.Status)
 	}
 }
+
+// --- issue #7: the operational telemetry ------------------------------------
+
+func TestSuiteCatchesMissingOpsTelemetry(t *testing.T) {
+	dev := newFakeDevice("k")
+	dev.omitOpsTelemetry = true // the health document before #7
+	srv := dev.server()
+	defer srv.Close()
+
+	report := RunCases(newCtx(srv.URL, "k", TargetMock), ConformanceCases(), "ops_telemetry")
+
+	got := findCase(t, report, "health_reports_ops_telemetry")
+	if got.Status != "fail" {
+		t.Errorf("health_reports_ops_telemetry = %s, want fail against a device that "+
+			"reports neither heap nor reset reason nor reconnects", got.Status)
+	}
+}

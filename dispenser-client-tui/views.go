@@ -169,9 +169,27 @@ func (m Model) renderHealthPanel(w int) string {
 		// Firmware
 		lines = append(lines, labelStyle.Render("Firmware:")+" "+valueBold.Render(hl.Firmware))
 
-		// WiFi RSSI
+		// Free heap — the first thing to look at when a device resets
+		// itself once a week (issue #7).
+		if hl.HeapFree != nil {
+			lines = append(lines, labelStyle.Render("Heap:")+" "+
+				valueBold.Render(fmt.Sprintf("%d B", *hl.HeapFree)))
+		}
+
+		// Why it last booted.  "Software Watchdog" on a machine nobody
+		// touched is a bug; "Power on" after a thunderstorm is not.
+		if hl.ResetReason != "" {
+			lines = append(lines, labelStyle.Render("Last reset:")+" "+
+				valueBold.Render(hl.ResetReason))
+		}
+
+		// WiFi RSSI, plus the reconnect count when the device keeps one: a
+		// link that drops ten times a night is invisible in RSSI alone.
 		if hl.WiFi != nil {
 			wifiStr := renderWiFiSignal(hl.WiFi.RSSI)
+			if hl.WiFi.Reconnects != nil {
+				wifiStr += statusMuted.Render(fmt.Sprintf("  %d reconnects", *hl.WiFi.Reconnects))
+			}
 			lines = append(lines, labelStyle.Render("WiFi:")+" "+wifiStr)
 		} else {
 			lines = append(lines, labelStyle.Render("WiFi:")+" "+statusMuted.Render("─ unavailable"))

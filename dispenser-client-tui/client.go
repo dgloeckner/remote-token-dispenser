@@ -29,9 +29,17 @@ type HealthResponse struct {
 	// FaultCode is the Azkoyen code behind a hopper_error, 0 otherwise.  A
 	// POINTER, like CountReliable and OverrunTokens: a device that does not
 	// send the field must stay distinguishable from one that sends 0.
-	FaultCode    *int          `json:"fault_code"`
-	Uptime       int           `json:"uptime"`
-	Firmware     string        `json:"firmware"`
+	FaultCode *int   `json:"fault_code"`
+	Uptime    int    `json:"uptime"`
+	Firmware  string `json:"firmware"`
+	// HeapFree is the free heap in bytes (issue #7).  A POINTER: a device
+	// that does not report it must stay distinguishable from one reporting 0,
+	// which would read as "out of memory" on every panel that shows it.
+	HeapFree *int `json:"heap_free"`
+	// ResetReason names the last reset ("Power on", "External System",
+	// "Software Watchdog", …).  A device that resets once a week left no
+	// trace at all before this: uptime was simply small again.
+	ResetReason  string        `json:"reset_reason"`
 	WiFi         *WiFiInfo     `json:"wifi,omitempty"`
 	Metrics      Metrics       `json:"metrics"`
 	ActiveTx     *ActiveTxInfo `json:"active_tx,omitempty"`
@@ -71,6 +79,10 @@ type WiFiInfo struct {
 	RSSI int    `json:"rssi"`
 	IP   string `json:"ip"`
 	SSID string `json:"ssid"`
+	// Reconnects counts the times the link came back since boot (issue #7).
+	// A POINTER for the same reason as the rest: zero reconnects is the good
+	// news, "the device does not count them" is not news at all.
+	Reconnects *int `json:"reconnects"`
 }
 
 // GPIOInfo is what GET /debug reports.  There is no hopper_low any more: the
@@ -125,7 +137,7 @@ type DispenseResponse struct {
 
 // ErrorResponse for 4xx/5xx
 type ErrorResponse struct {
-	Error     string `json:"error"`
+	Error      string `json:"error"`
 	ActiveTxID string `json:"active_tx_id,omitempty"`
 }
 
