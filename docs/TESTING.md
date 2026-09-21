@@ -13,7 +13,7 @@
 > `token-tui conformance`.
 >
 > **The `X-API-Key` header every request below carries no longer exists**
-> (issue #8). Since firmware 1.4.0 / protocol 3 a request carries `X-Nonce`
+> (issue #8). In protocol 2 — firmware 1.4.0 — a request carries `X-Nonce`
 > and `X-Signature: HMAC-SHA256(key, METHOD \n PATH \n BODY \n NONCE)`, and
 > the key never travels; `GET /health` answers a three-field document to an
 > unsigned caller. The curls below are **not** rewritten, because this is the

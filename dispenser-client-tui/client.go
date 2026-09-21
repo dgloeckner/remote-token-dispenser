@@ -13,10 +13,11 @@ import (
 // The handshake is deliberately strict: there are no devices in the field, so
 // a mismatch is a bug to fix, never something to adapt to at runtime.
 //
-// 3 since issue #8: `X-API-Key` is gone and every protected request must
-// carry X-Nonce / X-Signature, so a protocol-2 device and this client cannot
-// talk at all.  A breaking change, stated as one.
-const ProtocolVersion = 3
+// Request signing is part of what protocol 2 IS (issue #8): a protocol-2
+// device signs, and `X-API-Key` appears in no released version of it.  The
+// handshake stays strict either way — a device reporting anything else is
+// UNAVAILABLE, protocol mismatch, never a degraded mode to adapt to.
+const ProtocolVersion = 2
 
 // HealthResponse matches GET /health from the dispenser protocol.
 //

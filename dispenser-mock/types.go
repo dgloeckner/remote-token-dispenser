@@ -11,11 +11,10 @@ import "time"
 // device speaking the old version: there are none left in the field, and a
 // client that quietly adapts to one is the bug the handshake exists to catch.
 //
-// 3 since issue #8, and that is a BREAKING bump stated as one: `X-API-Key` is
-// gone and every protected request must carry X-Nonce / X-Signature, so a
-// protocol-2 client cannot talk to this device at all.  A handshake left at 2
-// would promise an interoperability that does not exist.
-const ProtocolVersion = 3
+// Request signing is part of what protocol 2 IS (issue #8, owner decision
+// 2026-09-21): `X-API-Key` never existed in a released protocol 2, because
+// protocol 2 has never been released — #1 through #8 ship in it together.
+const ProtocolVersion = 2
 
 // Fault values, the device-level condition of issue #6.
 const (

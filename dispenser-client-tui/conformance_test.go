@@ -145,9 +145,9 @@ func TestSuiteCatchesProtocolMismatch(t *testing.T) {
 
 	report := RunCases(newCtx(srv.URL, "k", TargetMock), ConformanceCases(), "health_protocol")
 
-	got := findCase(t, report, "health_protocol_is_3")
+	got := findCase(t, report, "health_protocol_is_2")
 	if got.Status != "fail" {
-		t.Errorf("health_protocol_is_3 = %s, want fail against protocol 1", got.Status)
+		t.Errorf("health_protocol_is_2 = %s, want fail against protocol 1", got.Status)
 	}
 }
 

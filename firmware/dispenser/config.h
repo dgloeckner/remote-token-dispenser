@@ -21,17 +21,18 @@
 #endif
 
 // Protocol version handshake (dispenser-protocol.md).
-// There are no devices in the field: a client refuses any other version
-// instead of adapting to it.
+// There are no devices in the field: protocol 2 replaces protocol 1 outright,
+// and a client refuses any other version instead of adapting to it.
 //
-// 3, not 2, and this is a BREAKING change stated as one (issue #8):
-// `X-API-Key` is gone and every protected request must carry a signature, so
-// a protocol-2 client cannot talk to this device at all — it would send a
-// header the device ignores and read 401 forever.  A handshake that stayed at
-// 2 would promise an interoperability that does not exist.  The three places
-// that hold this number move together: here, `ProtocolVersion` in
-// dispenser-mock/types.go and in dispenser-client-tui/client.go.
-#define PROTOCOL_VERSION 3
+// **Request signing is part of what protocol 2 IS**, not a change on top of
+// it (owner decision, 2026-09-21).  Protocol 2 is the clean break, and issues
+// #1 through #8 ship in it together: the fault model, the telemetry, the
+// supervisor and the signed request that replaced `X-API-Key` all land in one
+// release.  Nothing ever spoke an intermediate state, so a version a client
+// could never observe would buy nothing.  The three places that hold this
+// number move together: here, `ProtocolVersion` in dispenser-mock/types.go
+// and in dispenser-client-tui/client.go.
+#define PROTOCOL_VERSION 2
 
 // The shared signing secret.  CHANGE THIS IN config.local.h.
 //

@@ -34,7 +34,7 @@ func ConformanceCases() []Case {
 			},
 		},
 		{
-			Name: "health_protocol_is_3",
+			Name: "health_protocol_is_2",
 			Note: "the version handshake from dispenser-protocol.md; a device without it is protocol 1",
 			Run: func(c *Ctx) error {
 				health, res := c.Client.Health()

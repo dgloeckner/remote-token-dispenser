@@ -1,7 +1,7 @@
 # Token Dispenser HTTP API Reference
 
-**Protocol version:** 3 (reported as `protocol` by `GET /health`)
-**Version:** 3.0.0
+**Protocol version:** 2 (reported as `protocol` by `GET /health`)
+**Document version:** 2.2.0
 **Base URL:** `http://<ESP8266_IP>` (default: `http://192.168.4.20`)
 **Authentication:** Request signing — `GET /nonce`, then `X-Nonce` and
 `X-Signature` (see [Authentication](#authentication)). **There is no
@@ -65,11 +65,32 @@ protocol 2 replaced protocol 1 outright and a mismatch means something was not
 deployed, never something to work around at runtime.
 
 ```json
-{"protocol": 2, "state": "idle", "fault": "none", "...": "..."}
+{"protocol": 2, "state": "idle", "fault": "none", "authenticated": false, "...": "..."}
 ```
+
+The refusal is **not a degraded mode.** A device reporting any other version is
+*unavailable — protocol mismatch*: no dispensing, no partial feature set, no
+guessing at which fields it might still have. The mock's `--protocol N` flag
+exists to exercise exactly that path without a second implementation.
+
+**Protocol 2 is one release, not a series.** Everything issues #1 through #8
+changed is part of what protocol 2 *is*: idempotency of the active
+transaction, the recovered count, the request framing, the pulse filter and
+the overrun, the fault model, the operational telemetry and the supervisor —
+and **request signing, which replaced `X-API-Key`**. No dispenser was ever
+deployed speaking an intermediate state and no terminal ever spoke one, so
+there is no version in between for anybody to have observed. `X-API-Key`
+belongs to protocol 1 and to no released protocol 2.
 
 Protocol 1 was the shape before the conformance suite existed; nothing speaks
 it any more.
+
+**When the integer does move:** only when a deployed client would have to
+change. Because the document revises faster than the protocol does, the
+document version's major digit tracks the protocol integer — a document
+version of 2.x always describes protocol 2 — and a breaking revision within an
+**unreleased** protocol is marked BREAKING in the changelog rather than
+carried in the number.
 
 ### 3. Single-Resource Locking
 The dispenser is a single physical device. Only one transaction can be active at a time. A request for **another** transaction receives `409 Conflict`; a request for the active one is the idempotent retry of principle 1 and receives `200`.
@@ -388,7 +409,7 @@ gives the whole thing.
 **Response (200 OK) — UNSIGNED, the minimal document:**
 ```json
 {
-  "protocol": 3,
+  "protocol": 2,
   "state": "idle",
   "fault": "none",
   "authenticated": false
@@ -427,7 +448,7 @@ X-Signature: <HMAC-SHA256 over "GET\n/health\n\n9f2c…">
 **Response (200 OK) — SIGNED, the full document:**
 ```json
 {
-  "protocol": 3,
+  "protocol": 2,
   "authenticated": true,
   "state": "idle",
   "fault": "none",
@@ -461,7 +482,7 @@ X-Signature: <HMAC-SHA256 over "GET\n/health\n\n9f2c…">
 **Response (200 OK) — faulted:**
 ```json
 {
-  "protocol": 3,
+  "protocol": 2,
   "authenticated": true,
   "state": "fault",
   "fault": "hopper_error",
@@ -483,7 +504,7 @@ X-Signature: <HMAC-SHA256 over "GET\n/health\n\n9f2c…">
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `protocol` | integer | Protocol version; always `3`. A client that reads anything else refuses the device. Present in **both** documents. |
+| `protocol` | integer | Protocol version; always `2`. A client that reads anything else refuses the device outright — *unavailable, protocol mismatch*, never a degraded mode. Present in **both** documents. |
 | `authenticated` | boolean | **Required.** Which of the two documents this is. Present in **both**. |
 | `state` | string | **Required.** The device: `"idle"`, `"dispensing"` or `"fault"`. One field, not two. |
 | `fault` | string | **Required.** `"none"`, `"jam"` or `"hopper_error"` (Design Principle 6). |
@@ -1271,7 +1292,7 @@ while tokens are being dispensed.
 
 ```bash
 $ curl http://192.168.4.20/health
-{"protocol":3,"authenticated":true,"state":"fault","fault":"hopper_error","fault_code":5,"...":"..."}
+{"protocol":2,"authenticated":true,"state":"fault","fault":"hopper_error","fault_code":5,"...":"..."}
 
 $ sign POST /dispense '{"tx_id":"next1","quantity":2}'
 $ curl -X POST http://192.168.4.20/dispense \
@@ -1627,27 +1648,33 @@ All inputs validated:
   next dispense again, having dispensed and billed nothing).
 - **Soak runs (#7):** `token-tui conformance --soak N`, see *Conformance*.
 
-### Version 3.0.0 (2026-09-21) — protocol 3, BREAKING
-- **Request signing replaces the bearer key (#8):** `GET /nonce` hands out a
+### Version 2.2.0 (2026-09-21) — still protocol 2, **BREAKING**
+- **Request signing replaces the bearer key (#8).** `GET /nonce` hands out a
   single-use 128-bit nonce with a 30 s life; every protected request carries
   `X-Nonce` and `X-Signature: HMAC-SHA256(key, METHOD \n PATH \n BODY \n
   NONCE)`, hex, lower case. The key never travels, a sniffed request cannot be
   replayed (a POST spends its nonce), and a tampered body fails. A read does
   **not** spend its nonce, so one `GET /nonce` covers a dispense and the status
   polls behind it. Comparison is constant-time.
-- **`X-API-Key` is removed outright**, not deprecated: no device was deployed,
-  so there is no transition period, no build flag and no shim in the firmware,
-  the mock or the TUI. A request carrying it is an unsigned request.
-- **The protocol integer moves to 3, and that is the point of the bump:** a
-  protocol-2 client cannot talk to a protocol-3 device at all, so a handshake
-  left at 2 would promise an interoperability that does not exist.
+- **`X-API-Key` IS GONE** — removed outright from the firmware, the mock and
+  the TUI, with no fallback, no build flag and no shim. A request carrying it
+  is an unsigned request and is refused like any other.
+- **Why this is BREAKING and the protocol integer still says 2.** Removing a
+  credential would normally force the integer up. It does not here because
+  **protocol 2 has never been released**: no dispenser is deployed, no terminal
+  speaks it, and #1 through #8 ship together as one contract. Signing is
+  therefore part of what protocol 2 *is*, not a change on top of something
+  anybody could have built against; `X-API-Key` belongs to protocol 1. A
+  number no client could ever observe would name nothing. (Owner decision,
+  2026-09-21.)
 - **A 401 says which kind it is:** `reason: "nonce"` means fetch a fresh one
   and retry ONCE (safe — every mutating request is idempotent by `tx_id`),
   `reason: "signature"` means stop.
 - **`GET /health` is two documents off one URL:** unsigned returns `protocol`,
   `state`, `fault` and `"authenticated": false` and nothing else; signed
   returns the whole thing. Unsigned is answered `200`, not `401`, because it is
-  the liveness probe. `authenticated` is a new **required** field in both.
+  the liveness probe — a 401 answers neither *there* nor *gone*.
+  `authenticated` is a new **required** field in both.
 - **HTTPS on the ESP8266 was evaluated and rejected**, with the numbers, in
   [Authentication](#authentication). Do not reopen it with a TLS patch for
   this board; the path is an ESP32-class port.
@@ -1656,7 +1683,7 @@ All inputs validated:
   clubbar `INSTALL.md`.
 - Firmware 1.4.0. The flash layout is untouched — persisted layout version
   stays 3, and no signing state is persisted: nonces die with a reboot, which
-  is correct, since every nonce a client holds across one is worthless anyway.
+  is correct, since a nonce a client holds across one is worthless anyway.
 
 ### Version 1.1.0 (2026-02-14)
 - **Error decoding:** Added Azkoyen hardware error code detection (7 error types)
