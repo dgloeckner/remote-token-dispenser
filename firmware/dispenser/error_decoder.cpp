@@ -8,7 +8,11 @@ ErrorDecoder::ErrorDecoder()
     lastPulseTime(0),
     pulseCount(0),
     detectedCode(ERROR_NONE),
-    newErrorReady(false) {
+    newErrorReady(false),
+    edgeCount(0),
+    widthIndex(0),
+    malformedCount(0) {
+  for (uint8_t i = 0; i < DEBUG_WIDTHS; i++) lastWidthsMs[i] = 0;
 }
 
 void ErrorDecoder::begin() {
@@ -23,12 +27,18 @@ void ErrorDecoder::begin() {
 }
 
 void IRAM_ATTR ErrorDecoder::handlePinChange(bool pinState, unsigned long now) {
-  if (pinState == LOW) {
-    // FALLING edge - pulse start
+  // With ERROR_SIGNAL_INVERTED the pulse is the HIGH phase (line released),
+  // so the edge that starts a pulse is the rising one. See config.h.
+  bool pulseStart = ERROR_SIGNAL_INVERTED ? (pinState == HIGH) : (pinState == LOW);
+  edgeCount++;
+  if (pulseStart) {
+    // pulse start
     lastFallTime = now;
   } else {
-    // RISING edge - pulse end, measure width
+    // pulse end, measure width
     unsigned long width = (now - lastFallTime) / 1000; // convert to ms
+    lastWidthsMs[widthIndex] = (uint16_t)(width > 65535 ? 65535 : width);
+    widthIndex = (widthIndex + 1) % DEBUG_WIDTHS;
 
     if (state == DECODER_IDLE && width >= 90 && width <= 110) {
       // Valid start pulse (100ms ±10%)
@@ -58,6 +68,9 @@ void ErrorDecoder::update() {
       detectedCode = (ErrorCode)pulseCount;
     } else {
       // Malformed sequence (wrong pulse count or timeout in wrong state)
+      Serial.print("[ErrorDecoder] malformed string, code pulses counted: ");
+      Serial.println(pulseCount);
+      malformedCount++;
       detectedCode = ERROR_NONE; // ERROR_UNKNOWN
     }
     newErrorReady = true;

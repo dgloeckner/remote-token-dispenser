@@ -121,6 +121,23 @@ void HttpServer::handleHealth(AsyncWebServerRequest *request) {
     err["active"] = false;
   }
 
+  // Raw error-line diagnostics (bench debugging, see error_decoder.h)
+  JsonObject dbg = doc.createNestedObject("error_line_debug");
+  dbg["inverted"] = (bool)ERROR_SIGNAL_INVERTED;
+  dbg["edges"] = hopperControl.errorDecoder.edgeCount;
+  dbg["malformed"] = hopperControl.errorDecoder.malformedCount;
+  JsonArray widths = dbg.createNestedArray("last_widths_ms");
+  {
+    noInterrupts();
+    uint8_t idx = hopperControl.errorDecoder.widthIndex;
+    uint16_t copy[ErrorDecoder::DEBUG_WIDTHS];
+    for (uint8_t i = 0; i < ErrorDecoder::DEBUG_WIDTHS; i++) {
+      copy[i] = hopperControl.errorDecoder.lastWidthsMs[(idx + i) % ErrorDecoder::DEBUG_WIDTHS];
+    }
+    interrupts();
+    for (uint8_t i = 0; i < ErrorDecoder::DEBUG_WIDTHS; i++) widths.add(copy[i]);
+  }
+
   // Add error history (last 5 errors)
   JsonArray history = doc.createNestedArray("error_history");
   ErrorRecord records[5];
