@@ -42,6 +42,15 @@ public:
   bool hasNewError();
   ErrorCode getErrorCode();
   void reset();
+
+  // Raw line diagnostics for /health (bench debugging without a serial port):
+  // edges seen since boot, the last DEBUG_WIDTHS measured pulse widths in ms
+  // (newest last), and how many strings were discarded as malformed.
+  static const uint8_t DEBUG_WIDTHS = 8;
+  volatile uint32_t edgeCount;
+  volatile uint16_t lastWidthsMs[DEBUG_WIDTHS];
+  volatile uint8_t widthIndex;
+  volatile uint16_t malformedCount;
 };
 
 // Helper functions for error code conversion
